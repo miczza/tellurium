@@ -164,13 +164,16 @@ class Browser:
     # ------------------------------------------------------------------
 
     async def new_tab(self, url: str = "about:blank") -> Tab:
-        """Open a new tab and return it."""
-        result = await self._router.root.send("Target.createTarget", {"url": url})
+        """Open a new tab, navigate to *url*, wait for load, and return it."""
+        result = await self._router.root.send("Target.createTarget", {"url": "about:blank"})
         target_id = result["targetId"]
         session = await self._router.attach(target_id)
         tab = Tab(session, self, target_id)
-        tab._url = url
         self._tabs.append(tab)
+        if url and url != "about:blank":
+            await tab.get(url)
+        else:
+            tab._url = url
         return tab
 
     @property

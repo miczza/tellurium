@@ -244,6 +244,10 @@ class Tab:
         js_exact = "true" if exact else "false"
         js = _TEXT_WALKER_JS % (js_text, js_exact)
 
+        # Ensure the full DOM tree is populated in the CDP node map so that
+        # DOM.requestNode can map remote object IDs to nodeIds.
+        await self._session.send("DOM.getDocument", {"depth": -1})
+
         result = await self._session.send("Runtime.evaluate", {
             "expression": js,
             "returnByValue": False,
