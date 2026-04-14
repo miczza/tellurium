@@ -6,8 +6,10 @@ from tellurium.session.errors import (
     SessionLoginFailedError,
     SessionCorruptError,
 )
+from tellurium.session.session import Session
 
 __all__ = [
+    "Session",
     "SessionError",
     "SessionInvalidError",
     "SessionLoginFailedError",
