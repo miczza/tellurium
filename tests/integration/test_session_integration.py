@@ -136,3 +136,70 @@ async def test_second_run_skips_login(tmp_path, local_server):
 
     assert validator_calls["n"] == 1
     assert login_calls2["n"] == 0
+
+
+async def test_portability_new_session_loads_metadata(tmp_path, local_server):
+    # Step 1: script A saves a session with credentials
+    s_a = Session("port-test", path=str(tmp_path / "s"))
+    s_a.add("username", "luigi")
+    s_a.add("password", "shhh")
+
+    @s_a.validate
+    async def _v(tab):
+        await tab.get(f"{local_server}/dashboard.html")
+        return (await tab.select(".welcome", timeout=2)) is not None
+
+    @s_a.login
+    async def _l(tab, metadata):
+        await tab.get(f"{local_server}/login.html")
+        await (await tab.select("#user")).type(metadata["username"])
+        await (await tab.select("#pass")).type(metadata["password"])
+        await (await tab.select("#submit")).click()
+        await tab.wait(0.6)
+
+    async with s_a.start(headless=True):
+        s_a.save()
+
+    # Step 2: script B constructs a Session with just the name/path, no
+    # hardcoded credentials. Simulate cookie invalidation by deleting cookies
+    # dir from user_data_dir so the validator will fail.
+    import shutil, os
+    default_dir = os.path.join(s_a.path, "chrome", "Default")
+    for entry in os.listdir(default_dir):
+        if entry.startswith("Cookies"):
+            target = os.path.join(default_dir, entry)
+            if os.path.isdir(target):
+                shutil.rmtree(target, ignore_errors=True)
+            else:
+                try:
+                    os.remove(target)
+                except OSError:
+                    pass
+
+    s_b = Session("port-test", path=str(tmp_path / "s"))
+    # script B never calls .add() -- relies entirely on file contents
+    assert s_b.metadata.get("username") == "luigi"
+    assert s_b.metadata.get("password") == "shhh"
+
+    login_called = {"n": 0}
+
+    @s_b.validate
+    async def _v2(tab):
+        await tab.get(f"{local_server}/dashboard.html")
+        return (await tab.select(".welcome", timeout=2)) is not None
+
+    @s_b.login
+    async def _l2(tab, metadata):
+        login_called["n"] += 1
+        await tab.get(f"{local_server}/login.html")
+        await (await tab.select("#user")).type(metadata["username"])
+        await (await tab.select("#pass")).type(metadata["password"])
+        await (await tab.select("#submit")).click()
+        await tab.wait(0.6)
+
+    async with s_b.start(headless=True) as browser:
+        tab = browser.main_tab
+        await tab.get(f"{local_server}/dashboard.html")
+        assert (await tab.select(".welcome", timeout=3)) is not None
+
+    assert login_called["n"] == 1
