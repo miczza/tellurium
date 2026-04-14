@@ -55,3 +55,38 @@ class Session:
 
     def _json_path(self) -> str:
         return os.path.join(self.path, "session.json")
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.metadata.get(key, default)
+
+    def add(self, key: str, value: Any) -> None:
+        """Set metadata[key] = value only if key is not present."""
+        if key in self.metadata:
+            return
+        _validate_json_value(value)
+        self.metadata[key] = value
+
+    def set(self, key: str, value: Any) -> None:
+        """Set metadata[key] = value, overwriting any existing value."""
+        _validate_json_value(value)
+        self.metadata[key] = value
+
+
+def _validate_json_value(value: Any) -> None:
+    """Raise TypeError if value (or any nested element) is not JSON-serializable."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return
+    if isinstance(value, list):
+        for v in value:
+            _validate_json_value(v)
+        return
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if not isinstance(k, str):
+                raise TypeError(f"metadata dict keys must be str, got {type(k).__name__}")
+            _validate_json_value(v)
+        return
+    raise TypeError(
+        f"metadata values must be JSON-serializable "
+        f"(str, int, float, bool, None, list, dict); got {type(value).__name__}"
+    )

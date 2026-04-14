@@ -99,3 +99,57 @@ def test_corrupt_file_raises(tmp_path):
 
     with pytest.raises(SessionCorruptError):
         Session("x", path=str(path))
+
+
+def test_add_sets_if_missing(tmp_path):
+    s = Session("x", path=str(tmp_path / "s"))
+    s.add("username", "mario")
+    assert s.metadata["username"] == "mario"
+
+
+def test_add_noop_if_present(tmp_path):
+    s = Session("x", path=str(tmp_path / "s"))
+    s.add("username", "mario")
+    s.add("username", "NEW")
+    assert s.metadata["username"] == "mario"
+
+
+def test_set_overwrites_unconditionally(tmp_path):
+    s = Session("x", path=str(tmp_path / "s"))
+    s.set("username", "mario")
+    s.set("username", "NEW")
+    assert s.metadata["username"] == "NEW"
+
+
+def test_get_returns_none_by_default(tmp_path):
+    s = Session("x", path=str(tmp_path / "s"))
+    assert s.get("missing") is None
+
+
+def test_get_explicit_default(tmp_path):
+    s = Session("x", path=str(tmp_path / "s"))
+    assert s.get("missing", default="fallback") == "fallback"
+
+
+def test_get_returns_value(tmp_path):
+    s = Session("x", path=str(tmp_path / "s"))
+    s.set("k", "v")
+    assert s.get("k") == "v"
+
+
+def test_add_rejects_non_json_value(tmp_path):
+    s = Session("x", path=str(tmp_path / "s"))
+    with pytest.raises(TypeError):
+        s.add("f", lambda: None)
+
+
+def test_set_rejects_non_json_value(tmp_path):
+    s = Session("x", path=str(tmp_path / "s"))
+    with pytest.raises(TypeError):
+        s.set("f", object())
+
+
+def test_set_accepts_nested_container(tmp_path):
+    s = Session("x", path=str(tmp_path / "s"))
+    s.set("nested", {"a": [1, 2, {"b": None, "c": True}]})
+    assert s.metadata["nested"]["a"][2]["c"] is True
