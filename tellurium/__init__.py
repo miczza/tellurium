@@ -4,4 +4,6 @@ from tellurium.browser.cookie import Cookie
 
 __version__ = "0.1.0"
 
-__all__ = ["Browser", "Cookie"]
+from tellurium.session import Session  # noqa: E402 — after __version__ to avoid circular import
+
+__all__ = ["Browser", "Cookie", "Session"]
