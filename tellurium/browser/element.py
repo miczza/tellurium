@@ -127,36 +127,28 @@ class Element:
         """Click the element.
 
         *human=False* — fast JS click.
-        *human=True* — scroll into view, move cursor to a random point inside the
-        bounding box, then dispatch real Input events.
+        *human=True* — scroll into view, move cursor using Wind Mouse trajectory to a
+        random point inside the bounding box, then dispatch real Input events.
         """
         if not human:
             await self._call("function() { this.click(); }")
         else:
             await self.scroll_into_view()
             box = await self.bounding_box()
-            x = box["x"] + random.uniform(box["width"] * 0.2, box["width"] * 0.8)
-            y = box["y"] + random.uniform(box["height"] * 0.2, box["height"] * 0.8)
-            await self._tab.mouse_move(x, y)
-            await asyncio.sleep(random.uniform(0.02, 0.08))
-            await self._tab.mouse_click(x, y)
+            x = box["x"] + box["width"] / 2 + random.uniform(-3, 3)
+            y = box["y"] + box["height"] / 2 + random.uniform(-3, 3)
+            await self._tab.mouse_click(x, y, human=True)  # Uses Wind Mouse trajectory
 
     async def type(self, text: str, *, human: bool = False, clear: bool = False) -> None:
         """Focus this element and type *text*.
 
-        *clear=True* — select-all + delete before typing.
-        *human=True* — random delays between keystrokes.
+        *clear=True* — clear the field value before typing.
+        *human=True* — use HumanTyping with realistic inter-key intervals and dwell times.
         """
         await self.focus()
         if clear:
-            await self._tab.keyboard_press("Control+a")
-            await self._tab.keyboard_press("Backspace")
-        if human:
-            for char in text:
-                await self._tab.keyboard_type(char)
-                await asyncio.sleep(random.uniform(0.03, 0.12))
-        else:
-            await self._tab.keyboard_type(text)
+            await self._call("function() { this.value = ''; this.dispatchEvent(new Event('input')); }")
+        await self._tab.keyboard_type(text, human=human)  # Delegates to Tab's human typing
 
     async def upload(self, *files: str) -> None:
         """Set files on an ``<input type="file">`` element."""
@@ -181,10 +173,19 @@ class Element:
         x, y = await self._center()
         await self._tab.mouse_move(x, y)
 
-    async def scroll_into_view(self) -> None:
-        await self._call(
-            "function() { this.scrollIntoView({block: 'center', inline: 'center'}); }"
-        )
+    async def scroll_into_view(self, human: bool = False) -> None:
+        if human:
+            box = await self.bounding_box()
+            viewport_height = await self._tab.eval("window.innerHeight")
+            scroll_y = await self._tab.eval("window.scrollY")
+            target_y = box["y"] - (viewport_height or 800) / 3
+            delta = target_y - (scroll_y or 0)
+            if abs(delta) > 50:
+                await self._tab.scroll(delta_y=delta, human=True)
+        else:
+            await self._call(
+                "function() { this.scrollIntoView({block: 'center', inline: 'center'}); }"
+            )
 
     async def focus(self) -> None:
         await self._session.send("DOM.focus", {"nodeId": self._node_id})

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import random
 import re
+import time
 from typing import TYPE_CHECKING, Any
 
 from tellurium.browser.element import Element
@@ -43,6 +45,8 @@ class Tab:
         self._target_id = target_id
         self._url: str = ""
         self._title: str = ""
+        self._mouse_pos: tuple[float, float] = (0, 0)  # Track current mouse position
+        self._action_timer = None  # Will be set when stealth is active
 
     # ------------------------------------------------------------------
     # Navigation
@@ -344,16 +348,37 @@ class Tab:
     # Input
     # ------------------------------------------------------------------
 
-    async def mouse_move(self, x: float, y: float) -> None:
-        await self._session.send("Input.dispatchMouseEvent", {
-            "type": "mouseMoved", "x": x, "y": y,
-        })
+    async def mouse_move(self, x: float, y: float, human: bool = False) -> None:
+        if human:
+            from tellurium.stealth.human import wind_mouse, apply_lognormal_velocity, MOUSE_PROFILES
+            params = MOUSE_PROFILES["normal"]
+            path = wind_mouse(*self._mouse_pos, x, y, **params["wind"])
+            timed_path = apply_lognormal_velocity(path, mu=params["mu"], sigma=params["sigma"])
+            t_start = time.monotonic()
+            for px, py, t_ms in timed_path:
+                target_time = t_start + t_ms / 1000
+                now = time.monotonic()
+                if target_time > now:
+                    await asyncio.sleep(target_time - now)
+                await self._session.send("Input.dispatchMouseEvent", {
+                    "type": "mouseMoved", "x": px, "y": py,
+                })
+            self._mouse_pos = (x, y)
+        else:
+            await self._session.send("Input.dispatchMouseEvent", {
+                "type": "mouseMoved", "x": x, "y": y,
+            })
+            self._mouse_pos = (x, y)
 
-    async def mouse_click(self, x: float, y: float, *, button: str = "left") -> None:
+    async def mouse_click(self, x: float, y: float, button: str = "left", human: bool = False) -> None:
+        if human:
+            await self.mouse_move(x, y, human=True)
+            await asyncio.sleep(random.uniform(0.1, 0.3))  # reaction time
         await self._session.send("Input.dispatchMouseEvent", {
             "type": "mousePressed", "x": x, "y": y,
             "button": button, "clickCount": 1,
         })
+        await asyncio.sleep(random.uniform(0.08, 0.15) if human else 0.05)
         await self._session.send("Input.dispatchMouseEvent", {
             "type": "mouseReleased", "x": x, "y": y,
             "button": button, "clickCount": 1,
@@ -382,22 +407,54 @@ class Tab:
             "type": "keyUp", "key": actual_key, "modifiers": modifiers,
         })
 
-    async def keyboard_type(self, text: str) -> None:
+    async def keyboard_type(self, text: str, human: bool = False) -> None:
         """Type a string character-by-character via ``Input.dispatchKeyEvent``."""
-        for char in text:
-            await self._session.send("Input.dispatchKeyEvent", {
-                "type": "keyDown", "key": char, "text": char,
-            })
-            await self._session.send("Input.dispatchKeyEvent", {
-                "type": "keyUp", "key": char,
-            })
+        if human:
+            from tellurium.stealth.human import HumanTyping
+            typer = HumanTyping()
+            events = typer.get_events(text)
+            for event in events:
+                if event["delay_ms"] > 0:
+                    await asyncio.sleep(event["delay_ms"] / 1000)
+                char = event["key"]
+                key_code = ord(char.upper()) if len(char) == 1 and char.isascii() else 0
+                code = f"Key{char.upper()}" if char.isalpha() else ""
+                if event["type"] == "rawKeyDown":
+                    await self._session.send("Input.dispatchKeyEvent", {
+                        "type": "rawKeyDown", "key": char, "code": code,
+                        "windowsVirtualKeyCode": key_code,
+                    })
+                elif event["type"] == "char":
+                    await self._session.send("Input.dispatchKeyEvent", {
+                        "type": "char", "text": char, "key": char,
+                    })
+                elif event["type"] == "keyUp":
+                    await self._session.send("Input.dispatchKeyEvent", {
+                        "type": "keyUp", "key": char, "code": code,
+                        "windowsVirtualKeyCode": key_code,
+                    })
+        else:
+            for char in text:
+                await self._session.send("Input.dispatchKeyEvent", {
+                    "type": "keyDown", "key": char, "text": char,
+                })
+                await self._session.send("Input.dispatchKeyEvent", {
+                    "type": "keyUp", "key": char,
+                })
 
-    async def scroll(self, delta_y: float, x: float = 0, y: float = 0) -> None:
+    async def scroll(self, delta_y: float = 0, delta_x: float = 0,
+                     x: float | None = None, y: float | None = None,
+                     human: bool = False) -> None:
         """Dispatch a mouse wheel event."""
-        await self._session.send("Input.dispatchMouseEvent", {
-            "type": "mouseWheel", "x": x, "y": y,
-            "deltaX": 0, "deltaY": delta_y,
-        })
+        if human and delta_y != 0:
+            from tellurium.stealth.human import HumanScroll
+            scroller = HumanScroll()
+            await scroller.scroll_by(self._session, delta_y, x or 400, y or 300)
+        else:
+            await self._session.send("Input.dispatchMouseEvent", {
+                "type": "mouseWheel", "x": x or 0, "y": y or 0,
+                "deltaX": delta_x, "deltaY": delta_y,
+            })
 
     # ------------------------------------------------------------------
     # Wait helpers
