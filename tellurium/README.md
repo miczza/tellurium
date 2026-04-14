@@ -829,3 +829,72 @@ tellurium stealth-test --full           # Full stealth test suite
 ## License
 
 MIT
+
+## Session — Persistent login state
+
+`Session` saves browser state (cookies, localStorage, fingerprint seed) and
+application metadata (credentials, tokens) across runs. You wrap the login flow
+in code; if the saved session is still valid, the login is skipped.
+
+### Quick start
+
+```python
+from tellurium import Session
+
+session = Session("mario")        # stored under ./sessions/mario/
+session.add("username", "mario")  # no-op if already saved
+session.add("password", "secret") # no-op if already saved
+
+@session.validate
+async def signed_in(tab):
+    await tab.get("https://example.com/dashboard")
+    return (await tab.select(".welcome", timeout=3)) is not None
+
+@session.login
+async def do_login(tab, metadata):
+    await tab.get("https://example.com/login")
+    await (await tab.select("#user")).type(metadata["username"])
+    await (await tab.select("#pass")).type(metadata["password"])
+    await (await tab.select("#submit")).click()
+
+async with session.start(stealth=True, headless=False) as browser:
+    tab = browser.main_tab
+    await tab.get("https://example.com/dashboard")
+    # ... scraping ...
+    session.save()
+```
+
+### On-disk layout
+
+```
+sessions/mario/
+├── session.json        # metadata, seed, timestamps
+└── chrome/             # user_data_dir — cookies, storage, cache
+```
+
+**Add `sessions/` to `.gitignore`** — the file contains credentials in plaintext.
+Tellurium sets `0600` permissions on POSIX; it does not encrypt the file.
+
+### API reference
+
+| Construct | Meaning |
+|---|---|
+| `Session(name, path=None, seed=None, validate_mode="all")` | Create/load a session. When the file exists, its values win; the constructor `seed` is ignored. |
+| `session.add(key, value)` | Add to metadata only if the key is absent (idempotent across runs). |
+| `session.set(key, value)` | Unconditional set/overwrite. |
+| `session.get(key, default=None)` | Read. |
+| `@session.validate` | Register an async `(tab) -> bool` validator. Multiple allowed. |
+| `@session.login` | Register the async `(tab, metadata)` login callback. Only one. |
+| `session.start(**kwargs)` | Async context manager. Launches the browser, runs validators, calls login on failure. Kwargs are forwarded to `Browser.launch()` (except `user_data_dir` and `seed`). |
+| `session.save(full=False)` | Persist state. `full=True` also saves launch params used. |
+
+### Validation modes
+
+- `validate_mode="all"` (default): all validators must return truthy. Short-circuits on first falsy / raising validator.
+- `validate_mode="any"`: at least one validator must return truthy. Raising validators are skipped.
+
+### Errors
+
+- `SessionInvalidError` — validation failed and no `@login` is registered.
+- `SessionLoginFailedError` — login callback raised (original exception preserved as `__cause__`).
+- `SessionCorruptError` — `session.json` is unparseable.

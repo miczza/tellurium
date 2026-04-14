@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head><title>Login</title></head>
+<body>
+  <h1>Login</h1>
+  <form id="form" onsubmit="return false;">
+    <input id="user" name="user" />
+    <input id="pass" name="pass" type="password" />
+    <button id="submit" type="button">Sign in</button>
+  </form>
+  <p id="status">please sign in</p>
+  <script>
+    document.getElementById('submit').addEventListener('click', () => {
+      const u = document.getElementById('user').value;
+      const p = document.getElementById('pass').value;
+      if (u && p) {
+        // persist login via cookie (Chrome keeps cookies in user_data_dir)
+        document.cookie = "session=ok; path=/; max-age=86400";
+        document.getElementById('status').textContent = 'logged in as ' + u;
+      } else {
+        document.getElementById('status').textContent = 'missing credentials';
+      }
+    });
+  </script>
+</body></html>

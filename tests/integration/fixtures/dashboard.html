@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head><title>Dashboard</title></head>
+<body>
+  <h1>Dashboard</h1>
+  <p id="state">checking...</p>
+  <script>
+    const hasSession = document.cookie.split(';').some(
+      c => c.trim().startsWith('session=ok')
+    );
+    document.getElementById('state').textContent =
+      hasSession ? 'welcome back' : 'not logged in';
+    if (hasSession) {
+      const div = document.createElement('div');
+      div.className = 'welcome';
+      div.id = 'welcome';
+      div.textContent = 'dashboard ready';
+      document.body.appendChild(div);
+    }
+  </script>
+</body></html>
