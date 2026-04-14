@@ -6,7 +6,7 @@ import pytest
 from tellurium.session import Session
 from tellurium.session import SessionCorruptError
 from tellurium.session import storage as _storage
-from tellurium.session.session import _combine_validators
+from tellurium.session.session import _combine_validators, _merge_launch_params
 
 
 def test_constructs_with_name_only(tmp_path, monkeypatch):
@@ -283,3 +283,36 @@ async def test_combine_any_all_false_is_false():
 async def test_combine_any_all_raise_is_false():
     result = await _combine_validators([_raises, _raises], "any", tab=None)
     assert result is False
+
+
+def test_merge_kwargs_win_over_hints():
+    merged = _merge_launch_params({"stealth": True}, {"stealth": False, "headless": True})
+    assert merged == {"stealth": True, "headless": True}
+
+
+def test_merge_hints_used_when_no_kwargs():
+    merged = _merge_launch_params({}, {"stealth": True, "proxy": "p"})
+    assert merged == {"stealth": True, "proxy": "p"}
+
+
+def test_merge_kwargs_used_when_no_hints():
+    merged = _merge_launch_params({"headless": True}, {})
+    assert merged == {"headless": True}
+
+
+def test_merge_rejects_user_data_dir():
+    with pytest.raises(TypeError):
+        _merge_launch_params({"user_data_dir": "/tmp"}, {})
+
+
+def test_merge_rejects_seed():
+    with pytest.raises(TypeError):
+        _merge_launch_params({"seed": 42}, {})
+
+
+def test_merge_ignores_managed_keys_in_hints():
+    # If somehow hints contain managed keys, they are dropped silently
+    merged = _merge_launch_params({"stealth": True}, {"user_data_dir": "/x", "seed": 1})
+    assert "user_data_dir" not in merged
+    assert "seed" not in merged
+    assert merged["stealth"] is True

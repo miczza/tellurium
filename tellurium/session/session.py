@@ -99,6 +99,25 @@ class Session:
         return fn
 
 
+_MANAGED_LAUNCH_KEYS = frozenset({"user_data_dir", "seed"})
+
+
+def _merge_launch_params(kwargs: dict, hints: dict) -> dict:
+    """Merge explicit kwargs with stored hints. kwargs wins per-key.
+
+    Raises TypeError if the caller passes keys managed by Session itself
+    (user_data_dir, seed). Managed keys in `hints` are silently dropped
+    (defensive, in case an older file contains them).
+    """
+    bad = _MANAGED_LAUNCH_KEYS & kwargs.keys()
+    if bad:
+        raise TypeError(
+            f"session.start() manages these parameters internally: {sorted(bad)}"
+        )
+    safe_hints = {k: v for k, v in hints.items() if k not in _MANAGED_LAUNCH_KEYS}
+    return {**safe_hints, **kwargs}
+
+
 async def _combine_validators(validators, mode: str, *, tab) -> bool:
     """Run validators sequentially with short-circuit semantics.
 
