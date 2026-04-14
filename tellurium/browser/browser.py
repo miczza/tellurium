@@ -130,12 +130,15 @@ class Browser:
             else:
                 stealth_profile = StealthProfile.auto()
 
-            # GeoIP resolution if proxy
+            # GeoIP resolution if proxy — resolve real exit IP
             if proxy:
                 try:
-                    from tellurium.stealth.geoip import resolve_geoip
-                    parsed_proxy = parse_proxy_url(proxy)
-                    geo = resolve_geoip(parsed_proxy["host"])
+                    from tellurium.stealth.geoip import resolve_exit_ip, resolve_geoip
+
+                    forwarder_port = self._forwarder.port if self._forwarder else None
+                    exit_ip = resolve_exit_ip(proxy, forwarder_port)
+                    logger.info("Proxy exit IP: %s", exit_ip)
+                    geo = resolve_geoip(exit_ip)
                     stealth_profile = dataclasses.replace(
                         stealth_profile,
                         languages=geo.languages,

@@ -55,6 +55,68 @@ COUNTRY_LANGUAGES = {
 }
 
 
+_EXIT_IP_SERVICES = [
+    "https://api.ipify.org",
+    "https://checkip.amazonaws.com",
+    "https://ifconfig.me/ip",
+    "https://icanhazip.com",
+]
+
+
+def resolve_exit_ip(proxy_url: str, forwarder_port: int | None = None) -> str:
+    """Determine the real exit IP by making an HTTP request through the proxy.
+
+    If a local ProxyForwarder is running (for authenticated proxies), uses
+    ``localhost:<forwarder_port>`` as the HTTP proxy.  Otherwise builds a
+    proxy handler from *proxy_url* directly (HTTP/HTTPS proxies only —
+    SOCKS5 without auth falls back to DNS resolution of the proxy hostname).
+
+    Tries multiple IP-echo services for reliability.
+    """
+    import socket
+    import urllib.request
+
+    # Build the opener with the right proxy
+    if forwarder_port is not None:
+        handler = urllib.request.ProxyHandler({
+            "http": f"http://localhost:{forwarder_port}",
+            "https": f"http://localhost:{forwarder_port}",
+        })
+    else:
+        from urllib.parse import urlparse
+        parsed = urlparse(proxy_url)
+        if parsed.scheme in ("http", "https"):
+            handler = urllib.request.ProxyHandler({
+                "http": proxy_url,
+                "https": proxy_url,
+            })
+        else:
+            # SOCKS5 without auth: urllib doesn't support SOCKS natively.
+            # Fallback: resolve proxy hostname via DNS.
+            hostname = parsed.hostname or ""
+            try:
+                return socket.gethostbyname(hostname)
+            except socket.gaierror:
+                return hostname
+
+    opener = urllib.request.build_opener(handler)
+
+    for service_url in _EXIT_IP_SERVICES:
+        try:
+            req = urllib.request.Request(service_url, headers={"User-Agent": "curl/8.0"})
+            with opener.open(req, timeout=10) as resp:
+                ip = resp.read().decode().strip()
+                if ip and all(c.isdigit() or c == "." for c in ip):
+                    return ip
+        except Exception:
+            continue
+
+    raise RuntimeError(
+        "Could not determine exit IP through proxy. "
+        "Tried: " + ", ".join(_EXIT_IP_SERVICES)
+    )
+
+
 def resolve_geoip(ip: str) -> GeoResult:
     """Resolve IP -> country -> timezone/languages. Requires maxminddb."""
     try:

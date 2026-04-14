@@ -6,6 +6,7 @@ from tellurium.stealth.geoip import (
     COUNTRY_TIMEZONES,
     COUNTRY_LANGUAGES,
     resolve_geoip,
+    resolve_exit_ip,
     _ensure_geolite2_db,
 )
 
@@ -142,6 +143,83 @@ def test_resolve_geoip_none_result():
          patch("tellurium.stealth.geoip._ensure_geolite2_db", return_value="/fake/path.mmdb"):
         with pytest.raises(ValueError, match="Could not resolve IP"):
             resolve_geoip("1.2.3.4")
+
+
+# ---------------------------------------------------------------------------
+# resolve_exit_ip
+# ---------------------------------------------------------------------------
+
+def test_resolve_exit_ip_with_forwarder():
+    """When a forwarder port is given, it should use localhost as HTTP proxy."""
+    mock_response = MagicMock()
+    mock_response.read.return_value = b"203.0.113.42"
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=False)
+
+    mock_opener = MagicMock()
+    mock_opener.open.return_value = mock_response
+
+    with patch("urllib.request.build_opener", return_value=mock_opener) as mock_build:
+        ip = resolve_exit_ip("http://user:pass@proxy:8080", forwarder_port=9999)
+
+    assert ip == "203.0.113.42"
+    # Verify ProxyHandler was created with localhost
+    handler_arg = mock_build.call_args[0][0]
+    assert "localhost:9999" in str(handler_arg.proxies)
+
+
+def test_resolve_exit_ip_http_no_forwarder():
+    """HTTP proxy without auth should use proxy URL directly."""
+    mock_response = MagicMock()
+    mock_response.read.return_value = b"198.51.100.10\n"
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=False)
+
+    mock_opener = MagicMock()
+    mock_opener.open.return_value = mock_response
+
+    with patch("urllib.request.build_opener", return_value=mock_opener):
+        ip = resolve_exit_ip("http://proxy.example.com:3128")
+
+    assert ip == "198.51.100.10"
+
+
+def test_resolve_exit_ip_socks5_no_forwarder_fallback():
+    """SOCKS5 without forwarder should fall back to DNS resolution."""
+    with patch("socket.gethostbyname", return_value="192.0.2.1"):
+        ip = resolve_exit_ip("socks5://socks.example.com:1080")
+
+    assert ip == "192.0.2.1"
+
+
+def test_resolve_exit_ip_all_services_fail():
+    """Should raise RuntimeError when all IP services fail."""
+    mock_opener = MagicMock()
+    mock_opener.open.side_effect = Exception("connection refused")
+
+    with patch("urllib.request.build_opener", return_value=mock_opener):
+        with pytest.raises(RuntimeError, match="Could not determine exit IP"):
+            resolve_exit_ip("http://proxy:8080", forwarder_port=9999)
+
+
+def test_resolve_exit_ip_tries_next_service_on_failure():
+    """Should try the next service when one fails."""
+    mock_response = MagicMock()
+    mock_response.read.return_value = b"203.0.113.1"
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=False)
+
+    mock_opener = MagicMock()
+    mock_opener.open.side_effect = [
+        Exception("timeout"),      # first service fails
+        mock_response,             # second service succeeds
+    ]
+
+    with patch("urllib.request.build_opener", return_value=mock_opener):
+        ip = resolve_exit_ip("http://proxy:8080", forwarder_port=9999)
+
+    assert ip == "203.0.113.1"
+    assert mock_opener.open.call_count == 2
 
 
 # ---------------------------------------------------------------------------

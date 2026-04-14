@@ -24,11 +24,13 @@ asyncio.run(main())
 pip install tellurium
 ```
 
-Optional GeoIP support (auto-detect timezone/locale from proxy IP):
+Optional GeoIP support (auto-detect timezone/locale from proxy exit IP):
 
 ```bash
 pip install tellurium[geoip]
 ```
+
+The GeoIP module requires a MaxMind GeoLite2-Country database file at `~/.tellurium/geolite2/GeoLite2-Country.mmdb`. Download it from [MaxMind](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data) (free account required).
 
 ## Quick Start
 
@@ -693,6 +695,77 @@ async def advanced_cdp():
 
 asyncio.run(advanced_cdp())
 ```
+
+---
+
+## Proxy and GeoIP
+
+Tellurium supports HTTP, HTTPS, and SOCKS5 proxies with optional authentication.
+
+```python
+# HTTP proxy
+browser = await Browser.launch(proxy="http://proxy.example.com:8080")
+
+# SOCKS5 with auth
+browser = await Browser.launch(proxy="socks5://user:pass@proxy.example.com:1080")
+
+# Proxy + stealth (automatic GeoIP)
+browser = await Browser.launch(
+    stealth=True,
+    proxy="socks5://user:pass@de-proxy.example.com:1080",
+)
+```
+
+### Authenticated proxies
+
+Chrome does not natively support proxies with credentials. When you provide a proxy URL with `user:pass@`, Tellurium automatically starts a local **ProxyForwarder** on `localhost` that handles authentication transparently:
+
+```
+Chrome -> localhost:<random_port> (ProxyForwarder) -> user:pass@upstream_proxy
+```
+
+This avoids using `Fetch.enable` via CDP (which would add a detectable surface).
+
+### GeoIP exit IP resolution
+
+When `stealth=True` and a proxy is configured, Tellurium determines the correct timezone, locale, and language by:
+
+1. **Making an HTTP request through the proxy** to an IP-echo service (`api.ipify.org`, `checkip.amazonaws.com`, etc.) to discover the **real exit IP** — not the proxy hostname
+2. **Resolving the exit IP** via the GeoLite2-Country database to get the country code
+3. **Mapping the country** to timezone and languages (42 countries covered)
+4. **Applying the result** to the stealth profile: `Emulation.setTimezoneOverride`, `Emulation.setLocaleOverride`, `Accept-Language` header, keyboard layout
+
+This ensures that a German proxy produces German timezone/locale regardless of where the proxy server's hostname resolves to.
+
+```
+Browser.launch(stealth=True, proxy="socks5://user:pass@de:1080")
+    |
+    |-- ProxyForwarder starts on localhost:random_port
+    |-- HTTP request through proxy -> api.ipify.org -> "203.0.113.42"
+    |-- GeoLite2 lookup: 203.0.113.42 -> country="DE"
+    |-- timezone="Europe/Berlin", locale="de-DE", languages=["de-DE", "en"]
+    |-- CDP: Emulation.setTimezoneOverride("Europe/Berlin")
+    |-- CDP: Emulation.setLocaleOverride("de-DE")
+    |-- Extension: keyboard_layout.js with LOCALE="de-DE"
+```
+
+**Fallback behavior:**
+- If `tellurium[geoip]` is not installed: logs a warning, uses OS timezone/locale
+- If the IP-echo services are unreachable: falls back to DNS resolution of the proxy hostname
+- If the GeoLite2 database is missing: raises `FileNotFoundError` with instructions
+- Manual override always takes precedence: `Browser.launch(timezone="Europe/Berlin", languages=["de-DE"])`
+
+**SOCKS5 without auth (no forwarder):** `urllib` does not support SOCKS natively, so the exit IP cannot be determined via HTTP. Falls back to DNS resolution of the proxy hostname. For best results, use proxies with auth or HTTP proxies.
+
+### Supported proxy formats
+
+| Format | Example |
+|--------|---------|
+| HTTP | `http://proxy:8080` |
+| HTTP with auth | `http://user:pass@proxy:8080` |
+| HTTPS | `https://proxy:8080` |
+| SOCKS5 | `socks5://proxy:1080` |
+| SOCKS5 with auth | `socks5://user:pass@proxy:1080` |
 
 ---
 
