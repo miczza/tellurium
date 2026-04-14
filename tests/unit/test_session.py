@@ -6,6 +6,7 @@ import pytest
 from tellurium.session import Session
 from tellurium.session import SessionCorruptError
 from tellurium.session import storage as _storage
+from tellurium.session.session import _combine_validators
 
 
 def test_constructs_with_name_only(tmp_path, monkeypatch):
@@ -213,9 +214,6 @@ def test_second_login_replaces_with_warning(tmp_path, recwarn):
 
     assert s._login is b
     assert any("login" in str(w.message).lower() for w in recwarn.list)
-
-
-from tellurium.session.session import _combine_validators
 
 
 async def _always_true(tab):
