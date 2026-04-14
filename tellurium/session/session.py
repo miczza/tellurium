@@ -41,12 +41,12 @@ class Session:
         loaded = storage.load(self._json_path())
         if loaded is None:
             # Fresh session
-            self.seed = seed if seed is not None else random.randint(1, 2**31 - 1)
+            self.seed = seed if seed is not None else random.randint(1, 0xFFFFFFFF)
             self.metadata: dict[str, Any] = {}
         else:
             # File wins: constructor seed is ignored
             self.seed = int(loaded["seed"]) if "seed" in loaded else (
-                seed if seed is not None else random.randint(1, 2**31 - 1)
+                seed if seed is not None else random.randint(1, 0xFFFFFFFF)
             )
             self.metadata = dict(loaded.get("metadata", {}))
             if "launch" in loaded and isinstance(loaded["launch"], dict):
