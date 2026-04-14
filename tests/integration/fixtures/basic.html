@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html><head><title>Basic Test Page</title></head>
+<body>
+  <h1>Hello Tellurium</h1>
+  <p id="content">This is a test page.</p>
+  <a href="#clicked" id="link">Click Me</a>
+  <button id="submit">Submit</button>
+  <script>
+    document.getElementById('submit').addEventListener('click', () => {
+      document.getElementById('content').textContent = 'submitted';
+    });
+  </script>
+</body></html>

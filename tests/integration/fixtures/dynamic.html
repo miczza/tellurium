@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html><head><title>Dynamic Test</title></head>
+<body>
+  <div id="container"></div>
+  <script>
+    setTimeout(() => {
+      const el = document.createElement('div');
+      el.id = 'lazy-content';
+      el.textContent = 'Loaded!';
+      document.getElementById('container').appendChild(el);
+    }, 500);
+  </script>
+</body></html>
