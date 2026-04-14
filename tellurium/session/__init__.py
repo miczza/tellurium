@@ -1,10 +1,10 @@
 """Session persistence: save/load browser state and wrap login flows."""
 
 from tellurium.session.errors import (
-    SessionCorruptError,
     SessionError,
     SessionInvalidError,
     SessionLoginFailedError,
+    SessionCorruptError,
 )
 
 __all__ = [
