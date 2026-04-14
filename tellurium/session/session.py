@@ -6,11 +6,16 @@ import math
 import os
 import random
 import warnings
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
 from tellurium.session import storage
-from tellurium.session.errors import SessionCorruptError
+from tellurium.session.errors import (
+    SessionCorruptError,
+    SessionInvalidError,
+    SessionLoginFailedError,
+)
 
 _VALID_MODES = ("all", "any")
 
@@ -122,6 +127,58 @@ class Session:
                 payload["launch"] = dict(launch)
 
         storage.save(self._json_path(), payload, full=full)
+
+    @asynccontextmanager
+    async def start(self, **kwargs):
+        """Launch a browser bound to this session, run validators, and optionally
+        execute the login callback if validation fails.
+
+        Yields the Browser instance. Closes it on exit. Never auto-saves.
+        """
+        if self._started:
+            raise RuntimeError("session already started")
+
+        merged = _merge_launch_params(kwargs, self._launch_hints)
+        self._last_launch_params = dict(merged)
+
+        # Lazy import to avoid top-level cycles
+        from tellurium import Browser
+
+        os.makedirs(self.path, exist_ok=True)
+        chrome_dir = os.path.join(self.path, "chrome")
+
+        browser = await Browser.launch(
+            user_data_dir=chrome_dir,
+            seed=int(self.seed),
+            **merged,
+        )
+        self._started = True
+        try:
+            await self._run_validation_and_login(browser)
+            yield browser
+        finally:
+            self._started = False
+            try:
+                await browser.close()
+            except Exception:
+                pass
+
+    async def _run_validation_and_login(self, browser) -> None:
+        if not self._validators:
+            return
+        tab = browser.main_tab
+        ok = await _combine_validators(self._validators, self.validate_mode, tab=tab)
+        if ok:
+            return
+        # Validation failed
+        if self._login is None:
+            raise SessionInvalidError(
+                "session validation failed and no @session.login is registered"
+            )
+        try:
+            await self._login(tab, self.metadata)
+        except Exception as exc:
+            raise SessionLoginFailedError("login callback raised") from exc
 
 
 _MANAGED_LAUNCH_KEYS = frozenset({"user_data_dir", "seed"})
