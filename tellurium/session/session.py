@@ -6,6 +6,7 @@ import math
 import os
 import random
 import warnings
+from datetime import datetime, timezone
 from typing import Any
 
 from tellurium.session import storage
@@ -97,6 +98,30 @@ class Session:
             )
         self._login = fn
         return fn
+
+    def save(self, *, full: bool = False) -> None:
+        """Serialize the current session state to session.json.
+
+        `full=True` includes the last set of launch parameters used by start()
+        (or stored hints if start() has not run). If neither exists, the file
+        is still lean (no `launch` block).
+        """
+        if self._created_at is None:
+            self._created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        payload: dict[str, Any] = {
+            "name": self.name,
+            "seed": int(self.seed),
+            "metadata": dict(self.metadata),
+            "created_at": self._created_at,
+        }
+
+        if full:
+            launch = self._last_launch_params or self._launch_hints
+            if launch:
+                payload["launch"] = dict(launch)
+
+        storage.save(self._json_path(), payload, full=full)
 
 
 _MANAGED_LAUNCH_KEYS = frozenset({"user_data_dir", "seed"})

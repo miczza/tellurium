@@ -1,3 +1,4 @@
+import json as _json
 import os
 from pathlib import Path
 
@@ -316,3 +317,47 @@ def test_merge_ignores_managed_keys_in_hints():
     assert "user_data_dir" not in merged
     assert "seed" not in merged
     assert merged["stealth"] is True
+
+
+def test_save_lean_writes_metadata_and_seed(tmp_path):
+    s = Session("mario", path=str(tmp_path / "s"), seed=42)
+    s.add("username", "mario")
+    s.save()
+
+    data = _json.loads((tmp_path / "s" / "session.json").read_text())
+    assert data["name"] == "mario"
+    assert data["seed"] == 42
+    assert data["metadata"] == {"username": "mario"}
+    assert "launch" not in data
+
+
+def test_save_full_without_launch_info_is_lean(tmp_path):
+    s = Session("x", path=str(tmp_path / "s"))
+    s.save(full=True)  # nothing captured from start() yet
+
+    data = _json.loads((tmp_path / "s" / "session.json").read_text())
+    assert "launch" not in data
+
+
+def test_save_preserves_created_at_on_update(tmp_path):
+    # First save -> sets created_at. Second save on the same session keeps it.
+    s = Session("x", path=str(tmp_path / "s"))
+    s.save()
+    first = _json.loads((tmp_path / "s" / "session.json").read_text())["created_at"]
+
+    # Mutate and save again via a fresh Session (simulates a later run)
+    s2 = Session("x", path=str(tmp_path / "s"))
+    s2.set("k", "v")
+    s2.save()
+    second = _json.loads((tmp_path / "s" / "session.json").read_text())["created_at"]
+
+    assert first == second
+
+
+def test_save_full_with_last_launch_params(tmp_path):
+    s = Session("x", path=str(tmp_path / "s"))
+    s._last_launch_params = {"stealth": True, "headless": False}
+    s.save(full=True)
+
+    data = _json.loads((tmp_path / "s" / "session.json").read_text())
+    assert data["launch"] == {"stealth": True, "headless": False}
