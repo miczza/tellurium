@@ -139,7 +139,6 @@ class Session:
             raise RuntimeError("session already started")
 
         merged = _merge_launch_params(kwargs, self._launch_hints)
-        self._last_launch_params = dict(merged)
 
         # Lazy import to avoid top-level cycles
         from tellurium import Browser
@@ -147,21 +146,30 @@ class Session:
         os.makedirs(self.path, exist_ok=True)
         chrome_dir = os.path.join(self.path, "chrome")
 
-        browser = await Browser.launch(
-            user_data_dir=chrome_dir,
-            seed=int(self.seed),
-            **merged,
-        )
-        self._started = True
+        # Single try covers both Browser.launch failure (leak prevention) and
+        # user-body / validation / login exceptions. Python runs finally when
+        # an exception propagates through a generator frame, including the
+        # pre-yield branch where validation/login can raise.
+        browser = None
         try:
+            browser = await Browser.launch(
+                user_data_dir=chrome_dir,
+                seed=int(self.seed),
+                **merged,
+            )
+            # Only record params of a successful launch, so save(full=True)
+            # after a failed start() does not persist a bad configuration.
+            self._last_launch_params = dict(merged)
+            self._started = True
             await self._run_validation_and_login(browser)
             yield browser
         finally:
             self._started = False
-            try:
-                await browser.close()
-            except Exception:
-                pass
+            if browser is not None:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
 
     async def _run_validation_and_login(self, browser) -> None:
         if not self._validators:
