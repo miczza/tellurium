@@ -47,6 +47,7 @@ class Tab:
         self._title: str = ""
         self._mouse_pos: tuple[float, float] = (0, 0)  # Track current mouse position
         self._action_timer = None  # Will be set when stealth is active
+        self._capture_manager = None
 
     # ------------------------------------------------------------------
     # Navigation
@@ -475,6 +476,48 @@ class Tab:
             if asyncio.get_event_loop().time() >= deadline:
                 raise TimeoutError(f"Timed out waiting for URL containing {url!r}")
             await asyncio.sleep(0.25)
+
+    # ------------------------------------------------------------------
+    # Network capture
+    # ------------------------------------------------------------------
+
+    async def capture(self, log: bool = False, log_filter: str | None = None) -> None:
+        """Start capturing network requests."""
+        if self._capture_manager is None:
+            from tellurium.capture.manager import CaptureManager
+            self._capture_manager = CaptureManager(self._session)
+        await self._capture_manager.start(log=log, log_filter=log_filter)
+
+    async def capture_stop(self) -> None:
+        """Stop capturing network requests."""
+        if self._capture_manager:
+            await self._capture_manager.stop()
+
+    async def requests(self, **filters) -> list:
+        """Search captured requests."""
+        if self._capture_manager is None:
+            return []
+        if "body_contains" in filters:
+            body_contains = filters.pop("body_contains")
+            return await self._capture_manager.search_body(body_contains, **filters)
+        return self._capture_manager.search(**filters)
+
+    async def wait_for_request(self, url_pattern: str, timeout: float = 30):
+        """Wait for a request matching the pattern."""
+        if self._capture_manager is None:
+            from tellurium.capture.manager import CaptureManager
+            self._capture_manager = CaptureManager(self._session)
+            await self._capture_manager.start()
+        return await self._capture_manager.wait_for(url_pattern, timeout)
+
+    async def record(self, url_pattern: str = "*"):
+        """Start recording network requests for export."""
+        from tellurium.capture.recorder import Recorder
+        if self._capture_manager is None:
+            from tellurium.capture.manager import CaptureManager
+            self._capture_manager = CaptureManager(self._session)
+            await self._capture_manager.start()
+        return Recorder(self._capture_manager, url_pattern)
 
     # ------------------------------------------------------------------
     # Raw CDP
