@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import random
 from typing import Any
@@ -74,7 +75,14 @@ class Session:
 
 def _validate_json_value(value: Any) -> None:
     """Raise TypeError if value (or any nested element) is not JSON-serializable."""
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if value is None or isinstance(value, (str, int, bool)):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise TypeError(
+                f"metadata float values must be finite (got {value!r}); "
+                "NaN and Infinity are not valid JSON"
+            )
         return
     if isinstance(value, list):
         for v in value:

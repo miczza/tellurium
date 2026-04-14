@@ -153,3 +153,13 @@ def test_set_accepts_nested_container(tmp_path):
     s = Session("x", path=str(tmp_path / "s"))
     s.set("nested", {"a": [1, 2, {"b": None, "c": True}]})
     assert s.metadata["nested"]["a"][2]["c"] is True
+
+
+def test_set_rejects_nan_and_infinity(tmp_path):
+    s = Session("x", path=str(tmp_path / "s"))
+    with pytest.raises(TypeError):
+        s.set("bad", float("nan"))
+    with pytest.raises(TypeError):
+        s.set("bad", float("inf"))
+    with pytest.raises(TypeError):
+        s.set("bad", float("-inf"))
