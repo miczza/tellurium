@@ -163,3 +163,53 @@ def test_set_rejects_nan_and_infinity(tmp_path):
         s.set("bad", float("inf"))
     with pytest.raises(TypeError):
         s.set("bad", float("-inf"))
+
+
+def test_validate_registers_callback(tmp_path):
+    s = Session("x", path=str(tmp_path / "s"))
+
+    @s.validate
+    async def v(tab):
+        return True
+
+    assert v in s._validators
+    assert len(s._validators) == 1
+
+
+def test_multiple_validates_all_registered(tmp_path):
+    s = Session("x", path=str(tmp_path / "s"))
+
+    @s.validate
+    async def a(tab):
+        return True
+
+    @s.validate
+    async def b(tab):
+        return True
+
+    assert s._validators == [a, b]
+
+
+def test_login_registers_callback(tmp_path):
+    s = Session("x", path=str(tmp_path / "s"))
+
+    @s.login
+    async def do(tab, metadata):
+        pass
+
+    assert s._login is do
+
+
+def test_second_login_replaces_with_warning(tmp_path, recwarn):
+    s = Session("x", path=str(tmp_path / "s"))
+
+    @s.login
+    async def a(tab, metadata):
+        pass
+
+    @s.login
+    async def b(tab, metadata):
+        pass
+
+    assert s._login is b
+    assert any("login" in str(w.message).lower() for w in recwarn.list)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 import random
+import warnings
 from typing import Any
 
 from tellurium.session import storage
@@ -71,6 +72,31 @@ class Session:
         """Set metadata[key] = value, overwriting any existing value."""
         _validate_json_value(value)
         self.metadata[key] = value
+
+    def validate(self, fn):
+        """Decorator: register `fn` as a session validator.
+
+        The callback must be async and accept `(tab)`. It should return a truthy
+        value if the session is considered valid. Raising is treated as invalid
+        in "all" mode, and as skipped-try-next in "any" mode.
+        """
+        self._validators.append(fn)
+        return fn
+
+    def login(self, fn):
+        """Decorator: register `fn` as the login callback.
+
+        The callback must be async and accept `(tab, metadata)`. It is invoked
+        when validation fails. Only one login can be registered — calling this
+        decorator twice replaces the previous one with a warning.
+        """
+        if self._login is not None:
+            warnings.warn(
+                "@session.login called twice; replacing the previous callback",
+                stacklevel=2,
+            )
+        self._login = fn
+        return fn
 
 
 def _validate_json_value(value: Any) -> None:
