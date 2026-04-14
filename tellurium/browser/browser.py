@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import shutil
 import signal
@@ -39,6 +40,8 @@ class Browser:
         self._tmp_dir: str | None = None
         self._forwarder: ProxyForwarder | None = None
         self._user_data_dir: str | None = None
+        self._stealth_engine = None
+        self._stealth_profile = None
 
     # ------------------------------------------------------------------
     # Launch
@@ -88,6 +91,7 @@ class Browser:
             engine = PatchedEngine(executable=executable)
         else:
             engine = StockEngine(executable=executable)
+        self._engine = engine
 
         # 2. Get executable
         chrome_path = await engine.get_executable()
@@ -112,36 +116,95 @@ class Browser:
             self._tmp_dir = tempfile.mkdtemp(prefix="tellurium_")
             self._user_data_dir = self._tmp_dir
 
-        # 5. Build engine-specific args
-        profile_obj = None
-        if seed is not None:
-            # Minimal object with .seed for PatchedEngine.build_args
-            class _P:
-                pass
-            profile_obj = _P()
-            profile_obj.seed = seed  # type: ignore[attr-defined]
-        engine_args = engine.build_args(profile_obj)
+        # 5. Build stealth profile & engine (if stealth=True)
+        stealth_engine = None
+        stealth_profile = None
 
-        # 6. Build flags
+        if stealth:
+            from tellurium.stealth.profile import StealthProfile
+            from tellurium.stealth.engine import StealthEngine
+
+            # Build profile
+            if seed is not None:
+                stealth_profile = StealthProfile.from_seed(seed)
+            else:
+                stealth_profile = StealthProfile.auto()
+
+            # GeoIP resolution if proxy
+            if proxy:
+                try:
+                    from tellurium.stealth.geoip import resolve_geoip
+                    parsed_proxy = parse_proxy_url(proxy)
+                    geo = resolve_geoip(parsed_proxy["host"])
+                    stealth_profile = dataclasses.replace(
+                        stealth_profile,
+                        languages=geo.languages,
+                        timezone=geo.timezone,
+                        locale=geo.languages[0],
+                        accept_language=", ".join(
+                            f"{l};q={1.0 - i * 0.1:.1f}" if i > 0 else l
+                            for i, l in enumerate(geo.languages)
+                        ),
+                    )
+                except (ImportError, Exception) as e:
+                    logger.warning("GeoIP not available: %s. Using default locale.", e)
+
+            stealth_engine = StealthEngine(
+                engine, stealth_profile, headless, proxy is not None,
+            )
+            self._stealth_engine = stealth_engine
+            self._stealth_profile = stealth_profile
+
+        # 6. Build engine-specific args
+        if stealth and stealth_profile is not None:
+            engine_args = engine.build_args(stealth_profile)
+        else:
+            profile_obj = None
+            if seed is not None:
+                class _P:
+                    pass
+                profile_obj = _P()
+                profile_obj.seed = seed  # type: ignore[attr-defined]
+            engine_args = engine.build_args(profile_obj)
+
+        # 7. Stealth flags (extension + WebRTC)
+        stealth_flags: list[str] = []
+        if stealth and stealth_engine is not None:
+            ext_path = stealth_engine.build_extension()
+            if ext_path:
+                stealth_flags.append(f"--load-extension={ext_path}")
+                stealth_flags.append(
+                    "--disable-blink-features=AutomationControlled"
+                )
+            if proxy:
+                stealth_flags.append(
+                    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
+                )
+
+        # 8. Build flags
         flags = build_chrome_flags(
             headless=headless,
             user_data_dir=self._user_data_dir,
             proxy=proxy_flag,
-            extra_args=args,
+            extra_args=(args or []) + stealth_flags,
             engine_args=engine_args,
         )
 
-        # 7. Launch Chrome
+        # 9. Launch Chrome
         process, write_fd, read_fd = launch_chrome_posix(chrome_path, flags)
         self._process = process
 
-        # 8. Transport + router
+        # 10. Transport + router
         transport = create_transport(read_fd, write_fd)
         await transport.start()
         self._router = SessionRouter(transport)
         self._dispatch_task = asyncio.create_task(self._router.run())
 
-        # 9. Discover initial page target
+        # 11. Wire stealth engine to router
+        if stealth_engine is not None:
+            stealth_engine.set_router(self._router)
+
+        # 12. Discover initial page target
         await self._router.root.send("Target.setDiscoverTargets", {"discover": True})
         targets_result = await self._router.root.send("Target.getTargets", {})
         page_target = None
@@ -157,6 +220,17 @@ class Browser:
             self._tabs.append(tab)
             self._main_tab = tab
 
+            # 13. Apply stealth to initial tab session
+            if stealth_engine is not None:
+                await stealth_engine.apply_to_session(session)
+
+        # 14. Setup auto-attach for OOPIF/Worker stealth patching
+        # Note: auto-attach is deferred — for stock mode the extension's
+        # content-scripts handle JS injection in all frames.  Calling
+        # setup_auto_attach immediately would conflict with explicit
+        # Target.attachToTarget calls made by new_tab().
+        # TODO: enable auto-attach selectively for OOPIF CDP patching.
+
         return self
 
     # ------------------------------------------------------------------
@@ -168,6 +242,11 @@ class Browser:
         result = await self._router.root.send("Target.createTarget", {"url": "about:blank"})
         target_id = result["targetId"]
         session = await self._router.attach(target_id)
+
+        # Apply stealth to the new tab's session
+        if self._stealth_engine is not None:
+            await self._stealth_engine.apply_to_session(session)
+
         tab = Tab(session, self, target_id)
         self._tabs.append(tab)
         if url and url != "about:blank":

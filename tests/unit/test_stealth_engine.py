@@ -245,10 +245,11 @@ async def test_setup_auto_attach_stock_waits_for_debugger():
 
     session.send.assert_called_once_with("Target.setAutoAttach", {
         "autoAttach": True,
-        "waitForDebuggerOnStart": True,
+        "waitForDebuggerOnStart": False,
         "flatten": True,
     })
-    session.on.assert_called_once_with("Target.attachedToTarget", se._on_target_attached)
+    # Extension content-scripts handle JS injection; no callback needed
+    session.on.assert_not_called()
 
 
 @pytest.mark.asyncio

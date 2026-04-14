@@ -58,22 +58,26 @@ class StealthEngine:
             await self._apply_headless_fixes(session)
 
     async def setup_auto_attach(self, root_session) -> None:
-        """Configure auto-attach for OOPIF and Worker stealth patching."""
-        should_wait = "native_fingerprint" not in self._caps
+        """Configure auto-attach for OOPIF and Worker stealth patching.
 
+        We use ``waitForDebuggerOnStart=False`` to avoid interfering with
+        explicit ``Target.attachToTarget`` calls (e.g. from ``new_tab``).
+        The stealth extension's content-scripts (``document_start``, ``all_frames``)
+        handle JS-level patches; CDP emulation settings propagate automatically.
+        """
         await root_session.send("Target.setAutoAttach", {
             "autoAttach": True,
-            "waitForDebuggerOnStart": should_wait,
+            "waitForDebuggerOnStart": False,
             "flatten": True,
         })
-
-        if should_wait:
-            root_session.on("Target.attachedToTarget", self._on_target_attached)
 
     def _on_target_attached(self, params: dict) -> None:
         target_info = params.get("targetInfo", {})
         session_id = params.get("sessionId")
         target_type = target_info.get("type", "")
+
+        # Ensure the router knows about this auto-attached session
+        self._ensure_session(session_id)
 
         if "native_fingerprint" in self._caps:
             # Patched: resume immediately
@@ -88,14 +92,12 @@ class StealthEngine:
 
     async def _patch_and_resume(self, session_id: str, target_type: str) -> None:
         """Inject stealth into new OOPIF/Worker, then resume."""
-        from tellurium.cdp.transport._session import Session
-        # Get the session from the router — we need to access it via the handler's context
-        # This will be called with the router available
         try:
+            session = self._get_session(session_id)
             if target_type == "iframe":
-                await self.apply_to_session(self._get_session(session_id), is_oopif=True)
+                await self.apply_to_session(session, is_oopif=True)
             # Resume execution
-            await self._get_session(session_id).send("Runtime.runIfWaitingForDebugger", {})
+            await session.send("Runtime.runIfWaitingForDebugger", {})
         except Exception:
             logger.debug("Failed to patch target %s", session_id, exc_info=True)
 
@@ -108,6 +110,13 @@ class StealthEngine:
     def set_router(self, router) -> None:
         """Set the SessionRouter reference for auto-attach handling."""
         self._router = router
+
+    def _ensure_session(self, session_id: str) -> None:
+        """Register an auto-attached session in the router if not already known."""
+        from tellurium.cdp.transport._session import Session
+        if session_id and session_id not in self._router._sessions:
+            session = Session(self._router, session_id=session_id)
+            self._router._sessions[session_id] = session
 
     def _get_session(self, session_id: str):
         return self._router.get_session(session_id)
