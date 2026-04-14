@@ -1,0 +1,14 @@
+"""Shared types for the CDP layer."""
+
+from typing import Any
+
+T_JSON_DICT = dict[str, Any]
+
+
+class CDPError(Exception):
+    """Error returned by Chrome in response to a CDP command."""
+
+    def __init__(self, message: str, code: int | None = None):
+        self.message = message
+        self.code = code
+        super().__init__(f"CDP error {code}: {message}" if code else message)
