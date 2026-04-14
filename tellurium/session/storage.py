@@ -57,12 +57,11 @@ def load(path: str) -> dict[str, Any] | None:
     Raises SessionCorruptError if the file is present but cannot be parsed
     as a JSON object. Unknown top-level fields emit a warning and are dropped.
     """
-    if not os.path.exists(path):
-        return None
-
     try:
         with open(path, "r", encoding="utf-8") as f:
             raw = json.load(f)
+    except FileNotFoundError:
+        return None
     except (json.JSONDecodeError, OSError) as exc:
         raise SessionCorruptError(f"cannot parse session file at {path}: {exc}") from exc
 

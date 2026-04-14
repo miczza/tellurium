@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import warnings
 
 import pytest
 
@@ -91,9 +92,6 @@ def test_save_creates_parent_dir(tmp_path):
     storage.save(str(path), data, full=False)
 
     assert path.exists()
-
-
-import warnings
 
 
 def test_load_returns_none_when_missing(tmp_path):
