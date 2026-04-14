@@ -99,6 +99,39 @@ class Session:
         return fn
 
 
+async def _combine_validators(validators, mode: str, *, tab) -> bool:
+    """Run validators sequentially with short-circuit semantics.
+
+    - "all": first falsy or raising validator wins (returns False).
+    - "any": first truthy validator wins (returns True); raises are skipped.
+    Returns the final boolean outcome.
+    """
+    if not validators:
+        return True
+
+    if mode == "all":
+        for v in validators:
+            try:
+                result = await v(tab)
+            except Exception:
+                return False
+            if not result:
+                return False
+        return True
+
+    if mode == "any":
+        for v in validators:
+            try:
+                result = await v(tab)
+            except Exception:
+                continue
+            if result:
+                return True
+        return False
+
+    raise ValueError(f"unknown mode: {mode!r}")
+
+
 def _validate_json_value(value: Any) -> None:
     """Raise TypeError if value (or any nested element) is not JSON-serializable."""
     if value is None or isinstance(value, (str, int, bool)):

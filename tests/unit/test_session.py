@@ -213,3 +213,75 @@ def test_second_login_replaces_with_warning(tmp_path, recwarn):
 
     assert s._login is b
     assert any("login" in str(w.message).lower() for w in recwarn.list)
+
+
+from tellurium.session.session import _combine_validators
+
+
+async def _always_true(tab):
+    return True
+
+
+async def _always_false(tab):
+    return False
+
+
+async def _raises(tab):
+    raise RuntimeError("boom")
+
+
+async def test_combine_all_all_true():
+    result = await _combine_validators([_always_true, _always_true], "all", tab=None)
+    assert result is True
+
+
+async def test_combine_all_short_circuits_on_first_false():
+    calls = []
+
+    async def a(tab):
+        calls.append("a")
+        return False
+
+    async def b(tab):
+        calls.append("b")
+        return True
+
+    result = await _combine_validators([a, b], "all", tab=None)
+    assert result is False
+    assert calls == ["a"]
+
+
+async def test_combine_all_treats_raise_as_false():
+    result = await _combine_validators([_raises, _always_true], "all", tab=None)
+    assert result is False
+
+
+async def test_combine_any_short_circuits_on_first_true():
+    calls = []
+
+    async def a(tab):
+        calls.append("a")
+        return True
+
+    async def b(tab):
+        calls.append("b")
+        return True
+
+    result = await _combine_validators([a, b], "any", tab=None)
+    assert result is True
+    assert calls == ["a"]
+
+
+async def test_combine_any_skips_raising_validators():
+    result = await _combine_validators([_raises, _always_true], "any", tab=None)
+    assert result is True
+
+
+async def test_combine_any_all_false_is_false():
+    result = await _combine_validators([_always_false, _always_false], "any", tab=None)
+    assert result is False
+
+
+async def test_combine_any_all_raise_is_false():
+    result = await _combine_validators([_raises, _raises], "any", tab=None)
+    assert result is False
