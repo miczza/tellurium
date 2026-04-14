@@ -260,3 +260,14 @@ async def test_no_validators_launches_without_checks(tmp_path, local_server):
 
     async with s.start(headless=True) as browser:
         assert browser is not None
+
+
+async def test_full_save_roundtrips_launch_params(tmp_path, local_server):
+    s = Session("full1", path=str(tmp_path / "s"))
+
+    async with s.start(headless=True):
+        s.save(full=True)
+
+    # Reopen the same session: launch_hints should now contain headless=True
+    s2 = Session("full1", path=str(tmp_path / "s"))
+    assert s2._launch_hints.get("headless") is True
