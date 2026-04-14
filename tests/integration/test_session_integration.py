@@ -1,7 +1,7 @@
 import pytest
 
 from tellurium import Browser
-from tellurium.session import Session
+from tellurium.session import Session, SessionInvalidError, SessionLoginFailedError
 
 
 async def test_start_launches_and_closes(tmp_path):
@@ -203,3 +203,60 @@ async def test_portability_new_session_loads_metadata(tmp_path, local_server):
         assert (await tab.select(".welcome", timeout=3)) is not None
 
     assert login_called["n"] == 1
+
+
+async def test_validation_fails_no_login_raises(tmp_path, local_server):
+    s = Session("err1", path=str(tmp_path / "s"))
+
+    @s.validate
+    async def never(tab):
+        return False
+
+    with pytest.raises(SessionInvalidError):
+        async with s.start(headless=True):
+            pass
+
+
+async def test_login_raising_wraps_in_login_failed(tmp_path, local_server):
+    s = Session("err2", path=str(tmp_path / "s"))
+
+    @s.validate
+    async def never(tab):
+        return False
+
+    @s.login
+    async def bad(tab, metadata):
+        raise ValueError("simulated failure")
+
+    with pytest.raises(SessionLoginFailedError) as ei:
+        async with s.start(headless=True):
+            pass
+    assert isinstance(ei.value.__cause__, ValueError)
+    assert "simulated failure" in str(ei.value.__cause__)
+
+
+async def test_validation_passes_any_mode(tmp_path, local_server):
+    s = Session("any1", path=str(tmp_path / "s"), validate_mode="any")
+
+    @s.validate
+    async def falsy(tab):
+        return False
+
+    @s.validate
+    async def truthy(tab):
+        return True
+
+    @s.login
+    async def should_not_run(tab, metadata):
+        raise AssertionError("login should not run when any validator passes")
+
+    async with s.start(headless=True):
+        pass
+
+
+async def test_no_validators_launches_without_checks(tmp_path, local_server):
+    s = Session("novalid", path=str(tmp_path / "s"))
+    # No @validate, no @login — should still work
+
+    async with s.start(headless=True) as browser:
+        assert browser is not None
