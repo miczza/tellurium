@@ -53,3 +53,14 @@ def test_manifest_verify_missing_platform_raises(tmp_path):
     m = ReleaseManifest.from_path(manifest_path)
     with pytest.raises(BinaryCorruptedError, match="No SHA256 for platform"):
         verify_binary(binary, m, "linux-x64")
+
+
+def test_manifest_missing_binary_sha256_raises_keyerror(tmp_path):
+    """A manifest without binary_sha256 at all must fail at parse time."""
+    manifest_path = tmp_path / "MANIFEST.json"
+    manifest_path.write_text(json.dumps({
+        "version": "146.0.7680.188",
+        # binary_sha256 intentionally missing
+    }))
+    with pytest.raises(KeyError, match="binary_sha256"):
+        ReleaseManifest.from_path(manifest_path)
