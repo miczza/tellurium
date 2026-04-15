@@ -1,7 +1,12 @@
 """Browser engine abstraction — stock Chrome vs patched Chromium."""
 from __future__ import annotations
+import hashlib
 from abc import ABC, abstractmethod
 from pathlib import Path
+
+
+class BinaryCorruptedError(RuntimeError):
+    """Raised when binary SHA256 does not match expected (MANIFEST or pin)."""
 
 
 class BrowserEngine(ABC):
@@ -33,19 +38,51 @@ class StockEngine(BrowserEngine):
 class PatchedEngine(BrowserEngine):
     VERSION = "146.0.7680.188"
 
-    def __init__(self, executable: str | None = None):
+    def __init__(
+        self,
+        *,
+        executable: str | None = None,
+        cache_root: Path | None = None,
+        chromium_version: str | None = None,
+        chromium_sha256: str | None = None,
+        auto_security_update: bool = False,
+    ):
         self._executable = executable
+        self._cache_root = cache_root or (Path.home() / ".tellurium" / "chromium")
+        self._chromium_version = chromium_version
+        self._chromium_sha256 = chromium_sha256
+        self._auto_security_update = auto_security_update
+
+    def resolve_binary_path(self) -> Path:
+        if self._chromium_version:
+            version_dir = self._cache_root / self._chromium_version
+        else:
+            # Use 'current' symlink and trigger daily update check
+            from tellurium.browser import _update_check
+            _update_check.check_for_update(cache_root=self._cache_root)
+            version_dir = self._cache_root / "current"
+        binary = version_dir / "tellurium-chromium"
+        if not binary.exists():
+            raise FileNotFoundError(
+                f"tellurium-chromium binary not found at {binary}. "
+                f"Run `tellurium download-browser --browser patched`"
+                + (f" --version {self._chromium_version}" if self._chromium_version else "")
+            )
+        if self._chromium_sha256:
+            actual = hashlib.sha256(binary.read_bytes()).hexdigest()
+            if actual != self._chromium_sha256:
+                raise BinaryCorruptedError(
+                    f"SHA256 mismatch for {binary}: expected {self._chromium_sha256}, "
+                    f"got {actual}. Run `tellurium verify-browser --reinstall`."
+                )
+        return binary
 
     async def get_executable(self) -> str:
+        # Preserve existing behavior: explicit executable wins
         if self._executable:
             return self._executable
-        path = Path.home() / ".tellurium" / f"chromium-patched-{self.VERSION}" / "chrome"
-        if not path.exists():
-            raise FileNotFoundError(
-                f"tellurium-chromium {self.VERSION} not found. "
-                f"Download with: tellurium download-browser --browser patched"
-            )
-        return str(path)
+        # New behavior: use resolve_binary_path (pinned or default-via-update-check)
+        return str(self.resolve_binary_path())
 
     def build_args(self, profile: object | None) -> list[str]:
         if profile is None:

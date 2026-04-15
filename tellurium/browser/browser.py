@@ -68,6 +68,9 @@ class Browser:
         stealth: bool = False,
         seed: int | None = None,
         extensions: list[str] | None = None,
+        chromium_version: str | None = None,
+        chromium_sha256: str | None = None,
+        auto_security_update: bool = False,
     ) -> Browser:
         """Launch a Chrome process and return a connected :class:`Browser`.
 
@@ -106,8 +109,18 @@ class Browser:
 
         # 1. Select engine
         if browser == "patched":
-            engine = PatchedEngine(executable=executable)
+            engine = PatchedEngine(
+                executable=executable,
+                chromium_version=chromium_version,
+                chromium_sha256=chromium_sha256,
+                auto_security_update=auto_security_update,
+            )
         else:
+            if chromium_version or chromium_sha256 or auto_security_update:
+                logger.warning(
+                    "chromium_version/chromium_sha256/auto_security_update are only "
+                    "meaningful with browser='patched'; ignoring for browser=%r.", browser
+                )
             engine = StockEngine(executable=executable)
         self._engine = engine
 
