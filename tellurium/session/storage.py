@@ -14,7 +14,7 @@ from tellurium.session.errors import SessionCorruptError
 
 _KNOWN_FIELDS = frozenset({
     "tellurium_version", "name", "seed", "metadata", "launch",
-    "created_at", "updated_at",
+    "created_at", "updated_at", "chromium_version",
 })
 
 
