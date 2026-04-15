@@ -204,7 +204,7 @@ def check_chrome_version_for_extensions(
         return
     if is_branded_chrome and version is not None and version[0] >= 137:
         raise LaunchError(
-            f"Chrome {'.'.join(map(str, version))} (branded) does not support "
+            f"Chrome {'.'.join(map(str, version))} at {executable} (branded) does not support "
             f"--load-extension since 137. Install Chrome for Testing or "
             f"Chromium to use extensions: `tellurium download-browser`."
         )
@@ -215,6 +215,8 @@ def build_load_extension_flag(
     tellurium_stealth_path: str | None,
     user_extensions: list[str],
 ) -> str:
+    if not tellurium_stealth_path and not user_extensions:
+        raise ValueError("build_load_extension_flag requires at least one path")
     paths: list[str] = []
     if tellurium_stealth_path:
         paths.append(tellurium_stealth_path)

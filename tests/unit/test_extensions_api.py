@@ -1,7 +1,5 @@
 import pytest
-import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 from tellurium import Browser
 
 
@@ -32,23 +30,24 @@ def test_launch_extensions_accepts_valid_dir(tmp_path):
     validate_extension_paths([str(ext_dir)])
 
 
-def test_launch_chrome_branded_137_with_extensions_raises(tmp_path, monkeypatch):
+def test_launch_chrome_branded_137_with_extensions_raises(tmp_path):
     """Chrome branded >= 137 + extensions must raise LaunchError."""
     ext_dir = tmp_path / "ext"
     ext_dir.mkdir()
     (ext_dir / "manifest.json").write_text('{"name":"x","version":"1"}')
 
     from tellurium.browser.launcher import LaunchError, check_chrome_version_for_extensions
-    with pytest.raises(LaunchError, match="does not support --load-extension"):
+    with pytest.raises(LaunchError, match="does not support --load-extension") as exc:
         check_chrome_version_for_extensions(
             executable="/usr/bin/google-chrome",
             version=(137, 0, 0, 0),
             is_branded_chrome=True,
             extensions=[str(ext_dir)],
         )
+    assert "/usr/bin/google-chrome" in str(exc.value)
 
 
-def test_extensions_flag_merged_with_tellurium_stealth_ext(tmp_path, monkeypatch):
+def test_extensions_flag_merged_with_tellurium_stealth_ext(tmp_path):
     """In stock + stealth, --load-extension merges tellurium ext + user ext."""
     ext_dir = tmp_path / "ubo"
     ext_dir.mkdir()
@@ -65,3 +64,10 @@ def test_extensions_flag_merged_with_tellurium_stealth_ext(tmp_path, monkeypatch
     parts = flag.removeprefix("--load-extension=").split(",")
     assert parts[0].endswith("tellurium-stealth")
     assert parts[1] == str(ext_dir)
+
+
+def test_build_load_extension_flag_empty_raises():
+    """build_load_extension_flag must refuse to produce an empty flag."""
+    from tellurium.browser.launcher import build_load_extension_flag
+    with pytest.raises(ValueError, match="at least one path"):
+        build_load_extension_flag(tellurium_stealth_path=None, user_extensions=[])

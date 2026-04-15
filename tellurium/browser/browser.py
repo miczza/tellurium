@@ -117,9 +117,12 @@ class Browser:
         # 2a. Chrome 137+ branded check for extensions
         if extensions:
             version = _detect_chrome_version(chrome_path)
+            p = chrome_path.lower()
             is_branded_chrome = (
-                "google-chrome" in chrome_path.lower()
-                or chrome_path.endswith("Google Chrome")
+                "google-chrome" in p                        # linux binary name
+                or chrome_path.endswith("Google Chrome")   # macOS .app bundle
+                or "\\google\\chrome\\" in p               # Windows install path
+                or "/google/chrome/" in p                  # normalized Windows path
             )
             check_chrome_version_for_extensions(
                 executable=chrome_path,
@@ -127,7 +130,7 @@ class Browser:
                 is_branded_chrome=is_branded_chrome,
                 extensions=extensions,
             )
-            if not os.environ.get("TELLURIUM_SUPPRESS_EXTENSION_WARNING"):
+            if os.environ.get("TELLURIUM_SUPPRESS_EXTENSION_WARNING") != "1":
                 logger.warning(
                     "User extensions loaded: %s. "
                     "Extensions expose 4 fingerprint vectors: "
