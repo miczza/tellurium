@@ -240,10 +240,11 @@ class Browser:
                         user_extensions=user_exts,
                     )
                 )
-            if ext_path:
-                stealth_flags.append(
-                    "--disable-blink-features=AutomationControlled"
-                )
+            # Note: --disable-blink-features=AutomationControlled is
+            # intentionally NOT added. Chrome shows an "unsupported
+            # command-line flag" warning bar when it is present, which is
+            # itself a detection signal. The stealth extension's
+            # webdriver.js already overrides navigator.webdriver.
             if proxy:
                 stealth_flags.append(
                     "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"

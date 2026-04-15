@@ -139,16 +139,19 @@ class Element:
             y = box["y"] + box["height"] / 2 + random.uniform(-3, 3)
             await self._tab.mouse_click(x, y, human=True)  # Uses Wind Mouse trajectory
 
-    async def type(self, text: str, *, human: bool = False, clear: bool = False) -> None:
+    async def type(
+        self, text: str, *, human: bool = False, clear: bool = False, wpm: float = 52
+    ) -> None:
         """Focus this element and type *text*.
 
         *clear=True* — clear the field value before typing.
         *human=True* — use HumanTyping with realistic inter-key intervals and dwell times.
+        *wpm* — typing speed when *human=True* (default 52; higher = faster).
         """
         await self.focus()
         if clear:
             await self._call("function() { this.value = ''; this.dispatchEvent(new Event('input')); }")
-        await self._tab.keyboard_type(text, human=human)  # Delegates to Tab's human typing
+        await self._tab.keyboard_type(text, human=human, wpm=wpm)  # Delegates to Tab's human typing
 
     async def upload(self, *files: str) -> None:
         """Set files on an ``<input type="file">`` element."""

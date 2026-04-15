@@ -408,11 +408,17 @@ class Tab:
             "type": "keyUp", "key": actual_key, "modifiers": modifiers,
         })
 
-    async def keyboard_type(self, text: str, human: bool = False) -> None:
-        """Type a string character-by-character via ``Input.dispatchKeyEvent``."""
+    async def keyboard_type(
+        self, text: str, human: bool = False, wpm: float = 52
+    ) -> None:
+        """Type a string character-by-character via ``Input.dispatchKeyEvent``.
+
+        When ``human=True``, ``wpm`` tunes the typing speed (words per minute,
+        5 chars/word). Default 52 ≈ average human. Higher = faster.
+        """
         if human:
             from tellurium.stealth.human import HumanTyping
-            typer = HumanTyping()
+            typer = HumanTyping(wpm=wpm)
             events = typer.get_events(text)
             for event in events:
                 if event["delay_ms"] > 0:
