@@ -1,6 +1,7 @@
 """Browser engine abstraction — stock Chrome vs patched Chromium."""
 from __future__ import annotations
 import hashlib
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -77,6 +78,18 @@ class PatchedEngine(BrowserEngine):
                     f"SHA256 mismatch for {binary}: expected {self._chromium_sha256}, "
                     f"got {actual}. Run `tellurium verify-browser --reinstall`."
                 )
+        manifest_path = version_dir / "MANIFEST.json"
+        if manifest_path.exists():
+            from tellurium.browser._manifest import ReleaseManifest, verify_binary
+            manifest = ReleaseManifest.from_path(manifest_path)
+            verify_binary(binary, manifest, _manifest_platform())
+        else:
+            logger = logging.getLogger("tellurium")
+            logger.warning(
+                "No MANIFEST.json in %s; skipping integrity verification. "
+                "Reinstall with `tellurium download-browser` to get a signed manifest.",
+                version_dir,
+            )
         return binary
 
     async def get_executable(self) -> str:
@@ -101,3 +114,21 @@ class PatchedEngine(BrowserEngine):
     def capabilities(self) -> set[str]:
         return {"native_fingerprint", "native_client_hints", "native_cdp_fix",
                 "native_network_timing", "native_navigator"}
+
+
+def _manifest_platform() -> str:
+    """Return the MANIFEST.json platform key for the current host.
+
+    Format is {os}-{arch}: linux-x64, linux-arm64, mac-x64, mac-arm64, win-x64.
+    Differs from CfT's _determine_platform() which uses 'linux64' style.
+    """
+    import sys
+    import platform as _plat
+    machine = _plat.machine().lower()
+    if sys.platform.startswith("linux"):
+        return "linux-arm64" if machine in ("aarch64", "arm64") else "linux-x64"
+    if sys.platform == "darwin":
+        return "mac-arm64" if machine in ("arm64", "aarch64") else "mac-x64"
+    if sys.platform == "win32":
+        return "win-x64"
+    return "linux-x64"  # fallback
