@@ -7,6 +7,9 @@ Accepts three forms:
 
 Native patch T3.5 consumes this IP; webrtc.js (stock mode fallback)
 also consumes it via the {{WEBRTC_PUBLIC_IP}} placeholder.
+
+Note: in stock mode, webrtc.js rewrites only IPv4 candidates; an IPv6
+SPOOF_IP only takes effect via the native patch (PatchedEngine).
 """
 from __future__ import annotations
 import ipaddress
@@ -43,5 +46,5 @@ def resolve_webrtc_ip(setting: str, *, proxy: str | None) -> str | None:
         raise ValueError(
             f"invalid webrtc_ip={setting!r}: must be 'disable', 'auto', "
             f"or a valid IPv4/IPv6 literal"
-        )
+        ) from None
     return setting

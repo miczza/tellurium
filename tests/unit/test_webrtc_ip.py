@@ -63,3 +63,19 @@ def test_launch_args_omit_webrtc_flag_for_stock():
     profile = StealthProfile.from_seed(42)
     args = engine.build_args(profile)
     assert not any("fingerprint-webrtc-ip" in a for a in args)
+
+
+def test_webrtc_js_anchored_to_candidate_lines():
+    """Regression: regex must anchor to a=candidate lines, not match random IPs
+    embedded elsewhere in SDP."""
+    from pathlib import Path
+    js_path = Path(__file__).parent.parent.parent / "tellurium" / "stealth" / "scripts" / "webrtc.js"
+    content = js_path.read_text()
+    assert "^(a=candidate:" in content, (
+        "webrtc.js regex must anchor on a=candidate line start to prevent "
+        "false-positive IP rewrites on debug/extension SDP lines"
+    )
+    assert "new RTCSessionDescription" not in content, (
+        "webrtc.js must not rely on RTCSessionDescription constructor "
+        "(undefined in some isolated worlds)"
+    )

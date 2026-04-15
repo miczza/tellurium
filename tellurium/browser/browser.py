@@ -15,6 +15,7 @@ from tellurium.browser.cookie import Cookie
 from tellurium.browser.context import BrowserContext
 from tellurium.browser.engine import StockEngine, PatchedEngine
 from tellurium.stealth._grease import parse_grease_brands
+from tellurium.stealth._webrtc import resolve_webrtc_ip
 from tellurium.browser.launcher import (
     _detect_chrome_version,
     build_chrome_flags,
@@ -172,7 +173,6 @@ class Browser:
 
         # 3b. Resolve webrtc_ip setting (after proxy is known)
         if webrtc_ip is not None:
-            from tellurium.stealth._webrtc import resolve_webrtc_ip
             resolved_webrtc_ip = resolve_webrtc_ip(webrtc_ip, proxy=proxy)
         else:
             resolved_webrtc_ip = None

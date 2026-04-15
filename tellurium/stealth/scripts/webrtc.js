@@ -7,18 +7,21 @@
     const orig = pc.setLocalDescription.bind(pc);
     pc.setLocalDescription = (desc) => {
       if (desc && typeof desc.sdp === "string") {
-        let sdp = desc.sdp;
-        if (SPOOF_IP && SPOOF_IP !== "null") {
-          // Replace real IPs in host/srflx ICE candidates with the spoofed IP
-          sdp = sdp.replace(
-            /(\d+\.\d+\.\d+\.\d+)(?=\s+\d+\s+typ\s+(?:host|srflx))/g,
-            SPOOF_IP
-          );
-        } else {
+        // When SPOOF_IP is unset, fall back to stripping all candidates — preserves
+        // pre-review-2026-04-15 behavior for the has_proxy code path.
+        if (!SPOOF_IP || SPOOF_IP === "null") {
           // No spoof IP: strip all host/srflx candidates to prevent leaking real IP
-          sdp = sdp.replace(/a=candidate:.*?\r\n/g, '');
+          desc = { type: desc.type, sdp: desc.sdp.replace(/a=candidate:.*?\r\n/g, '') };
+        } else {
+          // Replace real IPs in host/srflx ICE candidates with the spoofed IP.
+          // Anchor to ^a=candidate: line starts (multiline) to avoid false-positive
+          // rewrites on debug or extension SDP lines that happen to contain an IP.
+          const newSdp = desc.sdp.replace(
+            /^(a=candidate:\S+ \d+ \S+ \d+ )(\d+\.\d+\.\d+\.\d+)(\s+\d+\s+typ\s+(?:host|srflx))/gm,
+            (_m, pre, _ip, post) => pre + SPOOF_IP + post
+          );
+          desc = { type: desc.type, sdp: newSdp };
         }
-        desc = new RTCSessionDescription({ type: desc.type, sdp: sdp });
       }
       return orig(desc);
     };
