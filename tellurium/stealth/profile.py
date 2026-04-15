@@ -218,6 +218,11 @@ class StealthProfile:
     grease_brand: Optional[str] = None
     grease_version: Optional[str] = None
 
+    # WebRTC public IP — populated post-construction by Browser.launch() after
+    # resolve_webrtc_ip() runs (review 2026-04-15 #9, aspect #18).
+    # None means no IP spoofing via webrtc.js.
+    webrtc_public_ip: Optional[str] = None
+
     # ------------------------------------------------------------------
     # Internal builder
     # ------------------------------------------------------------------

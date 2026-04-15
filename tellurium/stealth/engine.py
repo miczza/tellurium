@@ -155,8 +155,10 @@ class StealthEngine:
             }),
         ]
 
-        if self._has_proxy:
-            scripts.append(load_script("webrtc.js"))
+        if self._has_proxy or p.webrtc_public_ip:
+            scripts.append(load_script("webrtc.js", {
+                "WEBRTC_PUBLIC_IP": p.webrtc_public_ip or "null",
+            }))
 
         if self._headless:
             scripts.extend([

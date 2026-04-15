@@ -72,6 +72,7 @@ class Browser:
         chromium_version: str | None = None,
         chromium_sha256: str | None = None,
         auto_security_update: bool = False,
+        webrtc_ip: str | None = None,
     ) -> Browser:
         """Launch a Chrome process and return a connected :class:`Browser`.
 
@@ -115,6 +116,7 @@ class Browser:
                 chromium_version=chromium_version,
                 chromium_sha256=chromium_sha256,
                 auto_security_update=auto_security_update,
+                webrtc_ip_flag=webrtc_ip,  # raw user setting; native patch accepts ip/auto/disable
             )
         else:
             if chromium_version or chromium_sha256 or auto_security_update:
@@ -167,6 +169,13 @@ class Browser:
                 proxy_flag = f"localhost:{self._forwarder.port}"
             else:
                 proxy_flag = f"{info['host']}:{info['port']}"
+
+        # 3b. Resolve webrtc_ip setting (after proxy is known)
+        if webrtc_ip is not None:
+            from tellurium.stealth._webrtc import resolve_webrtc_ip
+            resolved_webrtc_ip = resolve_webrtc_ip(webrtc_ip, proxy=proxy)
+        else:
+            resolved_webrtc_ip = None
 
         # 4. User-data dir
         if user_data_dir:
@@ -282,24 +291,28 @@ class Browser:
         if stealth_engine is not None:
             stealth_engine.set_router(self._router)
 
-        # 11a. review 2026-04-15 #5: read the real GREASE brand from the browser
-        # so userAgentData.brands matches whatever the binary actually advertises.
+        # 11a. review 2026-04-15 #5/#9: read the real GREASE brand from the browser
+        # and coalesce with webrtc_public_ip into a single dataclasses.replace() call.
         if stealth and stealth_engine is not None and stealth_profile is not None:
             try:
                 version_info = await self._router.root.send("Browser.getVersion", {}, timeout=5.0)
             except Exception:
                 version_info = {}
             raw_brands = version_info.get("userAgentData", {}).get("brands") or []
+            # Build a single replace() call for both GREASE and webrtc fields
+            replace_kwargs: dict = {}
             if raw_brands:
                 g_brand, g_version = parse_grease_brands(raw_brands)
-                stealth_profile = dataclasses.replace(
-                    stealth_profile,
-                    grease_brand=g_brand,
-                    grease_version=g_version,
-                )
+                replace_kwargs["grease_brand"] = g_brand
+                replace_kwargs["grease_version"] = g_version
+            if resolved_webrtc_ip is not None:
+                replace_kwargs["webrtc_public_ip"] = resolved_webrtc_ip
+            if replace_kwargs:
+                stealth_profile = dataclasses.replace(stealth_profile, **replace_kwargs)
                 stealth_engine.update_profile(stealth_profile)
                 self._stealth_profile = stealth_profile
             # else: leave profile.grease_brand = None → engine falls back to "Not_A Brand"/"24"
+            #       and webrtc_public_ip = None → webrtc.js no-op
 
         # 12. Discover initial page target
         await self._router.root.send("Target.setDiscoverTargets", {"discover": True})

@@ -49,12 +49,14 @@ class PatchedEngine(BrowserEngine):
         chromium_version: str | None = None,
         chromium_sha256: str | None = None,
         auto_security_update: bool = False,
+        webrtc_ip_flag: str | None = None,
     ):
         self._executable = executable
         self._cache_root = cache_root or (Path.home() / ".tellurium" / "chromium")
         self._chromium_version = chromium_version
         self._chromium_sha256 = chromium_sha256
         self._auto_security_update = auto_security_update
+        self._webrtc_ip_flag = webrtc_ip_flag
         if auto_security_update:
             raise NotImplementedError(
                 "auto_security_update=True is not yet implemented (deferred to T6/C4.7). "
@@ -113,6 +115,8 @@ class PatchedEngine(BrowserEngine):
             args.append(f"--fingerprint-timezone={profile.timezone}")
         if getattr(profile, "locale", None):
             args.append(f"--fingerprint-locale={profile.locale}")
+        if self._webrtc_ip_flag is not None:
+            args.append(f"--fingerprint-webrtc-ip={self._webrtc_ip_flag}")
         return args
 
     def capabilities(self) -> set[str]:
