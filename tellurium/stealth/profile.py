@@ -212,6 +212,12 @@ class StealthProfile:
     locale: str
     accept_language: str
 
+    # GREASE brand — populated post-construction by Browser.launch() after
+    # Browser.getVersion is called on the root session (review 2026-04-15 #5).
+    # None means the engine should fall back to the historical literal.
+    grease_brand: Optional[str] = None
+    grease_version: Optional[str] = None
+
     # ------------------------------------------------------------------
     # Internal builder
     # ------------------------------------------------------------------

@@ -281,6 +281,23 @@ class Browser:
         if stealth_engine is not None:
             stealth_engine.set_router(self._router)
 
+        # 11a. review 2026-04-15 #5: read the real GREASE brand from the browser
+        # so userAgentData.brands matches whatever the binary actually advertises.
+        if stealth and stealth_engine is not None and stealth_profile is not None:
+            from tellurium.stealth._grease import parse_grease_brands
+            version_info = await self._router.root.send("Browser.getVersion", {}, timeout=5.0)
+            raw_brands = version_info.get("userAgentData", {}).get("brands") or []
+            if raw_brands:
+                g_brand, g_version = parse_grease_brands(raw_brands)
+                stealth_profile = dataclasses.replace(
+                    stealth_profile,
+                    grease_brand=g_brand,
+                    grease_version=g_version,
+                )
+                stealth_engine._profile = stealth_profile
+                self._stealth_profile = stealth_profile
+            # else: leave profile.grease_brand = None → engine falls back to "Not_A Brand"/"24"
+
         # 12. Discover initial page target
         await self._router.root.send("Target.setDiscoverTargets", {"discover": True})
         targets_result = await self._router.root.send("Target.getTargets", {})

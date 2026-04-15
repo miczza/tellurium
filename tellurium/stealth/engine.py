@@ -168,6 +168,12 @@ class StealthEngine:
         p = self._profile
         major = p.browser_version.split(".")[0]
 
+        grease_brand = p.grease_brand or "Not_A Brand"
+        grease_version = p.grease_version or "24"
+        grease_version_full = (
+            p.grease_version + ".0.0.0" if p.grease_version else "24.0.0.0"
+        )
+
         await session.send("Emulation.setUserAgentOverride", {
             "userAgent": p.user_agent,
             "acceptLanguage": p.accept_language,
@@ -176,12 +182,12 @@ class StealthEngine:
                 "brands": [
                     {"brand": "Chromium", "version": major},
                     {"brand": "Google Chrome", "version": major},
-                    {"brand": "Not_A Brand", "version": "24"},
+                    {"brand": grease_brand, "version": grease_version},
                 ],
                 "fullVersionList": [
                     {"brand": "Chromium", "version": p.browser_version},
                     {"brand": "Google Chrome", "version": p.browser_version},
-                    {"brand": "Not_A Brand", "version": "24.0.0.0"},
+                    {"brand": grease_brand, "version": grease_version_full},
                 ],
                 "platform": p.ch_ua_platform,
                 "platformVersion": p.platform_version,
