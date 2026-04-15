@@ -20,7 +20,13 @@ async def get_hsim_world(tab, *, frame_id: str) -> int | None:
     Lazily creates via Page.createIsolatedWorld on first access, caches on
     tab._hsim_worlds. Returns None if the CDP call fails (caller falls back
     to the main world).
+
+    An empty *frame_id* (before the first Page.frameNavigated has been
+    dispatched) short-circuits immediately without a CDP round-trip.
     """
+    if not frame_id:
+        return None
+
     cache: dict[str, int] = tab._hsim_worlds
     cached = cache.get(frame_id)
     if cached is not None:

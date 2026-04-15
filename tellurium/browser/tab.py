@@ -51,7 +51,7 @@ class Tab:
         self._hsim_worlds: dict[str, int] = {}  # frame_id -> executionContextId, per-frame
         self._frame_id: str = ""  # main frame id, populated on first navigation
 
-        async def _on_frame_navigated(params: dict) -> None:
+        def _on_frame_navigated(params: dict) -> None:
             frame = params.get("frame", {})
             fid = frame.get("id")
             if fid:

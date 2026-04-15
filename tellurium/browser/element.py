@@ -114,6 +114,14 @@ class Element:
         Falls back to main-world bounding_box() if the isolated world cannot be
         created (very old Chrome, renderer crash) or if no selector is cached
         on the element.
+
+        Staleness note: the stashed ``_selector`` is re-resolved via
+        ``document.querySelector`` in the isolated world at call time.  If the
+        DOM has mutated between ``select()`` and the human action the rect may
+        reflect a *different* element than ``self._node_id`` refers to.  The
+        fallback path (via ``bounding_box()`` + ``DOM.resolveNode`` + nodeId)
+        preserves identity.  Users who need stable identity should rely on the
+        fallback (don't pass a selector, or use XPath-based selection).
         """
         from tellurium.stealth._isolated import get_hsim_world
         import json
@@ -138,7 +146,10 @@ class Element:
         resp = await self._session.send("Runtime.evaluate", {
             "expression": expr, "contextId": ctx, "returnByValue": True,
         })
-        return resp["result"]["value"]
+        val = resp.get("result", {}).get("value")
+        if val is None:
+            return await self.bounding_box()
+        return val
 
     async def is_visible(self) -> bool:
         return await self._call(
