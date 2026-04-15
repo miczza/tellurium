@@ -21,6 +21,8 @@ class Element:
         self._tab = tab
         self._node_id = node_id
         self._object_id: str | None = None
+        self._selector: str | None = None  # CSS selector used to locate this element (for isolated-world queries)
+        self._frame_id: str | None = None  # frame this element belongs to (None → use tab._frame_id)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -105,6 +107,39 @@ class Element:
             "}"
         )
 
+    async def bounding_box_isolated(self) -> dict:
+        """Return {x, y, width, height} read in the human-sim isolated world.
+
+        Safe against page-JS monkey-patches of Element.prototype.getBoundingClientRect.
+        Falls back to main-world bounding_box() if the isolated world cannot be
+        created (very old Chrome, renderer crash) or if no selector is cached
+        on the element.
+        """
+        from tellurium.stealth._isolated import get_hsim_world
+        import json
+
+        frame_id = getattr(self, "_frame_id", None) or self._tab._frame_id
+        ctx = await get_hsim_world(self._tab, frame_id=frame_id)
+        if ctx is None:
+            return await self.bounding_box()
+
+        selector = getattr(self, "_selector", None)
+        if selector is None:
+            return await self.bounding_box()
+
+        expr = (
+            f"(() => {{"
+            f"  const el = document.querySelector({json.dumps(selector)});"
+            f"  if (!el) return null;"
+            f"  const r = el.getBoundingClientRect();"
+            f"  return {{x: r.x, y: r.y, width: r.width, height: r.height}};"
+            f"}})()"
+        )
+        resp = await self._session.send("Runtime.evaluate", {
+            "expression": expr, "contextId": ctx, "returnByValue": True,
+        })
+        return resp["result"]["value"]
+
     async def is_visible(self) -> bool:
         return await self._call(
             "function() {"
@@ -134,7 +169,7 @@ class Element:
             await self._call("function() { this.click(); }")
         else:
             await self.scroll_into_view()
-            box = await self.bounding_box()
+            box = await self.bounding_box_isolated()
             x = box["x"] + box["width"] / 2 + random.uniform(-3, 3)
             y = box["y"] + box["height"] / 2 + random.uniform(-3, 3)
             await self._tab.mouse_click(x, y, human=True)  # Uses Wind Mouse trajectory
@@ -178,7 +213,7 @@ class Element:
 
     async def scroll_into_view(self, human: bool = False) -> None:
         if human:
-            box = await self.bounding_box()
+            box = await self.bounding_box_isolated()
             viewport_height = await self._tab.eval("window.innerHeight")
             scroll_y = await self._tab.eval("window.scrollY")
             target_y = box["y"] - (viewport_height or 800) / 3

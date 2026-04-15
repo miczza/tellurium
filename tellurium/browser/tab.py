@@ -48,6 +48,19 @@ class Tab:
         self._mouse_pos: tuple[float, float] = (0, 0)  # Track current mouse position
         self._action_timer = None  # Will be set when stealth is active
         self._capture_manager = None
+        self._hsim_worlds: dict[str, int] = {}  # frame_id -> executionContextId, per-frame
+        self._frame_id: str = ""  # main frame id, populated on first navigation
+
+        async def _on_frame_navigated(params: dict) -> None:
+            frame = params.get("frame", {})
+            fid = frame.get("id")
+            if fid:
+                self._hsim_worlds.pop(fid, None)
+                # Track the main frame id (parentId absent means it's the main frame)
+                if not frame.get("parentId"):
+                    self._frame_id = fid
+
+        self._session.on("Page.frameNavigated", _on_frame_navigated)
 
     # ------------------------------------------------------------------
     # Navigation
@@ -212,7 +225,9 @@ class Tab:
             )
             nid = result.get("nodeId", 0)
             if nid:
-                return Element(self._session, self, nid)
+                el = Element(self._session, self, nid)
+                el._selector = selector
+                return el
             if asyncio.get_event_loop().time() >= deadline:
                 raise TimeoutError(f"Timed out waiting for selector {selector!r}")
             await asyncio.sleep(0.2)
