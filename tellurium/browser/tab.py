@@ -432,9 +432,9 @@ class Tab:
         5 chars/word). Default 52 ≈ average human. Higher = faster.
         """
         if human:
-            from tellurium.stealth.human import HumanTyping
+            from tellurium.stealth.human import HumanTyping, apply_key_rollover
             typer = HumanTyping(wpm=wpm)
-            events = typer.get_events(text)
+            events = apply_key_rollover(typer.get_events(text))
             for event in events:
                 if event["delay_ms"] > 0:
                     await asyncio.sleep(event["delay_ms"] / 1000)

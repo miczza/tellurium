@@ -221,6 +221,45 @@ class HumanTyping:
         return max(40, base)
 
 
+def apply_key_rollover(
+    events: list[dict], *, threshold_ms: float = 80.0
+) -> list[dict]:
+    """Overlap keyDown[N+1] before keyUp[N] when flight time is short.
+
+    Simulates real fast-typist key rollover (40-70% of typists exhibit this
+    above ~70 WPM). Per-char rawKeyDown -> char -> keyUp order is preserved;
+    only the keyUp is pushed after the next char's rawKeyDown when IKI is
+    below threshold_ms.
+
+    Input shape: flat list of {type, key, delay_ms} triples, three per char:
+    [rawKeyDown, char, keyUp, rawKeyDown, char, keyUp, ...].
+    Returns a new list; input is not mutated.
+    """
+    if len(events) < 6:
+        return list(events)
+
+    out: list[dict] = []
+    i = 0
+    while i < len(events):
+        if i + 5 < len(events):
+            this_down, this_char, this_up = events[i], events[i + 1], events[i + 2]
+            next_down = events[i + 3]
+            if (
+                this_up["type"] == "keyUp"
+                and next_down["type"] == "rawKeyDown"
+                and next_down["delay_ms"] < threshold_ms
+            ):
+                # Swap: emit down, char, next_down, up; continue from i+4 so
+                # the next iteration handles events[i+4] (next char's `char`)
+                # and events[i+5] (next char's `keyUp`).
+                out.extend([this_down, this_char, next_down, this_up])
+                i += 4
+                continue
+        out.append(events[i])
+        i += 1
+    return out
+
+
 # ---------------------------------------------------------------------------
 # HumanScroll
 # ---------------------------------------------------------------------------
