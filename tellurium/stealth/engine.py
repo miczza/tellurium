@@ -8,6 +8,17 @@ from tellurium.stealth.extension import load_script, create_stealth_extension
 
 logger = logging.getLogger("tellurium")
 
+# Auto-attach is restricted to target types we actually stealth-patch.
+# 'page' would cause double injection; 'browser' would deadlock because
+# the callback awaits Runtime.runIfWaitingForDebugger and browser-level
+# targets never wait. Design doc 04 §P1.2.
+_STEALTH_TARGET_FILTER: list[dict] = [
+    {"type": "iframe", "exclude": False},
+    {"type": "worker", "exclude": False},
+    {"type": "service_worker", "exclude": False},
+    {"type": "shared_worker", "exclude": False},
+]
+
 
 class StealthEngine:
     def __init__(self, engine: BrowserEngine, profile: StealthProfile,
@@ -60,22 +71,23 @@ class StealthEngine:
     async def setup_auto_attach(self, root_session) -> None:
         """Configure auto-attach for OOPIF and Worker stealth patching.
 
-        The ``filter`` restricts auto-attach to target types that we actually
-        patch (iframe, worker, service_worker, shared_worker). Without the
-        filter Chromium fires auto-attach for every target type including
-        'page' (double injection) and 'browser' (deadlock on
-        Runtime.runIfWaitingForDebugger). Design doc 04 §P1.2.
+        ``waitForDebuggerOnStart=False`` avoids interfering with explicit
+        ``Target.attachToTarget`` calls (e.g. from ``new_tab``); the
+        stealth extension's content-scripts (``document_start``,
+        ``all_frames``) handle JS-level patches, and CDP emulation
+        settings propagate automatically.
+
+        The ``filter`` restricts auto-attach to target types that we
+        actually patch (iframe, worker, service_worker, shared_worker).
+        Without the filter Chromium fires auto-attach for every target
+        type including 'page' (double injection) and 'browser'
+        (deadlock on Runtime.runIfWaitingForDebugger). Design doc 04 §P1.2.
         """
         await root_session.send("Target.setAutoAttach", {
             "autoAttach": True,
             "waitForDebuggerOnStart": False,
             "flatten": True,
-            "filter": [
-                {"type": "iframe", "exclude": False},
-                {"type": "worker", "exclude": False},
-                {"type": "service_worker", "exclude": False},
-                {"type": "shared_worker", "exclude": False},
-            ],
+            "filter": _STEALTH_TARGET_FILTER,
         })
 
     def _on_target_attached(self, params: dict) -> None:
