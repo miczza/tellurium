@@ -17,7 +17,18 @@ class Session:
         self._event_handlers: dict[str, list[callable]] = {}
         self._lock = asyncio.Lock()
 
-    async def send(self, method: str, params: dict | None = None) -> dict:
+    async def send(
+        self,
+        method: str,
+        params: dict | None = None,
+        timeout: float | None = None,
+    ) -> dict:
+        if method in self._router._FORBIDDEN_METHODS:
+            raise RuntimeError(
+                f"{method} is forbidden — it exposes CDP via Inspector "
+                f"and enables Proxy ownKeys trap detection. "
+                f"Use Page.createIsolatedWorld + Runtime.evaluate instead."
+            )
         async with self._lock:
             self._request_id += 1
             msg_id = self._request_id
@@ -27,7 +38,19 @@ class Session:
             future: asyncio.Future = asyncio.get_running_loop().create_future()
             self._pending[msg_id] = future
             await self._router._transport.send(json.dumps(msg).encode() + b"\0")
-        return await future
+        try:
+            if timeout is None:
+                return await future
+            return await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError:
+            # asyncio.wait_for cancels its internal waiter but leaves the
+            # future pending. Remove msg_id from _pending so a late reply
+            # from Chrome lands on a removed entry in _handle_message
+            # (pop returns None, future.set_result is never called).
+            # If the reply races the timeout, set_result may still fire
+            # on the now-orphan future — benign: no awaiter, no leak.
+            self._pending.pop(msg_id, None)
+            raise
 
     def on(self, event_name: str, handler: callable) -> None:
         self._event_handlers.setdefault(event_name, []).append(handler)
@@ -54,6 +77,8 @@ class Session:
 
 class SessionRouter:
     """Multiplexer: one pipe transport -> N sessions."""
+
+    _FORBIDDEN_METHODS: frozenset[str] = frozenset({"Runtime.enable"})
 
     def __init__(self, transport: CDPTransport):
         self._transport = transport

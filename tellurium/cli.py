@@ -43,14 +43,55 @@ def main():
         parser.print_help()
 
 
-def _update_cdp(chrome_version: str | None) -> None:
-    """Regenerate CDP bindings from protocol.json."""
-    import json
+def _protocol_path():
     from pathlib import Path
+    return Path(__file__).parent / "cdp" / "protocol.json"
+
+
+def _domains_dir():
+    from pathlib import Path
+    return Path(__file__).parent / "cdp" / "domains"
+
+
+def _update_cdp(chrome_version: str | None) -> None:
+    """Regenerate CDP bindings.
+
+    Without chrome_version: use the bundled protocol.json.
+    With chrome_version: download protocol.json from the
+    ChromeDevTools/devtools-protocol repo at tag v{chrome_version},
+    overwrite the bundled file, then regenerate.
+    """
+    import json
+    import urllib.request
     from tellurium.cdp.generator import CDPGenerator
 
-    protocol_path = Path(__file__).parent / "cdp" / "protocol.json"
-    domains_dir = Path(__file__).parent / "cdp" / "domains"
+    protocol_path = _protocol_path()
+    domains_dir = _domains_dir()
+
+    if chrome_version:
+        url = (
+            f"https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/"
+            f"v{chrome_version}/json/browser_protocol.json"
+        )
+        try:
+            with urllib.request.urlopen(url, timeout=30) as resp:
+                data = resp.read()
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                print(
+                    f"Error: Chrome version {chrome_version} not found at "
+                    f"ChromeDevTools/devtools-protocol (404). Check available "
+                    f"tags: https://github.com/ChromeDevTools/devtools-protocol/tags",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"Error: HTTP {e.code} fetching protocol: {e}", file=sys.stderr)
+            sys.exit(1)
+        except urllib.error.URLError as e:
+            print(f"Error: network failure fetching protocol: {e.reason}", file=sys.stderr)
+            sys.exit(1)
+        protocol_path.write_bytes(data)
+        print(f"  Downloaded protocol.json for Chrome {chrome_version}")
 
     if not protocol_path.exists():
         print("Error: protocol.json not found", file=sys.stderr)
