@@ -51,6 +51,8 @@ def check_for_update(
         return
 
     check_file.parent.mkdir(parents=True, exist_ok=True)
+    # Not locked: concurrent launches may both fetch; worst case is one extra HTTP
+    # request per race window + a torn write that triggers a re-check next run.
     check_file.write_text(json.dumps({
         "last_check": now.isoformat(),
         "latest_version": manifest.get("version", ""),
@@ -76,23 +78,15 @@ def check_for_update(
             installed, latest, severity, cve,
         )
     else:
-        # age is how long the newer version has been available — a lower bound
-        # on how old the installed version is.  Warn whenever the binary is
-        # behind; the week count gives the user a sense of urgency.
+        # age = how long the newer version has been available — lower bound
+        # on how stale the installed binary is. Warn whenever installed is behind.
         weeks = max(1, int(age.total_seconds() / (7 * 24 * 3600)))
-        if age >= _STALE_THRESHOLD:
-            # Long-overdue update — stronger nudge
-            log.warning(
-                "tellurium-chromium %s is %d weeks old. Latest: %s. "
-                "Run `tellurium update-browser` to upgrade.",
-                installed, weeks, latest,
-            )
-        else:
-            log.warning(
-                "tellurium-chromium %s is at least %d weeks old. Latest: %s. "
-                "Run `tellurium update-browser` to upgrade.",
-                installed, weeks, latest,
-            )
+        qualifier = "" if age >= _STALE_THRESHOLD else "at least "
+        log.warning(
+            "tellurium-chromium %s is %s%d weeks old. Latest: %s. "
+            "Run `tellurium update-browser` to upgrade.",
+            installed, qualifier, weeks, latest,
+        )
 
 
 def _installed_version(cache_root: Path) -> str:

@@ -32,7 +32,7 @@ def test_update_check_skipped_within_24h(tmp_path, monkeypatch):
 
 
 def test_update_check_warns_if_stale(tmp_path, monkeypatch, caplog):
-    """If installed version > 12 weeks old, emit WARNING."""
+    """If installed version is behind latest, emit WARNING with 'weeks old'."""
     cache_root = tmp_path / ".tellurium" / "chromium"
     old_dir = cache_root / "140.0.7000.0"
     old_dir.mkdir(parents=True)
