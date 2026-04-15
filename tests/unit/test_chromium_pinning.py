@@ -67,3 +67,14 @@ def test_pinned_sha256_verified(tmp_path):
         chromium_sha256=expected_sha,
     )
     assert eng2.resolve_binary_path() == binary
+
+
+def test_auto_security_update_not_implemented(tmp_path):
+    """auto_security_update=True must raise NotImplementedError (deferred feature)."""
+    cache_root = tmp_path / ".tellurium" / "chromium"
+    cache_root.mkdir(parents=True)
+    with pytest.raises(NotImplementedError, match="auto_security_update"):
+        PatchedEngine(
+            cache_root=cache_root,
+            auto_security_update=True,
+        )

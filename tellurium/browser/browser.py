@@ -133,7 +133,7 @@ class Browser:
             p = chrome_path.lower()
             is_branded_chrome = (
                 "google-chrome" in p                        # linux binary name
-                or chrome_path.endswith("Google Chrome")   # macOS .app bundle
+                or p.endswith("google chrome")              # macOS .app bundle
                 or "\\google\\chrome\\" in p               # Windows install path
                 or "/google/chrome/" in p                  # normalized Windows path
             )

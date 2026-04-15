@@ -55,6 +55,11 @@ class PatchedEngine(BrowserEngine):
         self._chromium_version = chromium_version
         self._chromium_sha256 = chromium_sha256
         self._auto_security_update = auto_security_update
+        if auto_security_update:
+            raise NotImplementedError(
+                "auto_security_update=True is not yet implemented (deferred to T6/C4.7). "
+                "Run `tellurium update-browser --security-only` manually when notified."
+            )
 
     def resolve_binary_path(self) -> Path:
         if self._chromium_version:
