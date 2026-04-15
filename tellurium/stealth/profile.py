@@ -212,6 +212,17 @@ class StealthProfile:
     locale: str
     accept_language: str
 
+    # GREASE brand — populated post-construction by Browser.launch() after
+    # Browser.getVersion is called on the root session (review 2026-04-15 #5).
+    # None means the engine should fall back to the historical literal.
+    grease_brand: Optional[str] = None
+    grease_version: Optional[str] = None
+
+    # WebRTC public IP — populated post-construction by Browser.launch() after
+    # resolve_webrtc_ip() runs (review 2026-04-15 #9, aspect #18).
+    # None means no IP spoofing via webrtc.js.
+    webrtc_public_ip: Optional[str] = None
+
     # ------------------------------------------------------------------
     # Internal builder
     # ------------------------------------------------------------------

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from tellurium.browser.engine import StockEngine, PatchedEngine
 from tellurium.stealth.profile import StealthProfile
-from tellurium.stealth.engine import StealthEngine
+from tellurium.stealth.engine import StealthEngine, _STEALTH_TARGET_FILTER
 
 
 def _make_profile(**overrides):
@@ -247,6 +247,7 @@ async def test_setup_auto_attach_stock_waits_for_debugger():
         "autoAttach": True,
         "waitForDebuggerOnStart": False,
         "flatten": True,
+        "filter": _STEALTH_TARGET_FILTER,
     })
     # Extension content-scripts handle JS injection; no callback needed
     session.on.assert_not_called()
@@ -264,6 +265,7 @@ async def test_setup_auto_attach_patched_no_wait():
         "autoAttach": True,
         "waitForDebuggerOnStart": False,
         "flatten": True,
+        "filter": _STEALTH_TARGET_FILTER,
     })
     # No event handler registered for patched
     session.on.assert_not_called()
