@@ -168,6 +168,63 @@ def _find_chrome_candidates() -> list[tuple[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# Extension helpers
+# ---------------------------------------------------------------------------
+
+
+class LaunchError(RuntimeError):
+    """Raised when browser launch cannot proceed due to configuration
+    incompatibility (e.g., Chrome 137+ branded + extensions)."""
+
+
+def validate_extension_paths(extensions: list[str]) -> None:
+    """Validate each extension path is an unpacked directory with manifest.json.
+    Raises ValueError on first invalid path."""
+    for ext in extensions:
+        p = Path(ext)
+        if not p.is_dir():
+            raise ValueError(
+                f"Extension path must be an unpacked directory: {ext}. "
+                f".crx files are not supported — unpack with `unzip ext.crx -d ext/`."
+            )
+        if not (p / "manifest.json").exists():
+            raise ValueError(f"No manifest.json in {ext}")
+
+
+def check_chrome_version_for_extensions(
+    *,
+    executable: str,
+    version: tuple[int, ...] | None,
+    is_branded_chrome: bool,
+    extensions: list[str],
+) -> None:
+    """Raise LaunchError if Chrome branded >= 137 is asked to load
+    user extensions."""
+    if not extensions:
+        return
+    if is_branded_chrome and version is not None and version[0] >= 137:
+        raise LaunchError(
+            f"Chrome {'.'.join(map(str, version))} at {executable} (branded) does not support "
+            f"--load-extension since 137. Install Chrome for Testing or "
+            f"Chromium to use extensions: `tellurium download-browser`."
+        )
+
+
+def build_load_extension_flag(
+    *,
+    tellurium_stealth_path: str | None,
+    user_extensions: list[str],
+) -> str:
+    if not tellurium_stealth_path and not user_extensions:
+        raise ValueError("build_load_extension_flag requires at least one path")
+    paths: list[str] = []
+    if tellurium_stealth_path:
+        paths.append(tellurium_stealth_path)
+    paths.extend(user_extensions)
+    return f"--load-extension={','.join(paths)}"
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 

@@ -157,3 +157,35 @@ def test_load_rejects_non_object_root(tmp_path):
 
     with pytest.raises(storage.SessionCorruptError):
         storage.load(str(path))
+
+
+def test_save_persists_chromium_version(tmp_path, monkeypatch):
+    """session.save() after a launch records the chromium_version."""
+    from tellurium import Session
+
+    sess = Session("test", path=str(tmp_path / "sessions"))
+    # Simulate that a launch was performed with version 146.0.7680.188
+    sess._chromium_version_used = "146.0.7680.188"   # internal attr set by Browser.launch/Session.start
+    sess.save()
+
+    import json
+    data = json.loads((tmp_path / "sessions" / "session.json").read_text())
+    assert data.get("chromium_version") == "146.0.7680.188"
+
+
+def test_load_restores_chromium_version_lock(tmp_path):
+    """Session loaded from disk exposes chromium_version property."""
+    import json
+    from tellurium import Session
+
+    sess_dir = tmp_path / "sessions"
+    sess_dir.mkdir(parents=True)
+    (sess_dir / "session.json").write_text(json.dumps({
+        "name": "test",
+        "seed": 42069,
+        "chromium_version": "146.0.7680.188",
+        "created_at": "2026-04-15T10:30:00Z",
+        "metadata": {},
+    }))
+    sess = Session("test", path=str(sess_dir))
+    assert sess.chromium_version == "146.0.7680.188"

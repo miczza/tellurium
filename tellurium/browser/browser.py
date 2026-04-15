@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import os
 import shutil
 import signal
 import tempfile
@@ -13,7 +14,14 @@ from typing import Any
 from tellurium.browser.cookie import Cookie
 from tellurium.browser.context import BrowserContext
 from tellurium.browser.engine import StockEngine, PatchedEngine
-from tellurium.browser.launcher import build_chrome_flags, launch_chrome_posix
+from tellurium.browser.launcher import (
+    _detect_chrome_version,
+    build_chrome_flags,
+    build_load_extension_flag,
+    check_chrome_version_for_extensions,
+    launch_chrome_posix,
+    validate_extension_paths,
+)
 from tellurium.browser.proxy import ProxyForwarder, parse_proxy_url
 from tellurium.browser.tab import Tab
 from tellurium.cdp.transport import create_transport
@@ -59,6 +67,10 @@ class Browser:
         proxy: str | None = None,
         stealth: bool = False,
         seed: int | None = None,
+        extensions: list[str] | None = None,
+        chromium_version: str | None = None,
+        chromium_sha256: str | None = None,
+        auto_security_update: bool = False,
     ) -> Browser:
         """Launch a Chrome process and return a connected :class:`Browser`.
 
@@ -83,18 +95,64 @@ class Browser:
             Enable stealth heuristics (engine-level).
         seed:
             Fingerprint seed for the patched engine.
+        extensions:
+            List of paths to unpacked extension directories to load via
+            ``--load-extension``.  Each path must be an unpacked directory
+            containing ``manifest.json`` (.crx files are not supported).
+            Raises :class:`~tellurium.browser.launcher.LaunchError` when
+            Chrome branded >= 137 is used (use Chrome for Testing instead).
         """
         self = cls()
 
+        # 0. Validate extension paths up-front (before any async work)
+        validate_extension_paths(extensions or [])
+
         # 1. Select engine
         if browser == "patched":
-            engine = PatchedEngine(executable=executable)
+            engine = PatchedEngine(
+                executable=executable,
+                chromium_version=chromium_version,
+                chromium_sha256=chromium_sha256,
+                auto_security_update=auto_security_update,
+            )
         else:
+            if chromium_version or chromium_sha256 or auto_security_update:
+                logger.warning(
+                    "chromium_version/chromium_sha256/auto_security_update are only "
+                    "meaningful with browser='patched'; ignoring for browser=%r.", browser
+                )
             engine = StockEngine(executable=executable)
         self._engine = engine
 
         # 2. Get executable
         chrome_path = await engine.get_executable()
+
+        # 2a. Chrome 137+ branded check for extensions
+        if extensions:
+            version = _detect_chrome_version(chrome_path)
+            p = chrome_path.lower()
+            is_branded_chrome = (
+                "google-chrome" in p                        # linux binary name
+                or p.endswith("google chrome")              # macOS .app bundle
+                or "\\google\\chrome\\" in p               # Windows install path
+                or "/google/chrome/" in p                  # normalized Windows path
+            )
+            check_chrome_version_for_extensions(
+                executable=chrome_path,
+                version=version,
+                is_branded_chrome=is_branded_chrome,
+                extensions=extensions,
+            )
+            if os.environ.get("TELLURIUM_SUPPRESS_EXTENSION_WARNING") != "1":
+                logger.warning(
+                    "User extensions loaded: %s. "
+                    "Extensions expose 4 fingerprint vectors: "
+                    "(1) chrome.runtime.sendMessage enumeration, "
+                    "(2) DOM signatures (injected elements/stylesheets), "
+                    "(3) Window globals (e.g. window.__extension_*), "
+                    "(4) web_accessible_resources probing via chrome-extension://<id>/.",
+                    ", ".join(extensions),
+                )
 
         # 3. Proxy with auth -> start forwarder
         proxy_flag: str | None = None
@@ -172,10 +230,17 @@ class Browser:
 
         # 7. Stealth flags (extension + WebRTC)
         stealth_flags: list[str] = []
+        user_exts: list[str] = extensions or []
         if stealth and stealth_engine is not None:
             ext_path = stealth_engine.build_extension()
+            if ext_path or user_exts:
+                stealth_flags.append(
+                    build_load_extension_flag(
+                        tellurium_stealth_path=ext_path,
+                        user_extensions=user_exts,
+                    )
+                )
             if ext_path:
-                stealth_flags.append(f"--load-extension={ext_path}")
                 stealth_flags.append(
                     "--disable-blink-features=AutomationControlled"
                 )
@@ -183,6 +248,14 @@ class Browser:
                 stealth_flags.append(
                     "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
                 )
+        elif user_exts:
+            # stealth=False but user extensions still need to be loaded
+            stealth_flags.append(
+                build_load_extension_flag(
+                    tellurium_stealth_path=None,
+                    user_extensions=user_exts,
+                )
+            )
 
         # 8. Build flags
         flags = build_chrome_flags(

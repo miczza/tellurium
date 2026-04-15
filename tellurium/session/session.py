@@ -45,6 +45,8 @@ class Session:
         self._last_launch_params: dict[str, Any] | None = None
         self._started = False
         self._created_at: str | None = None
+        self._chromium_version_used: str | None = None   # set by Browser.launch/Session.start
+        self._chromium_version_loaded: str | None = None
 
         loaded = storage.load(self._json_path())
         if loaded is None:
@@ -60,9 +62,20 @@ class Session:
             if "launch" in loaded and isinstance(loaded["launch"], dict):
                 self._launch_hints = dict(loaded["launch"])
             self._created_at = loaded.get("created_at")
+            self._chromium_version_loaded = loaded.get("chromium_version") or None
 
     def _json_path(self) -> str:
         return os.path.join(self.path, "session.json")
+
+    @property
+    def chromium_version(self) -> str | None:
+        """The Chromium version locked to this session (if any).
+
+        Returns the value set by the most recent start()/launch or the one
+        persisted to session.json, whichever is present. Used-at-launch wins
+        over loaded-from-disk because it reflects the live state.
+        """
+        return self._chromium_version_used or self._chromium_version_loaded
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.metadata.get(key, default)
@@ -121,6 +134,10 @@ class Session:
             "created_at": self._created_at,
         }
 
+        cv = self.chromium_version
+        if cv:
+            payload["chromium_version"] = cv
+
         if full:
             launch = self._last_launch_params or self._launch_hints
             if launch:
@@ -139,6 +156,8 @@ class Session:
             raise RuntimeError("session already started")
 
         merged = _merge_launch_params(kwargs, self._launch_hints)
+        if self._chromium_version_loaded and "chromium_version" not in merged:
+            merged["chromium_version"] = self._chromium_version_loaded
 
         # Lazy import to avoid top-level cycles
         from tellurium import Browser
@@ -160,6 +179,8 @@ class Session:
             # Only record params of a successful launch, so save(full=True)
             # after a failed start() does not persist a bad configuration.
             self._last_launch_params = dict(merged)
+            # Persist-worthy: record the chromium_version we actually launched with.
+            self._chromium_version_used = merged.get("chromium_version") or self._chromium_version_used
             self._started = True
             await self._run_validation_and_login(browser)
             yield browser
