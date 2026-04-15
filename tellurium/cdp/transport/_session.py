@@ -18,6 +18,12 @@ class Session:
         self._lock = asyncio.Lock()
 
     async def send(self, method: str, params: dict | None = None) -> dict:
+        if method in self._router._FORBIDDEN_METHODS:
+            raise RuntimeError(
+                f"{method} is forbidden — it exposes CDP via Inspector "
+                f"and enables Proxy ownKeys trap detection. "
+                f"Use Page.createIsolatedWorld + Runtime.evaluate instead."
+            )
         async with self._lock:
             self._request_id += 1
             msg_id = self._request_id
@@ -54,6 +60,8 @@ class Session:
 
 class SessionRouter:
     """Multiplexer: one pipe transport -> N sessions."""
+
+    _FORBIDDEN_METHODS: frozenset[str] = frozenset({"Runtime.enable"})
 
     def __init__(self, transport: CDPTransport):
         self._transport = transport
