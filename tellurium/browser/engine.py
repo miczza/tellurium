@@ -4,6 +4,8 @@ import hashlib
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+from tellurium.browser import _update_check
+
 
 class BinaryCorruptedError(RuntimeError):
     """Raised when binary SHA256 does not match expected (MANIFEST or pin)."""
@@ -58,7 +60,6 @@ class PatchedEngine(BrowserEngine):
             version_dir = self._cache_root / self._chromium_version
         else:
             # Use 'current' symlink and trigger daily update check
-            from tellurium.browser import _update_check
             _update_check.check_for_update(cache_root=self._cache_root)
             version_dir = self._cache_root / "current"
         binary = version_dir / "tellurium-chromium"
@@ -69,6 +70,7 @@ class PatchedEngine(BrowserEngine):
                 + (f" --version {self._chromium_version}" if self._chromium_version else "")
             )
         if self._chromium_sha256:
+            # NOTE: read_bytes() loads the full ~150MB binary; Task 4 may switch to chunked hashing.
             actual = hashlib.sha256(binary.read_bytes()).hexdigest()
             if actual != self._chromium_sha256:
                 raise BinaryCorruptedError(

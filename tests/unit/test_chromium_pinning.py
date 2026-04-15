@@ -1,3 +1,4 @@
+import hashlib
 import pytest
 from pathlib import Path
 from tellurium.browser.engine import PatchedEngine
@@ -44,7 +45,6 @@ def test_pinned_version_bypasses_update_check(tmp_path, monkeypatch):
 
 def test_pinned_sha256_verified(tmp_path):
     """chromium_sha256 must be verified before returning the path."""
-    import hashlib
     cache_root = tmp_path / ".tellurium" / "chromium"
     pinned = cache_root / "146.0.7680.188"
     pinned.mkdir(parents=True)
@@ -58,7 +58,7 @@ def test_pinned_sha256_verified(tmp_path):
         chromium_version="146.0.7680.188",
         chromium_sha256="00" * 32,
     )
-    with pytest.raises(BinaryCorruptedError):
+    with pytest.raises(BinaryCorruptedError, match=r"SHA256 mismatch"):
         eng.resolve_binary_path()
 
     eng2 = PatchedEngine(
