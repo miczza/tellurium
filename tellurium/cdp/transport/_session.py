@@ -43,7 +43,12 @@ class Session:
                 return await future
             return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
-            # Clean the pending entry so a late reply doesn't fire on it
+            # asyncio.wait_for cancels its internal waiter but leaves the
+            # future pending. Remove msg_id from _pending so a late reply
+            # from Chrome lands on a removed entry in _handle_message
+            # (pop returns None, future.set_result is never called).
+            # If the reply races the timeout, set_result may still fire
+            # on the now-orphan future — benign: no awaiter, no leak.
             self._pending.pop(msg_id, None)
             raise
 

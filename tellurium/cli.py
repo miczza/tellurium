@@ -73,8 +73,23 @@ def _update_cdp(chrome_version: str | None) -> None:
             f"https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/"
             f"v{chrome_version}/json/browser_protocol.json"
         )
-        with urllib.request.urlopen(url, timeout=30) as resp:
-            data = resp.read()
+        try:
+            with urllib.request.urlopen(url, timeout=30) as resp:
+                data = resp.read()
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                print(
+                    f"Error: Chrome version {chrome_version} not found at "
+                    f"ChromeDevTools/devtools-protocol (404). Check available "
+                    f"tags: https://github.com/ChromeDevTools/devtools-protocol/tags",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"Error: HTTP {e.code} fetching protocol: {e}", file=sys.stderr)
+            sys.exit(1)
+        except urllib.error.URLError as e:
+            print(f"Error: network failure fetching protocol: {e.reason}", file=sys.stderr)
+            sys.exit(1)
         protocol_path.write_bytes(data)
         print(f"  Downloaded protocol.json for Chrome {chrome_version}")
 
