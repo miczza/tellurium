@@ -247,6 +247,12 @@ async def test_setup_auto_attach_stock_waits_for_debugger():
         "autoAttach": True,
         "waitForDebuggerOnStart": False,
         "flatten": True,
+        "filter": [
+            {"type": "iframe", "exclude": False},
+            {"type": "worker", "exclude": False},
+            {"type": "service_worker", "exclude": False},
+            {"type": "shared_worker", "exclude": False},
+        ],
     })
     # Extension content-scripts handle JS injection; no callback needed
     session.on.assert_not_called()
@@ -264,6 +270,12 @@ async def test_setup_auto_attach_patched_no_wait():
         "autoAttach": True,
         "waitForDebuggerOnStart": False,
         "flatten": True,
+        "filter": [
+            {"type": "iframe", "exclude": False},
+            {"type": "worker", "exclude": False},
+            {"type": "service_worker", "exclude": False},
+            {"type": "shared_worker", "exclude": False},
+        ],
     })
     # No event handler registered for patched
     session.on.assert_not_called()
