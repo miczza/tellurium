@@ -17,7 +17,12 @@ class Session:
         self._event_handlers: dict[str, list[callable]] = {}
         self._lock = asyncio.Lock()
 
-    async def send(self, method: str, params: dict | None = None) -> dict:
+    async def send(
+        self,
+        method: str,
+        params: dict | None = None,
+        timeout: float | None = None,
+    ) -> dict:
         if method in self._router._FORBIDDEN_METHODS:
             raise RuntimeError(
                 f"{method} is forbidden — it exposes CDP via Inspector "
@@ -33,7 +38,14 @@ class Session:
             future: asyncio.Future = asyncio.get_running_loop().create_future()
             self._pending[msg_id] = future
             await self._router._transport.send(json.dumps(msg).encode() + b"\0")
-        return await future
+        try:
+            if timeout is None:
+                return await future
+            return await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError:
+            # Clean the pending entry so a late reply doesn't fire on it
+            self._pending.pop(msg_id, None)
+            raise
 
     def on(self, event_name: str, handler: callable) -> None:
         self._event_handlers.setdefault(event_name, []).append(handler)
