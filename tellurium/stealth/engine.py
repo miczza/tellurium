@@ -107,6 +107,15 @@ class StealthEngine:
         except Exception:
             pass
 
+    def update_profile(self, profile: StealthProfile) -> None:
+        """Replace the profile (frozen dataclass) with an updated version.
+
+        Called by Browser.launch() after Browser.getVersion resolves so the
+        GREASE brand from the real binary is applied before apply_to_session()
+        runs. Must be called before the first CDP override emission.
+        """
+        self._profile = profile
+
     def set_router(self, router) -> None:
         """Set the SessionRouter reference for auto-attach handling."""
         self._router = router

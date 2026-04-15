@@ -14,6 +14,7 @@ from typing import Any
 from tellurium.browser.cookie import Cookie
 from tellurium.browser.context import BrowserContext
 from tellurium.browser.engine import StockEngine, PatchedEngine
+from tellurium.stealth._grease import parse_grease_brands
 from tellurium.browser.launcher import (
     _detect_chrome_version,
     build_chrome_flags,
@@ -284,8 +285,10 @@ class Browser:
         # 11a. review 2026-04-15 #5: read the real GREASE brand from the browser
         # so userAgentData.brands matches whatever the binary actually advertises.
         if stealth and stealth_engine is not None and stealth_profile is not None:
-            from tellurium.stealth._grease import parse_grease_brands
-            version_info = await self._router.root.send("Browser.getVersion", {}, timeout=5.0)
+            try:
+                version_info = await self._router.root.send("Browser.getVersion", {}, timeout=5.0)
+            except Exception:
+                version_info = {}
             raw_brands = version_info.get("userAgentData", {}).get("brands") or []
             if raw_brands:
                 g_brand, g_version = parse_grease_brands(raw_brands)
@@ -294,7 +297,7 @@ class Browser:
                     grease_brand=g_brand,
                     grease_version=g_version,
                 )
-                stealth_engine._profile = stealth_profile
+                stealth_engine.update_profile(stealth_profile)
                 self._stealth_profile = stealth_profile
             # else: leave profile.grease_brand = None → engine falls back to "Not_A Brand"/"24"
 
