@@ -3,6 +3,33 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from pathlib import Path
+
+
+def _cache_dir() -> Path:
+    """Return the Tellurium cache directory."""
+    return Path.home() / ".tellurium"
+
+
+def _get_installed_version(cache: Path) -> str | None:
+    """Return the installed patched browser version, or None if not installed."""
+    for d in sorted(cache.glob("chromium-patched-*"), reverse=True):
+        if (d / "chrome").exists():
+            return d.name.replace("chromium-patched-", "")
+    return None
+
+
+def _check_latest_patched() -> str | None:
+    """Check GitHub releases for latest patched browser version."""
+    import urllib.request
+    import json
+    try:
+        url = "https://api.github.com/repos/miczza/tellurium-chromium/releases/latest"
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = json.loads(resp.read())
+            return data.get("tag_name", "").lstrip("v")
+    except Exception:
+        return None
 
 
 def main():
@@ -29,6 +56,22 @@ def main():
     # info
     sub.add_parser("info", help="Show Tellurium info")
 
+    # list-browsers
+    sub.add_parser("list-browsers", help="List installed browser versions")
+
+    # update-browser
+    upd_parser = sub.add_parser("update-browser", help="Check for/install browser updates")
+    upd_parser.add_argument("--check", action="store_true", help="Check only, don't install")
+    upd_parser.add_argument("--security-only", action="store_true", help="Only security updates")
+
+    # prune-browsers
+    prune_parser = sub.add_parser("prune-browsers", help="Remove old browser versions")
+    prune_parser.add_argument("--keep", type=int, default=2, help="Keep N most recent versions")
+
+    # verify-browser
+    verify_parser = sub.add_parser("verify-browser", help="Verify browser binary integrity")
+    verify_parser.add_argument("--reinstall", action="store_true", help="Reinstall if corrupt")
+
     args = parser.parse_args()
 
     if args.command == "update-cdp":
@@ -39,6 +82,14 @@ def main():
         asyncio.run(_stealth_test(args.browser, args.full))
     elif args.command == "info":
         _show_info()
+    elif args.command == "list-browsers":
+        _list_browsers()
+    elif args.command == "update-browser":
+        _update_browser(args.check, args.security_only)
+    elif args.command == "prune-browsers":
+        _prune_browsers(args.keep)
+    elif args.command == "verify-browser":
+        _verify_browser(args.reinstall)
     else:
         parser.print_help()
 
@@ -197,3 +248,154 @@ def _show_info() -> None:
     # Cache dir
     cache = Path.home() / ".tellurium"
     print(f"  Cache:           {cache}")
+
+
+def _list_browsers() -> None:
+    """List installed browser versions."""
+    import json
+    cache = _cache_dir()
+    browsers = sorted(cache.glob("chromium-patched-*"), reverse=True)
+
+    if not browsers:
+        print("No browsers installed.")
+        return
+
+    print("Installed browsers:\n")
+    for browser_dir in browsers:
+        version = browser_dir.name.replace("chromium-patched-", "")
+        chrome_path = browser_dir / "chrome"
+        manifest_path = browser_dir / "MANIFEST.json"
+
+        if not chrome_path.exists():
+            continue
+
+        sha256_prefix = ""
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text())
+                sha256 = manifest.get("sha256", "")
+                if sha256:
+                    sha256_prefix = sha256[:16] + "..."
+            except Exception:
+                pass
+
+        print(f"  {version}")
+        print(f"    Path: {browser_dir}")
+        if sha256_prefix:
+            print(f"    SHA256: {sha256_prefix}")
+        print()
+
+
+def _update_browser(check_only: bool, security_only: bool) -> None:
+    """Check for and optionally install browser updates."""
+    cache = _cache_dir()
+    installed = _get_installed_version(cache)
+    latest = _check_latest_patched()
+
+    if not latest:
+        print("Could not check for updates (network error or no releases found).")
+        return
+
+    if not installed:
+        print(f"No patched browser installed.")
+        print(f"Latest available: {latest}")
+        if not check_only:
+            print("\nRun 'tellurium download-browser --browser patched' to install.")
+        return
+
+    if installed == latest:
+        print(f"Already up to date: {installed}")
+        return
+
+    print(f"Installed: {installed}")
+    print(f"Available: {latest}")
+
+    if check_only:
+        print("\nUpdate available. Run 'tellurium update-browser' to install.")
+    else:
+        # TODO: implement actual update download
+        print("\nUpdate download not yet implemented.")
+        print("Run 'tellurium download-browser --browser patched' to install manually.")
+
+
+def _prune_browsers(keep: int) -> None:
+    """Remove old browser versions, keeping the N most recent."""
+    import shutil
+    cache = _cache_dir()
+    browsers = sorted(cache.glob("chromium-patched-*"), reverse=True)
+
+    if len(browsers) <= keep:
+        print(f"Only {len(browsers)} browser(s) installed, keeping all.")
+        return
+
+    to_remove = browsers[keep:]
+    to_keep = browsers[:keep]
+
+    print(f"Keeping {keep} most recent version(s):")
+    for b in to_keep:
+        version = b.name.replace("chromium-patched-", "")
+        print(f"  {version}")
+
+    print(f"\nRemoving {len(to_remove)} old version(s):")
+    for browser_dir in to_remove:
+        version = browser_dir.name.replace("chromium-patched-", "")
+        print(f"  {version}")
+        shutil.rmtree(browser_dir)
+
+    print("\nDone.")
+
+
+def _verify_browser(reinstall: bool) -> None:
+    """Verify browser binary integrity using SHA256 from MANIFEST.json."""
+    import hashlib
+    import json
+
+    cache = _cache_dir()
+    browsers = list(cache.glob("chromium-patched-*"))
+
+    if not browsers:
+        print("No browsers installed.")
+        return
+
+    all_valid = True
+    for browser_dir in browsers:
+        version = browser_dir.name.replace("chromium-patched-", "")
+        chrome_path = browser_dir / "chrome"
+        manifest_path = browser_dir / "MANIFEST.json"
+
+        if not chrome_path.exists():
+            print(f"  {version}: MISSING (chrome binary not found)")
+            all_valid = False
+            continue
+
+        if not manifest_path.exists():
+            print(f"  {version}: SKIP (no MANIFEST.json)")
+            continue
+
+        try:
+            manifest = json.loads(manifest_path.read_text())
+            expected_hash = manifest.get("sha256")
+            if not expected_hash:
+                print(f"  {version}: SKIP (no SHA256 in manifest)")
+                continue
+
+            actual_hash = hashlib.sha256(chrome_path.read_bytes()).hexdigest()
+
+            if actual_hash == expected_hash:
+                print(f"  {version}: OK (SHA256 valid)")
+            else:
+                print(f"  {version}: CORRUPT (SHA256 mismatch)")
+                print(f"    Expected: {expected_hash[:16]}...")
+                print(f"    Actual:   {actual_hash[:16]}...")
+                all_valid = False
+
+                if reinstall:
+                    print(f"    Reinstalling...")
+                    # TODO: implement reinstall
+                    print("    (reinstall not yet implemented)")
+        except Exception as e:
+            print(f"  {version}: ERROR ({e})")
+            all_valid = False
+
+    if not all_valid:
+        sys.exit(1)
