@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head><title>API Test</title></head>
+<body>
+  <button id="fetch-data">Fetch Data</button>
+  <div id="result"></div>
+  <script>
+    document.getElementById('fetch-data').addEventListener('click', async () => {
+      // Simulate API call with inline JSON response
+      const data = {items: ['apple', 'banana', 'cherry']};
+      document.getElementById('result').textContent = JSON.stringify(data);
+      // Also make a real fetch to trigger capture
+      try {
+        await fetch('/api/data', {method: 'POST', body: JSON.stringify({query: 'test'})});
+      } catch (e) {
+        // Expected to fail on local server, but capture should still see the request
+      }
+    });
+  </script>
+</body>
+</html>
