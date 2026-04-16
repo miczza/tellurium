@@ -14,6 +14,7 @@ class CaptureManager:
         self._waiters: list[tuple[str, asyncio.Future]] = []
         self._active = False
         self._logger: CaptureLogger | None = None
+        self._request_timestamps: dict[str, float] = {}
 
     async def start(self, log: bool = False, log_filter: str | None = None):
         await self._session.send("Network.enable", {})
@@ -33,6 +34,7 @@ class CaptureManager:
         self._session.off("Network.loadingFinished", self._on_finished)
         self._active = False
         self._logger = None
+        self._request_timestamps.clear()
 
     def search(self, **filters) -> list[CapturedRequest]:
         results = list(self._requests)
@@ -88,6 +90,8 @@ class CaptureManager:
         )
         self._requests.append(req)
         self._by_id[request_id] = req
+        if "timestamp" in params:
+            self._request_timestamps[request_id] = params["timestamp"]
 
     def _on_response(self, params: dict):
         request_id = params["requestId"]
@@ -106,6 +110,13 @@ class CaptureManager:
         req = self._by_id.get(request_id)
         if req:
             req._complete = True
+            # Calculate duration: (finished_timestamp - start_timestamp) * 1000
+            start_ts = self._request_timestamps.get(request_id)
+            end_ts = params.get("timestamp")
+            if start_ts is not None and end_ts is not None:
+                req.duration = (end_ts - start_ts) * 1000  # seconds -> ms
+            # Clean up timestamp tracking
+            self._request_timestamps.pop(request_id, None)
             # Notify waiters
             for pattern, future in self._waiters[:]:
                 if req._match_url(pattern) and not future.done():
