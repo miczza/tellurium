@@ -158,3 +158,22 @@ def test_intercept_stream_yields_paused_requests():
         await stream.stop()
 
     asyncio.run(run())
+
+
+def test_tab_intercept_returns_intercept_stream():
+    """Tab.intercept() returns an InterceptStream usable as async context manager."""
+    from tellurium.browser.tab import Tab
+
+    tab = Tab.__new__(Tab)
+    tab._session = MagicMock()
+    tab._session.send = AsyncMock()
+    tab._session.on = MagicMock()
+    tab._session.off = MagicMock()
+
+    stream = tab.intercept("*/api/*")
+
+    # Should return InterceptStream
+    assert isinstance(stream, InterceptStream)
+    # Should have async context manager methods
+    assert hasattr(stream, "__aenter__")
+    assert hasattr(stream, "__aexit__")
