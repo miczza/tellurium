@@ -484,19 +484,33 @@ class Tab:
                 key_code = ord(char.upper()) if len(char) == 1 and char.isascii() else 0
                 code = f"Key{char.upper()}" if char.isalpha() else ""
                 if event["type"] == "rawKeyDown":
-                    await self._session.send("Input.dispatchKeyEvent", {
-                        "type": "rawKeyDown", "key": char, "code": code,
-                        "windowsVirtualKeyCode": key_code,
-                    })
+                    if char.isalpha():
+                        # Letters: rawKeyDown + char event sequence
+                        await self._session.send("Input.dispatchKeyEvent", {
+                            "type": "rawKeyDown", "key": char, "code": code,
+                            "windowsVirtualKeyCode": key_code,
+                        })
+                    else:
+                        # Special chars: keyDown with text (like non-human path)
+                        await self._session.send("Input.dispatchKeyEvent", {
+                            "type": "keyDown", "key": char, "text": char,
+                        })
                 elif event["type"] == "char":
-                    await self._session.send("Input.dispatchKeyEvent", {
-                        "type": "char", "text": char, "key": char,
-                    })
+                    # Skip char event for non-alpha chars (keyDown already has text)
+                    if char.isalpha():
+                        await self._session.send("Input.dispatchKeyEvent", {
+                            "type": "char", "text": char, "key": char,
+                        })
                 elif event["type"] == "keyUp":
-                    await self._session.send("Input.dispatchKeyEvent", {
-                        "type": "keyUp", "key": char, "code": code,
-                        "windowsVirtualKeyCode": key_code,
-                    })
+                    if char.isalpha():
+                        await self._session.send("Input.dispatchKeyEvent", {
+                            "type": "keyUp", "key": char, "code": code,
+                            "windowsVirtualKeyCode": key_code,
+                        })
+                    else:
+                        await self._session.send("Input.dispatchKeyEvent", {
+                            "type": "keyUp", "key": char,
+                        })
         else:
             for char in text:
                 await self._session.send("Input.dispatchKeyEvent", {
