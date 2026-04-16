@@ -6,7 +6,11 @@ build-backend = "hatchling.build"
 name = "tellurium"
 version = "0.1.0"
 description = "Tellurium automates browsers. Quietly."
+readme = "tellurium/README.md"
 license = "MIT"
+authors = [
+    { name = "Michele Mazza", email = "mclmza@gmail.com" },
+]
 requires-python = ">=3.10"
 keywords = ["browser", "automation", "scraping", "stealth", "cdp"]
 classifiers = [
