@@ -1,5 +1,7 @@
 import asyncio
+import json
 import pytest
+from unittest.mock import AsyncMock, MagicMock
 from tellurium.capture.request import CapturedRequest
 from tellurium.capture.manager import CaptureManager
 from tellurium.capture.log import CaptureLogger
@@ -126,15 +128,17 @@ def test_recording_session_save(tmp_path):
         created_at="2026-04-14T14:00:00Z",
         duration_seconds=5.0,
         requests=[{"method": "GET", "url": "https://a.com", "status": 200}],
+        cookies_at_export=[{"name": "sid", "value": "x", "domain": ".a.com"}],
     )
     path = str(tmp_path / "recording.json")
     session.save(path)
-    import json
     with open(path) as f:
         data = json.load(f)
     assert data["tellurium_version"] == "0.1.0"
     assert len(data["requests"]) == 1
     assert data["requests"][0]["status"] == 200
+    assert len(data["cookies_at_export"]) == 1
+    assert data["cookies_at_export"][0]["name"] == "sid"
 
 
 # --- CaptureManager event handlers ---
@@ -167,3 +171,43 @@ def test_on_finished_marks_complete():
     mgr._on_response({"requestId": "r1", "response": {"status": 200, "headers": {}, "mimeType": "", "encodedDataLength": 0}})
     mgr._on_finished({"requestId": "r1"})
     assert mgr._by_id["r1"]._complete is True
+
+
+# --- Cookies export tests ---
+
+def test_recording_session_includes_cookies():
+    """Recorder.export() should fetch and include cookies."""
+    from tellurium.capture.recorder import Recorder
+
+    session_mock = MagicMock()
+    session_mock.send = AsyncMock(return_value={
+        "cookies": [
+            {"name": "session_id", "value": "abc123", "domain": ".example.com"},
+            {"name": "token", "value": "xyz", "domain": "api.example.com"},
+        ]
+    })
+
+    mgr = CaptureManager(session_mock)
+    mgr._requests = [
+        CapturedRequest(url="https://example.com/api", method="GET", status=200),
+    ]
+
+    recorder = Recorder(mgr, "*")
+
+    session = asyncio.run(recorder.export())
+
+    assert hasattr(session, "cookies_at_export")
+    assert len(session.cookies_at_export) == 2
+    assert session.cookies_at_export[0]["name"] == "session_id"
+
+
+def test_recording_export_graceful_when_session_none():
+    """Recorder.export() returns empty cookies when session is None."""
+    from tellurium.capture.recorder import Recorder
+
+    mgr = CaptureManager(None)  # No session
+    recorder = Recorder(mgr, "*")
+
+    session = asyncio.run(recorder.export())
+
+    assert session.cookies_at_export == []

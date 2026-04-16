@@ -582,6 +582,24 @@ class Tab:
             await self._capture_manager.start()
         return Recorder(self._capture_manager, url_pattern)
 
+    def intercept(self, url_pattern: str = "*"):
+        """Return an InterceptStream for request interception.
+
+        Usage:
+            async with tab.intercept("*/api/*") as stream:
+                async for request in stream:
+                    if "blocked" in request.url:
+                        await request.abort()
+                    else:
+                        await request.continue_()
+
+        Note: More invasive than capture() — use only when you need to
+        modify, block, or respond to requests. Every paused request MUST
+        receive continue_(), abort(), or respond() or the page hangs.
+        """
+        from tellurium.capture.intercept import InterceptStream
+        return InterceptStream(self._session, url_pattern)
+
     # ------------------------------------------------------------------
     # Raw CDP
     # ------------------------------------------------------------------
