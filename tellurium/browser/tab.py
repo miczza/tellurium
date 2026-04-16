@@ -400,6 +400,48 @@ class Tab:
             "button": button, "clickCount": 1,
         })
 
+    async def click_in_iframe(
+        self, iframe_selector: str, x: float, y: float,
+        *, button: str = "left", human: bool = False,
+    ) -> None:
+        """Click at (x, y) inside an iframe, translating to viewport coords.
+
+        CDP Input.dispatchMouseEvent uses viewport coordinates. Passing
+        iframe-local coords directly produces "click too small" detection
+        on Cloudflare Turnstile and similar widgets. This helper resolves
+        the iframe's getBoundingClientRect in the parent-frame isolated
+        world (safe against page-JS monkey-patches of
+        getBoundingClientRect), adds the rect origin to the iframe-local
+        coords, and dispatches via mouse_click(human=human).
+
+        Raises ValueError if iframe_selector matches no element.
+        """
+        from tellurium.stealth._isolated import get_hsim_world
+        import json
+
+        ctx = await get_hsim_world(self, frame_id=self._frame_id)
+        expr = (
+            f"(() => {{"
+            f"  const f = document.querySelector({json.dumps(iframe_selector)});"
+            f"  if (!f) return null;"
+            f"  const r = f.getBoundingClientRect();"
+            f"  return {{x: r.x, y: r.y}};"
+            f"}})()"
+        )
+        params: dict = {"expression": expr, "returnByValue": True}
+        if ctx is not None:
+            params["contextId"] = ctx
+        resp = await self._session.send("Runtime.evaluate", params)
+        rect = resp.get("result", {}).get("value")
+        if rect is None:
+            raise ValueError(
+                f"click_in_iframe: no iframe matched selector {iframe_selector!r}"
+            )
+
+        abs_x = rect["x"] + x
+        abs_y = rect["y"] + y
+        await self.mouse_click(abs_x, abs_y, button=button, human=human)
+
     async def keyboard_press(self, key: str) -> None:
         """Press a single key or key combo (e.g. ``"Enter"``, ``"Control+a"``)."""
         modifiers = 0
