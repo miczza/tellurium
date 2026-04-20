@@ -1,0 +1,84 @@
+{
+  "timestamp": "2026-04-20T16:33:56.395532",
+  "chrome_path": "/home/miczza/PycharmProjects/chromium-telluride/src/out/Release/chrome",
+  "tests": [
+    {
+      "test": "stability",
+      "seed": 42069,
+      "pass": true,
+      "details": {
+        "canvas_hash": {
+          "run1": "a2a9f6fb",
+          "run2": "a2a9f6fb",
+          "match": true
+        },
+        "audio": {
+          "run1": "124.47446149",
+          "run2": "124.47446149",
+          "match": true
+        },
+        "text_width": {
+          "run1": 229.42987841879471,
+          "run2": 229.42987841879471,
+          "match": true
+        },
+        "rect_width": {
+          "run1": 200.00012797958533,
+          "run2": 200.00012797958533,
+          "match": true
+        }
+      }
+    },
+    {
+      "test": "variation",
+      "seed1": 42069,
+      "seed2": 99999,
+      "pass": true,
+      "details": {
+        "canvas_hash": {
+          "seed1": "a2a9f6fb",
+          "seed2": "1c2f48ba",
+          "differs": true
+        },
+        "audio": {
+          "seed1": "124.47446149",
+          "seed2": "124.37312478",
+          "differs": true
+        },
+        "text_width": {
+          "seed1": 229.42987841879471,
+          "seed2": 229.42991029165074,
+          "differs": true
+        }
+      }
+    },
+    {
+      "test": "live_sites",
+      "seed": 42069,
+      "sites": {
+        "fingerprintjs": {
+          "status": "captured",
+          "visitor_id": "bdd6ecaebf4a7245e173678a13c3ba14",
+          "confidence": null,
+          "screenshot": "fingerprintjs.png"
+        },
+        "creepjs": {
+          "status": "captured",
+          "trust_score": null,
+          "lies_detected": 2,
+          "headless_score": 38,
+          "fp_id": "4bb898b9df35f277573bcdd8718d35ef3bd838559bef8096a5f6b84bc3a45273",
+          "screenshot": "creepjs.png"
+        },
+        "browserleaks_canvas": {
+          "status": "captured",
+          "screenshot": "browserleaks_canvas.png"
+        },
+        "browserleaks_webgl": {
+          "status": "captured",
+          "screenshot": "browserleaks_webgl.png"
+        }
+      }
+    }
+  ]
+}
