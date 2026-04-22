@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-04-20T16:33:56.395532",
+  "timestamp": "2026-04-22T23:58:48.898371",
   "chrome_path": "/home/miczza/PycharmProjects/chromium-telluride/src/out/Release/chrome",
   "tests": [
     {
@@ -8,13 +8,13 @@
       "pass": true,
       "details": {
         "canvas_hash": {
-          "run1": "a2a9f6fb",
-          "run2": "a2a9f6fb",
+          "run1": "e691a3c7",
+          "run2": "e691a3c7",
           "match": true
         },
         "audio": {
-          "run1": "124.47446149",
-          "run2": "124.47446149",
+          "run1": "124.04365547",
+          "run2": "124.04365547",
           "match": true
         },
         "text_width": {
@@ -36,13 +36,13 @@
       "pass": true,
       "details": {
         "canvas_hash": {
-          "seed1": "a2a9f6fb",
-          "seed2": "1c2f48ba",
+          "seed1": "e691a3c7",
+          "seed2": "b088a22a",
           "differs": true
         },
         "audio": {
-          "seed1": "124.47446149",
-          "seed2": "124.37312478",
+          "seed1": "124.04365547",
+          "seed2": "124.04360618",
           "differs": true
         },
         "text_width": {
@@ -58,16 +58,16 @@
       "sites": {
         "fingerprintjs": {
           "status": "captured",
-          "visitor_id": "bdd6ecaebf4a7245e173678a13c3ba14",
+          "visitor_id": "2cccbc11538197aa3c87699fcdc87799",
           "confidence": null,
           "screenshot": "fingerprintjs.png"
         },
         "creepjs": {
           "status": "captured",
           "trust_score": null,
-          "lies_detected": 2,
-          "headless_score": 38,
-          "fp_id": "4bb898b9df35f277573bcdd8718d35ef3bd838559bef8096a5f6b84bc3a45273",
+          "lies_detected": 0,
+          "headless_score": 31,
+          "fp_id": "e9564802b7818db4d74385f811b5301340d71609df985953ee25a126caf6e04c",
           "screenshot": "creepjs.png"
         },
         "browserleaks_canvas": {
