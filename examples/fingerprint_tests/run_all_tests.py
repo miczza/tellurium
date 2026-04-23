@@ -22,6 +22,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from tellurium import Browser
+from test_fingerprint_sites import run_tests as run_site_tests, validate_results
 
 
 CHROMIUM_TELLURIDE_PATH = "/home/miczza/PycharmProjects/chromium-telluride/src/out/Release/chrome"
@@ -224,169 +225,28 @@ async def test_live_sites(chrome_path: str) -> dict:
     print("\n[3/3] LIVE SITE TESTS")
     print("="*50)
 
+    results = await run_site_tests(SEED_A, chrome_path)
+    critical, warnings = validate_results(results)
+
     result = {
         "test": "live_sites",
         "seed": SEED_A,
-        "sites": {}
+        "pass": len(critical) == 0,
+        "critical_failures": critical,
+        "warnings": warnings,
+        "sites": results,
     }
 
-    screenshots_dir = Path(__file__).parent / "screenshots"
-    screenshots_dir.mkdir(exist_ok=True)
-
-    browser = await Browser.launch(
-        headless=False,
-        executable=chrome_path,
-        args=[
-            f"--fingerprint={SEED_A}",
-            "--fingerprint-platform=linux",
-            "--no-sandbox",
-            "--window-size=1920,1080",
-        ],
-    )
-
-    try:
-        tab = await browser.new_tab()
-
-        # FingerprintJS
-        print("\n  Testing FingerprintJS...")
-        try:
-            await tab.get("https://fingerprintjs.github.io/fingerprintjs/", timeout=30)
-            await asyncio.sleep(5)
-
-            # Extract visitor ID and confidence
-            fpjs_data = await tab.eval("""
-            (() => {
-                const result = { visitor_id: null, confidence: null };
-                const text = document.body.innerText;
-
-                // Look for visitor ID (32 char hex)
-                const idMatch = text.match(/[a-f0-9]{32}/i);
-                if (idMatch) result.visitor_id = idMatch[0];
-
-                // Look for confidence score
-                const confMatch = text.match(/confidence[:\\s]*([0-9.]+)/i);
-                if (confMatch) result.confidence = parseFloat(confMatch[1]);
-
-                return result;
-            })()
-            """)
-
-            await tab.screenshot(str(screenshots_dir / "fingerprintjs.png"), full_page=True)
-            result["sites"]["fingerprintjs"] = {
-                "status": "captured",
-                "visitor_id": fpjs_data.get("visitor_id") if fpjs_data else None,
-                "confidence": fpjs_data.get("confidence") if fpjs_data else None,
-                "screenshot": "fingerprintjs.png"
-            }
-            print(f"    Visitor ID: {fpjs_data.get('visitor_id', 'N/A') if fpjs_data else 'N/A'}")
-            print(f"    Confidence: {fpjs_data.get('confidence', 'N/A') if fpjs_data else 'N/A'}")
-        except Exception as e:
-            result["sites"]["fingerprintjs"] = {"status": "error", "error": str(e)}
-            print(f"    Error: {e}")
-
-        # CreepJS
-        print("\n  Testing CreepJS...")
-        try:
-            await tab.get("https://abrahamjuliot.github.io/creepjs/", timeout=60)
-            await asyncio.sleep(15)  # CreepJS needs more time
-
-            # Extract CreepJS data
-            creep_data = await tab.eval("""
-            (() => {
-                const result = {
-                    trust_score: null,
-                    lies_detected: 0,
-                    headless_score: null,
-                    fp_id: null
-                };
-
-                // Get fingerprint ID from header
-                const fpEl = document.querySelector('.fingerprint-header, [class*="fp-id"], h1');
-                if (fpEl) {
-                    const text = fpEl.textContent;
-                    const match = text.match(/[a-f0-9]{16,}/i);
-                    if (match) result.fp_id = match[0];
-                }
-
-                // Parse the page text for scores
-                const bodyText = document.body.innerText;
-
-                // Look for trust percentage
-                const trustMatch = bodyText.match(/trust[:\\s]*([0-9]+)%/i);
-                if (trustMatch) result.trust_score = parseInt(trustMatch[1]);
-
-                // Look for lies count
-                const liesMatch = bodyText.match(/lies[:\\s]*([0-9]+)/i);
-                if (liesMatch) result.lies_detected = parseInt(liesMatch[1]);
-
-                // Look for headless detection percentages
-                const headlessMatch = bodyText.match(/([0-9]+)%\\s*(?:like\\s+)?headless/i);
-                if (headlessMatch) result.headless_score = parseInt(headlessMatch[1]);
-
-                // Count lie elements as fallback
-                if (result.lies_detected === 0) {
-                    result.lies_detected = document.querySelectorAll('[class*="lies"], .is-lie, .lie-count').length;
-                }
-
-                // Extract key metrics from visible text
-                const lines = bodyText.split('\\n').filter(l => l.trim());
-                result.metrics = {};
-                for (const line of lines.slice(0, 50)) {
-                    if (line.includes('%') && line.length < 100) {
-                        const parts = line.split(/[:\\t]+/);
-                        if (parts.length >= 2) {
-                            result.metrics[parts[0].trim().substring(0, 30)] = parts[1].trim();
-                        }
-                    }
-                }
-
-                return result;
-            })()
-            """)
-
-            await tab.screenshot(str(screenshots_dir / "creepjs.png"), full_page=True)
-            result["sites"]["creepjs"] = {
-                "status": "captured",
-                "trust_score": creep_data.get("trust_score") if creep_data else None,
-                "lies_detected": creep_data.get("lies_detected", 0) if creep_data else 0,
-                "headless_score": creep_data.get("headless_score") if creep_data else None,
-                "fp_id": creep_data.get("fp_id") if creep_data else None,
-                "screenshot": "creepjs.png"
-            }
-            print(f"    FP ID: {creep_data.get('fp_id', 'N/A')[:16] if creep_data else 'N/A'}...")
-            print(f"    Trust Score: {creep_data.get('trust_score', 'N/A') if creep_data else 'N/A'}%")
-            print(f"    Headless Detection: {creep_data.get('headless_score', 'N/A') if creep_data else 'N/A'}%")
-            print(f"    Lies: {creep_data.get('lies_detected', 'N/A') if creep_data else 'N/A'}")
-        except Exception as e:
-            result["sites"]["creepjs"] = {"status": "error", "error": str(e)}
-            print(f"    Error: {e}")
-
-        # BrowserLeaks Canvas
-        print("\n  Testing BrowserLeaks Canvas...")
-        try:
-            await tab.get("https://browserleaks.com/canvas", timeout=30)
-            await asyncio.sleep(5)
-            await tab.screenshot(str(screenshots_dir / "browserleaks_canvas.png"), full_page=True)
-            result["sites"]["browserleaks_canvas"] = {"status": "captured", "screenshot": "browserleaks_canvas.png"}
-            print("    Screenshot saved")
-        except Exception as e:
-            result["sites"]["browserleaks_canvas"] = {"status": "error", "error": str(e)}
-            print(f"    Error: {e}")
-
-        # BrowserLeaks WebGL
-        print("\n  Testing BrowserLeaks WebGL...")
-        try:
-            await tab.get("https://browserleaks.com/webgl", timeout=30)
-            await asyncio.sleep(5)
-            await tab.screenshot(str(screenshots_dir / "browserleaks_webgl.png"), full_page=True)
-            result["sites"]["browserleaks_webgl"] = {"status": "captured", "screenshot": "browserleaks_webgl.png"}
-            print("    Screenshot saved")
-        except Exception as e:
-            result["sites"]["browserleaks_webgl"] = {"status": "error", "error": str(e)}
-            print(f"    Error: {e}")
-
-    finally:
-        await browser.close()
+    if critical:
+        print("\n  CRITICAL FAILURES:")
+        for c in critical:
+            print(f"    FAIL: {c}")
+    if warnings:
+        print("\n  WARNINGS:")
+        for w in warnings:
+            print(f"    WARN: {w}")
+    if not critical:
+        print("\n  All site checks PASSED")
 
     return result
 
@@ -398,7 +258,7 @@ async def main():
     args = parser.parse_args()
 
     print("="*60)
-    print("CHROMIUM-TELLURIDE C2 FINGERPRINT TEST SUITE")
+    print("CHROMIUM-TELLURIDE FINGERPRINT TEST SUITE")
     print("="*60)
     print(f"Chrome: {args.chrome}")
     print(f"Seeds: {SEED_A}, {SEED_B}")
