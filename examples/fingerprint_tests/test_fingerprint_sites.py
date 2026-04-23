@@ -313,6 +313,50 @@ async def test_fingerprint_demo(tab, results: dict) -> None:
         print(f"    Incognito: {'DETECTED' if data.get('incognito') else 'Not detected'}")
 
 
+async def test_sannysoft(tab, results: dict) -> None:
+    """Test bot.sannysoft.com — classic bot detection checks."""
+    print("  Testing bot.sannysoft.com...")
+    await tab.get("https://bot.sannysoft.com/", timeout=30)
+    await asyncio.sleep(5)
+
+    data = await tab.eval("""
+    (() => {
+        const result = { passed: 0, failed: 0, warnings: 0, details: {} };
+        const rows = document.querySelectorAll('table tr');
+        rows.forEach(row => {
+            const cells = row.querySelectorAll('td');
+            if (cells.length >= 2) {
+                const name = cells[0].textContent.trim();
+                const value = cells[1].textContent.trim();
+                const classes = cells[1].className || '';
+                let status = 'unknown';
+                if (classes.includes('passed') || value.toLowerCase() === 'passed') {
+                    status = 'passed';
+                    result.passed++;
+                } else if (classes.includes('failed') || value.toLowerCase() === 'failed') {
+                    status = 'failed';
+                    result.failed++;
+                } else if (classes.includes('warn')) {
+                    status = 'warning';
+                    result.warnings++;
+                }
+                result.details[name] = { value, status };
+            }
+        });
+        return result;
+    })()
+    """)
+
+    results["sannysoft"] = data if data else {"status": "error"}
+    await tab.screenshot(str(Path(__file__).parent / "screenshots" / "sannysoft.png"), full_page=True)
+
+    if data:
+        print(f"    Passed: {data.get('passed', 0)}, Failed: {data.get('failed', 0)}, Warnings: {data.get('warnings', 0)}")
+        for name, info in data.get('details', {}).items():
+            if info.get('status') == 'failed':
+                print(f"    FAIL: {name} = {info.get('value')}")
+
+
 async def run_tests(seed: int, chrome_path: str) -> dict:
     """Run all fingerprint tests with a specific seed."""
     results = {
@@ -346,6 +390,7 @@ async def run_tests(seed: int, chrome_path: str) -> dict:
         await test_browserleaks_canvas(tab, results)
         await test_browserleaks_webgl(tab, results)
         await test_fingerprint_demo(tab, results)
+        await test_sannysoft(tab, results)
 
     finally:
         await browser.close()
