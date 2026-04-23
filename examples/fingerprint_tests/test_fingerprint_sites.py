@@ -165,7 +165,8 @@ async def test_browserleaks_canvas(tab, results: dict) -> None:
 
     results["browserleaks_canvas"] = data
     await tab.screenshot(str(Path(__file__).parent / "screenshots" / "browserleaks_canvas.png"), full_page=True)
-    print(f"    Canvas Hash: {data.get('canvasHash', 'N/A')[:16]}...")
+    canvas_hash = data.get('canvasHash') or 'N/A'
+    print(f"    Canvas Hash: {canvas_hash[:16] if canvas_hash != 'N/A' else 'N/A'}...")
 
 
 async def test_browserleaks_webgl(tab, results: dict) -> None:
@@ -212,6 +213,106 @@ async def test_browserleaks_webgl(tab, results: dict) -> None:
     print(f"    WebGPU Vendor: {data.get('webgpuVendor', 'N/A')}")
 
 
+async def test_fingerprint_demo(tab, results: dict) -> None:
+    """Test fingerprint.com/demo — Browser Smart Signals."""
+    print("  Testing fingerprint.com/demo...")
+    await tab.get("https://fingerprint.com/demo/", timeout=60)
+    await asyncio.sleep(8)
+
+    # Click on "Browser Smart Signals" tab
+    try:
+        smart_signals_btn = await tab.find("Browser Smart Signals", timeout=15)
+        await smart_signals_btn.click()
+        await asyncio.sleep(5)
+    except TimeoutError:
+        print("    WARNING: Could not find 'Browser Smart Signals' button")
+        results["fingerprint_demo"] = {"status": "error", "error": "smart_signals_button_not_found"}
+        await tab.screenshot(str(Path(__file__).parent / "screenshots" / "fingerprint_demo_smart_signals.png"), full_page=True)
+        return
+
+    data = await tab.eval("""
+    (() => {
+        const result = {
+            suspect_score: null,
+            developer_tools: null,
+            bot_detected: null,
+            browser_tampering: null,
+            vm_detected: null,
+            incognito: null,
+            vpn: null,
+            ip_geolocation: null,
+            raw_signals: {}
+        };
+
+        const bodyText = document.body.innerText;
+
+        // Extract Suspect Score (look for number near "Suspect Score")
+        const scoreMatch = bodyText.match(/Suspect\\s*Score[\\s\\S]{0,50}?(\\d+)/i);
+        if (scoreMatch) result.suspect_score = parseInt(scoreMatch[1]);
+
+        // Extract Developer Tools Detection
+        if (/Developer\\s*Tools[\\s\\S]{0,100}?Not\\s*detected/i.test(bodyText)) {
+            result.developer_tools = false;
+        } else if (/Developer\\s*Tools[\\s\\S]{0,100}?Detected/i.test(bodyText)) {
+            result.developer_tools = true;
+        }
+
+        // Extract Bot Detection
+        if (/Bot\\s*Detection[\\s\\S]{0,100}?Not\\s*detected/i.test(bodyText)) {
+            result.bot_detected = "notDetected";
+        } else if (/Bot\\s*Detection[\\s\\S]{0,100}?(good|bad)/i.test(bodyText)) {
+            result.bot_detected = bodyText.match(/Bot\\s*Detection[\\s\\S]{0,100}?(good|bad)/i)[1].toLowerCase();
+        }
+
+        // Extract Browser Tampering
+        if (/Browser\\s*Tamper[\\s\\S]{0,100}?Not\\s*detected/i.test(bodyText)) {
+            result.browser_tampering = false;
+        } else if (/Browser\\s*Tamper[\\s\\S]{0,100}?Detected/i.test(bodyText)) {
+            result.browser_tampering = true;
+        }
+
+        // Extract VM Detection
+        if (/Virtual\\s*Machine[\\s\\S]{0,100}?Not\\s*detected/i.test(bodyText)) {
+            result.vm_detected = false;
+        } else if (/Virtual\\s*Machine[\\s\\S]{0,100}?Detected/i.test(bodyText)) {
+            result.vm_detected = true;
+        }
+
+        // Extract Incognito Detection
+        if (/Incognito[\\s\\S]{0,100}?Not\\s*detected/i.test(bodyText)) {
+            result.incognito = false;
+        } else if (/Incognito[\\s\\S]{0,100}?Detected/i.test(bodyText)) {
+            result.incognito = true;
+        }
+
+        // Extract all visible signal rows as raw data
+        const rows = document.querySelectorAll('tr, [class*="signal"], [class*="row"], [data-testid]');
+        rows.forEach(row => {
+            const text = row.textContent.trim();
+            if (text.length > 5 && text.length < 200) {
+                const parts = text.split(/\\n|\\t/).map(p => p.trim()).filter(Boolean);
+                if (parts.length >= 2) {
+                    result.raw_signals[parts[0].substring(0, 50)] = parts.slice(1).join(' | ');
+                }
+            }
+        });
+
+        return result;
+    })()
+    """)
+
+    results["fingerprint_demo"] = data if data else {"status": "error", "error": "eval_returned_none"}
+    await tab.screenshot(str(Path(__file__).parent / "screenshots" / "fingerprint_demo_smart_signals.png"), full_page=True)
+
+    if data:
+        print(f"    Suspect Score: {data.get('suspect_score', 'N/A')}")
+        print(f"    Developer Tools: {'DETECTED' if data.get('developer_tools') else 'Not detected'}")
+        print(f"    Bot Detection: {data.get('bot_detected', 'N/A')}")
+        print(f"    Browser Tampering: {'DETECTED' if data.get('browser_tampering') else 'Not detected'}")
+        print(f"    VM Detection: {'DETECTED' if data.get('vm_detected') else 'Not detected'}")
+        print(f"    Incognito: {'DETECTED' if data.get('incognito') else 'Not detected'}")
+
+
 async def run_tests(seed: int, chrome_path: str) -> dict:
     """Run all fingerprint tests with a specific seed."""
     results = {
@@ -244,6 +345,7 @@ async def run_tests(seed: int, chrome_path: str) -> dict:
         await test_creepjs(tab, results)
         await test_browserleaks_canvas(tab, results)
         await test_browserleaks_webgl(tab, results)
+        await test_fingerprint_demo(tab, results)
 
     finally:
         await browser.close()
