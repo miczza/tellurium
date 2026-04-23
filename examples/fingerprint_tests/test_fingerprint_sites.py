@@ -505,7 +505,66 @@ async def test_fingerprint_scan(tab, results: dict) -> None:
             print(f"    {test}: {val}")
 
 
-async def run_tests(seed: int, chrome_path: str) -> dict:
+SITE_TESTS = {
+    "fingerprintjs": test_fingerprintjs,
+    "creepjs": test_creepjs,
+    "browserleaks_canvas": test_browserleaks_canvas,
+    "browserleaks_webgl": test_browserleaks_webgl,
+    "fingerprint_demo": test_fingerprint_demo,
+    "sannysoft": test_sannysoft,
+    "browserscan": test_browserscan,
+    "fingerprint_scan": test_fingerprint_scan,
+}
+
+
+def validate_results(results: dict) -> tuple[list[str], list[str]]:
+    """Validate results against CRITICAL and WARNING thresholds.
+
+    Returns (critical_failures, warnings).
+    """
+    critical = []
+    warnings = []
+
+    # fingerprint.com/demo checks
+    fd = results.get("fingerprint_demo", {})
+    if fd.get("developer_tools") is True:
+        critical.append("Developer Tools DETECTED by fingerprint.com")
+    if fd.get("bot_detected") and fd["bot_detected"] != "notDetected":
+        critical.append(f"Bot DETECTED by fingerprint.com: {fd['bot_detected']}")
+    if fd.get("browser_tampering") is True:
+        critical.append("Browser Tampering DETECTED by fingerprint.com")
+    if fd.get("vm_detected") is True:
+        critical.append("VM DETECTED by fingerprint.com")
+    score = fd.get("suspect_score")
+    if score is not None and score > 0:
+        warnings.append(f"Suspect Score = {score} (target: 0)")
+
+    # sannysoft checks
+    ss = results.get("sannysoft", {})
+    if ss.get("failed", 0) > 0:
+        for name, info in ss.get("details", {}).items():
+            if info.get("status") == "failed":
+                critical.append(f"sannysoft FAIL: {name} = {info.get('value')}")
+
+    # CreepJS checks
+    cj = results.get("creepjs", {})
+    if cj.get("headless_pct") is not None and cj["headless_pct"] > 0:
+        warnings.append(f"CreepJS headless = {cj['headless_pct']}% (target: 0%)")
+    if cj.get("stealth_pct") is not None and cj["stealth_pct"] > 0:
+        warnings.append(f"CreepJS stealth = {cj['stealth_pct']}% (target: 0%)")
+    if cj.get("lies_detected", 0) > 0:
+        critical.append(f"CreepJS lies detected: {cj['lies_detected']}")
+
+    # fingerprint-scan checks
+    fs = results.get("fingerprint_scan", {})
+    signals = fs.get("signals", {})
+    if signals.get("webdriver") is True:
+        critical.append("navigator.webdriver = true")
+
+    return critical, warnings
+
+
+async def run_tests(seed: int, chrome_path: str, **kwargs) -> dict:
     """Run all fingerprint tests with a specific seed."""
     results = {
         "seed": seed,
@@ -533,14 +592,19 @@ async def run_tests(seed: int, chrome_path: str) -> dict:
     try:
         tab = await browser.new_tab()
 
-        await test_fingerprintjs(tab, results)
-        await test_creepjs(tab, results)
-        await test_browserleaks_canvas(tab, results)
-        await test_browserleaks_webgl(tab, results)
-        await test_fingerprint_demo(tab, results)
-        await test_sannysoft(tab, results)
-        await test_browserscan(tab, results)
-        await test_fingerprint_scan(tab, results)
+        site_filter = kwargs.get("site_filter")
+        tests_to_run = SITE_TESTS
+        if site_filter:
+            if site_filter not in SITE_TESTS:
+                raise ValueError(f"Unknown site: {site_filter}. Available: {', '.join(SITE_TESTS)}")
+            tests_to_run = {site_filter: SITE_TESTS[site_filter]}
+
+        for name, test_fn in tests_to_run.items():
+            try:
+                await test_fn(tab, results)
+            except Exception as e:
+                results[name] = {"status": "error", "error": str(e)}
+                print(f"    ERROR: {name}: {e}")
 
     finally:
         await browser.close()
@@ -628,17 +692,35 @@ async def main():
     parser.add_argument("--seed", type=int, default=42069, help="Fingerprint seed")
     parser.add_argument("--seeds", type=str, help="Comma-separated seeds for comparison (e.g., 42069,99999)")
     parser.add_argument("--chrome", type=str, default=CHROMIUM_TELLURIDE_PATH, help="Chrome executable path")
+    parser.add_argument("--site", type=str, help="Run only a specific site test (e.g., fingerprint_demo, creepjs)")
     args = parser.parse_args()
 
     if args.seeds:
         seeds = [int(s.strip()) for s in args.seeds.split(",")]
         await compare_seeds(seeds, args.chrome)
     else:
-        results = await run_tests(args.seed, args.chrome)
+        results = await run_tests(args.seed, args.chrome, site_filter=args.site)
+
+        # Validate
+        critical, warnings = validate_results(results)
+
+        if critical:
+            print("\nCRITICAL FAILURES:")
+            for c in critical:
+                print(f"  FAIL: {c}", file=sys.stderr)
+        if warnings:
+            print("\nWARNINGS:")
+            for w in warnings:
+                print(f"  WARN: {w}", file=sys.stderr)
+        if not critical and not warnings:
+            print("\nAll checks PASSED")
+
         output_file = Path(__file__).parent / f"results_seed_{args.seed}.json"
         with open(output_file, "w") as f:
             json.dump(results, f, indent=2)
         print(f"\nResults saved to {output_file}")
+
+        sys.exit(1 if critical else 0)
 
 
 if __name__ == "__main__":
