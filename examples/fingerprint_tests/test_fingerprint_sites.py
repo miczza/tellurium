@@ -73,6 +73,8 @@ async def test_fingerprintjs(tab, results: dict) -> None:
     await tab.screenshot(str(Path(__file__).parent / "screenshots" / "fingerprintjs.png"), full_page=True)
     print(f"    Visitor ID: {data.get('visitorId', 'N/A')}")
     print(f"    Warnings: {len(data.get('warnings', []))}")
+    if not data.get('visitorId'):
+        print("    WARNING: No Visitor ID captured — FingerprintJS may have failed to load")
 
 
 async def test_creepjs(tab, results: dict) -> None:
@@ -192,6 +194,8 @@ async def test_browserleaks_canvas(tab, results: dict) -> None:
     await tab.screenshot(str(Path(__file__).parent / "screenshots" / "browserleaks_canvas.png"), full_page=True)
     canvas_hash = data.get('canvasHash') or 'N/A'
     print(f"    Canvas Hash: {canvas_hash[:16] if canvas_hash != 'N/A' else 'N/A'}...")
+    if not data.get('canvasHash'):
+        print("    WARNING: No canvas hash captured — canvas fingerprinting may not be working")
 
 
 async def test_browserleaks_webgl(tab, results: dict) -> None:
@@ -236,6 +240,10 @@ async def test_browserleaks_webgl(tab, results: dict) -> None:
     print(f"    WebGL Vendor: {data.get('vendor', 'N/A')}")
     print(f"    WebGL Renderer: {data.get('renderer', 'N/A')}")
     print(f"    WebGPU Vendor: {data.get('webgpuVendor', 'N/A')}")
+    if data.get('renderer') and 'ANGLE' in data.get('renderer', ''):
+        print(f"    Renderer is spoofed (ANGLE prefix present)")
+    elif data.get('renderer'):
+        print(f"    WARNING: Renderer may not be spoofed: {data.get('renderer')}")
 
 
 async def test_fingerprint_demo(tab, results: dict) -> None:
