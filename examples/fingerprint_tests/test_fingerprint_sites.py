@@ -411,6 +411,67 @@ async def test_browserscan(tab, results: dict) -> None:
             print(f"    WebGL Renderer: {details['WebGLRenderer']}")
 
 
+async def test_fingerprint_scan(tab, results: dict) -> None:
+    """Test fingerprint-scan.com — bot risk score + headless signals."""
+    print("  Testing fingerprint-scan.com...")
+    await tab.get("https://fingerprint-scan.com/", timeout=30)
+    await asyncio.sleep(20)  # Castle.js needs time to compute
+
+    data = await tab.eval("""
+    (() => {
+        const result = { bot_risk_score: null, signals: {}, bot_tests: {} };
+
+        // Extract bot risk score
+        const scoreEl = document.querySelector('#fingerprintScore, [class*="score"]');
+        if (scoreEl) {
+            const match = scoreEl.textContent.match(/([0-9.]+)/);
+            if (match) result.bot_risk_score = parseFloat(match[1]);
+        }
+
+        // Extract headless detection signals via JS
+        result.signals = {
+            noTaskbar: window.screen.height === window.screen.availHeight,
+            taskbarSize: window.screen.height - window.screen.availHeight,
+            noContentIndex: typeof window.ContentIndex === 'undefined',
+            noContactsManager: !('contacts' in navigator),
+            noDownlinkMax: !navigator.connection || navigator.connection.downlinkMax === undefined,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            webdriver: navigator.webdriver,
+            scrollbarWidth: (() => {
+                const div = document.createElement('div');
+                div.style.cssText = 'width:100px;height:100px;overflow:scroll;position:absolute;top:-9999px';
+                document.body.appendChild(div);
+                const w = div.offsetWidth - div.clientWidth;
+                document.body.removeChild(div);
+                return w;
+            })(),
+        };
+
+        // Extract bot test results from page
+        const bodyText = document.body.innerText;
+        const tests = ['WebDriver', 'IsSeleniumChrome', 'CDPCheck', 'IsPlaywright'];
+        tests.forEach(test => {
+            const match = bodyText.match(new RegExp(test + '[\\\\s:]+([\\\\w]+)', 'i'));
+            if (match) result.bot_tests[test] = match[1];
+        });
+
+        return result;
+    })()
+    """)
+
+    results["fingerprint_scan"] = data if data else {"status": "error"}
+    await tab.screenshot(str(Path(__file__).parent / "screenshots" / "fingerprint_scan.png"), full_page=True)
+
+    if data:
+        print(f"    Bot Risk Score: {data.get('bot_risk_score', 'N/A')}")
+        signals = data.get('signals', {})
+        print(f"    navigator.webdriver: {signals.get('webdriver', 'N/A')}")
+        print(f"    noTaskbar: {signals.get('noTaskbar', 'N/A')}")
+        print(f"    scrollbarWidth: {signals.get('scrollbarWidth', 'N/A')}")
+        for test, val in data.get('bot_tests', {}).items():
+            print(f"    {test}: {val}")
+
+
 async def run_tests(seed: int, chrome_path: str) -> dict:
     """Run all fingerprint tests with a specific seed."""
     results = {
@@ -446,6 +507,7 @@ async def run_tests(seed: int, chrome_path: str) -> dict:
         await test_fingerprint_demo(tab, results)
         await test_sannysoft(tab, results)
         await test_browserscan(tab, results)
+        await test_fingerprint_scan(tab, results)
 
     finally:
         await browser.close()
