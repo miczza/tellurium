@@ -76,58 +76,83 @@ async def test_fingerprintjs(tab, results: dict) -> None:
 
 
 async def test_creepjs(tab, results: dict) -> None:
-    """Test CreepJS site."""
+    """Test CreepJS — headless/stealth detection with signal breakdown."""
     print("  Testing creepjs.com...")
     await tab.get("https://abrahamjuliot.github.io/creepjs/", timeout=60)
-    await asyncio.sleep(10)  # CreepJS needs more time
+    await asyncio.sleep(15)
 
     data = await tab.eval("""
     (async () => {
-        // Wait for analysis to complete
         await new Promise(r => setTimeout(r, 5000));
 
         const result = {
-            trustScore: null,
-            liesDetected: 0,
-            fingerprint: null,
-            details: {}
+            trust_score: null,
+            lies_detected: 0,
+            headless_pct: null,
+            stealth_pct: null,
+            like_headless_pct: null,
+            fingerprint_id: null,
+            signal_breakdown: {}
         };
 
-        // Get trust score
-        const trustEl = document.querySelector('.trust-score, [class*="trust"], .score');
-        if (trustEl) {
-            const match = trustEl.textContent.match(/(\\d+)/);
-            if (match) result.trustScore = parseInt(match[1]);
+        const bodyText = document.body.innerText;
+
+        // Extract percentages from page text
+        const headlessMatch = bodyText.match(/(\\d+)%\\s*headless/i);
+        if (headlessMatch) result.headless_pct = parseInt(headlessMatch[1]);
+
+        const stealthMatch = bodyText.match(/(\\d+)%\\s*stealth/i);
+        if (stealthMatch) result.stealth_pct = parseInt(stealthMatch[1]);
+
+        const likeHeadlessMatch = bodyText.match(/(\\d+)%\\s*like\\s*headless/i);
+        if (likeHeadlessMatch) result.like_headless_pct = parseInt(likeHeadlessMatch[1]);
+
+        // Trust score
+        const trustMatch = bodyText.match(/trust[:\\s]*?(\\d+)%/i);
+        if (trustMatch) result.trust_score = parseInt(trustMatch[1]);
+
+        // Lies count
+        const liesMatch = bodyText.match(/lies\\s*\\((\\d+)\\)/i);
+        if (liesMatch) result.lies_detected = parseInt(liesMatch[1]);
+        if (result.lies_detected === 0) {
+            const altMatch = bodyText.match(/(\\d+)\\s*lie/i);
+            if (altMatch) result.lies_detected = parseInt(altMatch[1]);
         }
 
-        // Count lies
-        const liesEls = document.querySelectorAll('.lie, [class*="lie"], .is-lie');
-        result.liesDetected = liesEls.length;
+        // Fingerprint ID
+        const fpMatch = bodyText.match(/([a-f0-9]{16,})/i);
+        if (fpMatch) result.fingerprint_id = fpMatch[1];
 
-        // Get fingerprint hash
-        const fpEl = document.querySelector('.fingerprint, .fp-hash, [class*="hash"]');
-        if (fpEl) result.fingerprint = fpEl.textContent.trim();
-
-        // Get detailed results
-        const sections = ['canvas', 'audio', 'webgl', 'fonts', 'navigator'];
-        sections.forEach(section => {
-            const el = document.querySelector(`[class*="${section}"], #${section}`);
-            if (el) {
-                result.details[section] = {
-                    text: el.textContent.substring(0, 200),
-                    hasLie: el.classList.contains('lie') || el.querySelector('.lie') !== null
-                };
+        // Try to get internal signal breakdown
+        try {
+            if (window.Fingerprint) {
+                const fp = window.Fingerprint;
+                if (fp.headless) result.signal_breakdown.headless = fp.headless;
+                if (fp.stealth) result.signal_breakdown.stealth = fp.stealth;
+                if (fp.likeHeadless) result.signal_breakdown.likeHeadless = fp.likeHeadless;
             }
-        });
+        } catch (e) {}
+
+        // Count lie elements in DOM
+        const lieElements = document.querySelectorAll('[class*="lies"], .is-lie, .lie-count');
+        if (lieElements.length > 0 && result.lies_detected === 0) {
+            result.lies_detected = lieElements.length;
+        }
 
         return result;
     })()
     """)
 
-    results["creepjs"] = data
+    results["creepjs"] = data if data else {"status": "error"}
     await tab.screenshot(str(Path(__file__).parent / "screenshots" / "creepjs.png"), full_page=True)
-    print(f"    Trust Score: {data.get('trustScore', 'N/A')}%")
-    print(f"    Lies Detected: {data.get('liesDetected', 'N/A')}")
+
+    if data:
+        print(f"    Trust Score: {data.get('trust_score', 'N/A')}%")
+        print(f"    Headless: {data.get('headless_pct', 'N/A')}%")
+        print(f"    Stealth: {data.get('stealth_pct', 'N/A')}%")
+        print(f"    Like Headless: {data.get('like_headless_pct', 'N/A')}%")
+        print(f"    Lies Detected: {data.get('lies_detected', 'N/A')}")
+        print(f"    FP ID: {(data.get('fingerprint_id') or 'N/A')[:16]}...")
 
 
 async def test_browserleaks_canvas(tab, results: dict) -> None:
