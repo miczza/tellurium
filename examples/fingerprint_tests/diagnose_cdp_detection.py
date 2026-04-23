@@ -189,22 +189,69 @@ async def main():
         await tab.get("https://fingerprint.com/demo/", timeout=60)
         await asyncio.sleep(10)
 
-        # Click on Browser Smart Signals
-        print("  Looking for 'Browser Smart Signals' button...")
-        try:
-            btn = await tab.find("Browser Smart Signals", timeout=20)
-            print("  Found! Clicking...")
+        # Dump all clickable/tab text to find the right Smart Signals label
+        tab_labels = await tab.eval("""
+        (() => {
+            const labels = [];
+            // Look for tab-like elements: buttons, links, tab roles, nav items
+            const candidates = document.querySelectorAll(
+                'button, a, [role="tab"], [class*="tab"], [class*="Tab"], nav *, [class*="nav"] *'
+            );
+            candidates.forEach(el => {
+                const text = el.textContent.trim();
+                if (text.length > 2 && text.length < 80) {
+                    labels.push({
+                        text: text,
+                        tag: el.tagName,
+                        className: (el.className || '').toString().substring(0, 80),
+                    });
+                }
+            });
+            return labels;
+        })()
+        """)
+        print(f"  Found {len(tab_labels or [])} clickable elements. Tab-like labels:")
+        for item in (tab_labels or []):
+            text = item.get("text", "")
+            if any(kw in text.lower() for kw in ["smart", "signal", "browser", "geoloc", "identif", "visitor", "finger"]):
+                print(f"    -> '{text}' ({item.get('tag')} class={item.get('className', '')[:40]})")
+
+        # Try multiple text variations to find the Smart Signals tab
+        # "BROWSER SMART SIGNALS" is the exact tab label (uppercase)
+        smart_signals_texts = [
+            "BROWSER SMART SIGNALS",
+            "Browser Smart Signals",
+            "Smart Signals",
+        ]
+        btn = None
+        for text in smart_signals_texts:
+            try:
+                btn = await tab.find(text, timeout=5)
+                print(f"  Found tab with text: '{text}'. Clicking...")
+                break
+            except TimeoutError:
+                continue
+
+        if btn:
             await btn.click()
             await asyncio.sleep(8)
-        except TimeoutError:
-            print("  WARNING: Could not find 'Browser Smart Signals' button")
-            print("  Taking screenshot for manual inspection...")
+        else:
+            print("  Could not find Smart Signals tab by text. Trying to click all tabs...")
+            # Try clicking each tab-like element
+            all_tabs = await tab.eval("""
+            (() => {
+                const tabs = document.querySelectorAll('[role="tab"], [class*="tab"], [class*="Tab"]');
+                return Array.from(tabs).map((t, i) => ({
+                    index: i,
+                    text: t.textContent.trim().substring(0, 60),
+                }));
+            })()
+            """)
+            print(f"  Tab elements found: {json.dumps(all_tabs, indent=2)}")
             screenshots = Path(__file__).parent / "screenshots"
             screenshots.mkdir(exist_ok=True)
             await tab.screenshot(str(screenshots / "diagnose_no_button.png"), full_page=True)
-            results["fingerprint_demo"] = {"error": "button_not_found"}
-            _save_and_print(results)
-            return
+            # Continue anyway — extract whatever is visible
 
         # Extract Smart Signals data
         print("  Extracting Smart Signals data...")
