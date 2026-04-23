@@ -252,13 +252,13 @@ async def test_fingerprint_demo(tab, results: dict) -> None:
     await tab.get("https://fingerprint.com/demo/", timeout=60)
     await asyncio.sleep(8)
 
-    # Click on "Browser Smart Signals" tab
+    # Click on "BROWSER SMART SIGNALS" tab (uppercase in the actual DOM)
     try:
-        smart_signals_btn = await tab.find("Browser Smart Signals", timeout=15)
+        smart_signals_btn = await tab.find("BROWSER SMART SIGNALS", timeout=15)
         await smart_signals_btn.click()
         await asyncio.sleep(5)
     except TimeoutError:
-        print("    WARNING: Could not find 'Browser Smart Signals' button")
+        print("    WARNING: Could not find 'BROWSER SMART SIGNALS' tab")
         results["fingerprint_demo"] = {"status": "error", "error": "smart_signals_button_not_found"}
         await tab.screenshot(str(Path(__file__).parent / "screenshots" / "fingerprint_demo_smart_signals.png"), full_page=True)
         return
