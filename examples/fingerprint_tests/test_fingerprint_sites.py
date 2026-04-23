@@ -357,6 +357,60 @@ async def test_sannysoft(tab, results: dict) -> None:
                 print(f"    FAIL: {name} = {info.get('value')}")
 
 
+async def test_browserscan(tab, results: dict) -> None:
+    """Test browserscan.net — comprehensive browser fingerprint scan."""
+    print("  Testing browserscan.net...")
+    await tab.get("https://www.browserscan.net/", timeout=30)
+    await asyncio.sleep(8)
+
+    data = await tab.eval("""
+    (() => {
+        const result = { bot_detected: null, details: {} };
+        const bodyText = document.body.innerText;
+
+        // Check for bot/automation detection
+        if (/bot/i.test(bodyText) && /detected/i.test(bodyText)) {
+            result.bot_detected = true;
+        } else {
+            result.bot_detected = false;
+        }
+
+        // Extract key-value pairs from the page
+        const rows = document.querySelectorAll('tr, [class*="item"], [class*="row"], [class*="info"]');
+        rows.forEach(row => {
+            const text = row.textContent.trim();
+            if (text.length > 3 && text.length < 300) {
+                const parts = text.split(/\\n|\\t|:\\s/).map(p => p.trim()).filter(Boolean);
+                if (parts.length >= 2) {
+                    const key = parts[0].substring(0, 40);
+                    result.details[key] = parts.slice(1).join(' ');
+                }
+            }
+        });
+
+        // Extract specific signals
+        const ua = bodyText.match(/User\\s*Agent[\\s:]+(.+?)(?:\\n|$)/i);
+        if (ua) result.details['UserAgent'] = ua[1].trim().substring(0, 120);
+
+        const webgl = bodyText.match(/WebGL\\s*Renderer[\\s:]+(.+?)(?:\\n|$)/i);
+        if (webgl) result.details['WebGLRenderer'] = webgl[1].trim();
+
+        return result;
+    })()
+    """)
+
+    results["browserscan"] = data if data else {"status": "error"}
+    await tab.screenshot(str(Path(__file__).parent / "screenshots" / "browserscan.png"), full_page=True)
+
+    if data:
+        print(f"    Bot Detected: {data.get('bot_detected', 'N/A')}")
+        details = data.get('details', {})
+        if 'UserAgent' in details:
+            print(f"    User Agent: {details['UserAgent'][:60]}...")
+        if 'WebGLRenderer' in details:
+            print(f"    WebGL Renderer: {details['WebGLRenderer']}")
+
+
 async def run_tests(seed: int, chrome_path: str) -> dict:
     """Run all fingerprint tests with a specific seed."""
     results = {
@@ -391,6 +445,7 @@ async def run_tests(seed: int, chrome_path: str) -> dict:
         await test_browserleaks_webgl(tab, results)
         await test_fingerprint_demo(tab, results)
         await test_sannysoft(tab, results)
+        await test_browserscan(tab, results)
 
     finally:
         await browser.close()
