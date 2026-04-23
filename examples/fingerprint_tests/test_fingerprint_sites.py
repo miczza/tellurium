@@ -37,29 +37,28 @@ async def test_fingerprintjs(tab, results: dict) -> None:
     # Extract fingerprint data
     data = await tab.eval("""
     (async () => {
-        // Wait for FingerprintJS to load
         await new Promise(r => setTimeout(r, 2000));
 
         const result = {};
 
-        // Try to get visitor ID from page
-        const visitorEl = document.querySelector('.visitor-id, [data-visitor-id], .fp-result');
+        // Visitor ID is in <pre class="giant">
+        const visitorEl = document.querySelector('pre.giant');
         if (visitorEl) {
             result.visitorId = visitorEl.textContent.trim();
         }
 
-        // Get all fingerprint components if available
-        const components = document.querySelectorAll('.component, .fp-component, tr');
-        result.components = {};
-        components.forEach(c => {
-            const name = c.querySelector('.name, td:first-child')?.textContent?.trim();
-            const value = c.querySelector('.value, td:last-child')?.textContent?.trim();
-            if (name && value) {
-                result.components[name] = value;
-            }
+        // Confidence score is in <pre class="big"> after "Confidence score"
+        const headings = document.querySelectorAll('.heading');
+        headings.forEach(h => {
+            const text = h.textContent.trim().toLowerCase();
+            const pre = h.nextElementSibling;
+            if (!pre) return;
+            const val = pre.textContent.trim();
+            if (text.includes('confidence')) result.confidence = parseFloat(val);
+            if (text.includes('time took')) result.timeMs = parseInt(val);
+            if (text.includes('user agent')) result.userAgent = val;
         });
 
-        // Check for any warnings/errors
         result.warnings = [];
         document.querySelectorAll('.warning, .error, .alert').forEach(el => {
             result.warnings.push(el.textContent.trim());
@@ -167,24 +166,16 @@ async def test_browserleaks_canvas(tab, results: dict) -> None:
     (() => {
         const result = {
             canvasHash: null,
-            webglHash: null,
-            signature: null
+            uniqueness: null
         };
 
-        // Look for hash values in the page
-        const hashEls = document.querySelectorAll('[class*="hash"], .signature, td, .value');
-        hashEls.forEach(el => {
-            const text = el.textContent.trim();
-            // SHA-256 hash pattern
-            if (/^[a-f0-9]{64}$/i.test(text)) {
-                if (!result.canvasHash) result.canvasHash = text;
-                else if (!result.webglHash) result.webglHash = text;
-            }
-        });
+        // Canvas hash is in <td id="canvas-hash">
+        const hashEl = document.getElementById('canvas-hash');
+        if (hashEl) result.canvasHash = hashEl.textContent.trim();
 
-        // Get signature if available
-        const sigEl = document.querySelector('.canvas-signature, [id*="signature"]');
-        if (sigEl) result.signature = sigEl.textContent.trim();
+        // Uniqueness is in <td id="canvas-ratio">
+        const ratioEl = document.getElementById('canvas-ratio');
+        if (ratioEl) result.uniqueness = ratioEl.textContent.trim();
 
         return result;
     })()
@@ -209,27 +200,14 @@ async def test_browserleaks_webgl(tab, results: dict) -> None:
         const result = {
             vendor: null,
             renderer: null,
-            webgpuVendor: null,
-            webgpuDevice: null
         };
 
-        // Find WebGL info
-        const rows = document.querySelectorAll('tr, .row, .info-row');
-        rows.forEach(row => {
-            const text = row.textContent.toLowerCase();
-            const cells = row.querySelectorAll('td, .value');
-            const value = cells.length > 1 ? cells[1].textContent.trim() : cells[0]?.textContent?.trim();
+        // Unmasked vendor/renderer have stable IDs on BrowserLeaks
+        const vendorEl = document.getElementById('UNMASKED_VENDOR_WEBGL');
+        if (vendorEl) result.vendor = vendorEl.textContent.trim();
 
-            if (text.includes('vendor') && !text.includes('webgpu')) {
-                result.vendor = value;
-            } else if (text.includes('renderer') && !text.includes('webgpu')) {
-                result.renderer = value;
-            } else if (text.includes('webgpu') && text.includes('vendor')) {
-                result.webgpuVendor = value;
-            } else if (text.includes('webgpu') && text.includes('device')) {
-                result.webgpuDevice = value;
-            }
-        });
+        const rendererEl = document.getElementById('UNMASKED_RENDERER_WEBGL');
+        if (rendererEl) result.renderer = rendererEl.textContent.trim();
 
         return result;
     })()
@@ -239,11 +217,10 @@ async def test_browserleaks_webgl(tab, results: dict) -> None:
     await tab.screenshot(str(Path(__file__).parent / "screenshots" / "browserleaks_webgl.png"), full_page=True)
     print(f"    WebGL Vendor: {data.get('vendor', 'N/A')}")
     print(f"    WebGL Renderer: {data.get('renderer', 'N/A')}")
-    print(f"    WebGPU Vendor: {data.get('webgpuVendor', 'N/A')}")
-    if data.get('renderer') and 'ANGLE' in data.get('renderer', ''):
-        print(f"    Renderer is spoofed (ANGLE prefix present)")
-    elif data.get('renderer'):
-        print(f"    WARNING: Renderer may not be spoofed: {data.get('renderer')}")
+    if data.get('renderer') and data.get('renderer') != 'N/A':
+        print(f"    Renderer is spoofed (value: {data['renderer']})")
+    else:
+        print(f"    WARNING: No unmasked renderer found")
 
 
 async def test_fingerprint_demo(tab, results: dict) -> None:
