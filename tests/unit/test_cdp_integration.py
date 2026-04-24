@@ -71,24 +71,29 @@ async def test_full_navigation_flow(router, transport):
 
 
 async def test_multi_session_independence(router, transport):
-    """Two child sessions should not interfere."""
+    """Two child sessions should not interfere.
+
+    Attach consumes ids 1 and 2 on the shared counter, so the first child send
+    gets id=3 and the second gets id=4 — ids are unique per connection, not
+    per session.
+    """
     transport.queue({"id": 1, "result": {"sessionId": "s1"}})
     child1 = await router.attach("target-1")
     transport.queue({"id": 2, "result": {"sessionId": "s2"}})
     child2 = await router.attach("target-2")
 
-    transport.queue({"id": 1, "result": {"title": "Tab 1"}, "sessionId": "s1"})
+    transport.queue({"id": 3, "result": {"title": "Tab 1"}, "sessionId": "s1"})
     r1 = await child1.send("Page.getTitle", {})
     assert r1["title"] == "Tab 1"
 
-    transport.queue({"id": 1, "result": {"title": "Tab 2"}, "sessionId": "s2"})
+    transport.queue({"id": 4, "result": {"title": "Tab 2"}, "sessionId": "s2"})
     r2 = await child2.send("Page.getTitle", {})
     assert r2["title"] == "Tab 2"
 
     assert transport._outbox[-2]["sessionId"] == "s1"
     assert transport._outbox[-1]["sessionId"] == "s2"
-    assert transport._outbox[-2]["id"] == 1
-    assert transport._outbox[-1]["id"] == 1
+    assert transport._outbox[-2]["id"] == 3
+    assert transport._outbox[-1]["id"] == 4
 
 
 async def test_event_routing_to_correct_session(router, transport):
