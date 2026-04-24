@@ -333,6 +333,10 @@ class Browser:
             # 13. Apply stealth to initial tab session
             if stealth_engine is not None:
                 await stealth_engine.apply_to_session(session)
+                # T7: inject runtime stealth scripts before any navigation, so
+                # stealth=True works on Chrome branded >=137 where
+                # --load-extension is silently rejected.
+                await stealth_engine.apply_page_scripts(session)
 
         # 14. Setup auto-attach for OOPIF/Worker stealth patching
         # Note: auto-attach is deferred — for stock mode the extension's
@@ -356,6 +360,7 @@ class Browser:
         # Apply stealth to the new tab's session
         if self._stealth_engine is not None:
             await self._stealth_engine.apply_to_session(session)
+            await self._stealth_engine.apply_page_scripts(session)
 
         tab = Tab(session, self, target_id)
         self._tabs.append(tab)
