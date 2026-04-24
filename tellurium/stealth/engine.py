@@ -208,7 +208,6 @@ class StealthEngine:
         for source in scripts:
             await session.send("Page.addScriptToEvaluateOnNewDocument", {
                 "source": source,
-                "worldName": "",          # main world, same as author scripts
                 "runImmediately": True,   # apply even if a document already exists
             })
 
