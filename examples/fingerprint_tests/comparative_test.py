@@ -149,8 +149,8 @@ async def run_tellurium(chrome_path: str) -> dict:
     results = {"framework": "tellurium", "chrome": chrome_path, "fp_seed": fp_seed}
     t0 = time.time()
 
-    # T7 baseline measurement: stealth=True via env var opt-in
-    use_stealth = _os.environ.get("TELLURIUM_STEALTH_FLAG") == "1"
+    # Default stealth=True (post-T7). Env var opt-out for A/B testing.
+    use_stealth = _os.environ.get("TELLURIUM_STEALTH_FLAG", "1") != "0"
     browser = await Browser.launch(
         headless=False,
         executable=chrome_path,
