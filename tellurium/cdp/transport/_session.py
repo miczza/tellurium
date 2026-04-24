@@ -12,7 +12,6 @@ class Session:
     def __init__(self, router: SessionRouter, session_id: str | None):
         self._router = router
         self._session_id = session_id
-        self._request_id = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._event_handlers: dict[str, list[callable]] = {}
         self._lock = asyncio.Lock()
@@ -29,9 +28,8 @@ class Session:
                 f"and enables Proxy ownKeys trap detection. "
                 f"Use Page.createIsolatedWorld + Runtime.evaluate instead."
             )
+        msg_id = await self._router._allocate_id()
         async with self._lock:
-            self._request_id += 1
-            msg_id = self._request_id
             msg: dict = {"id": msg_id, "method": method, "params": params or {}}
             if self._session_id is not None:
                 msg["sessionId"] = self._session_id
@@ -82,9 +80,16 @@ class SessionRouter:
 
     def __init__(self, transport: CDPTransport):
         self._transport = transport
+        self._next_msg_id = 0
+        self._id_lock = asyncio.Lock()
         self._sessions: dict[str | None, Session] = {}
         self._root = Session(self, session_id=None)
         self._sessions[None] = self._root
+
+    async def _allocate_id(self) -> int:
+        async with self._id_lock:
+            self._next_msg_id += 1
+            return self._next_msg_id
 
     @property
     def root(self) -> Session:

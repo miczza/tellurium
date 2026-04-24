@@ -158,10 +158,10 @@ async def test_child_session_send_receive(transport, router):
     transport.queue_response(1, {"sessionId": "session-xyz"})
     child = await attach_task
 
-    # Now send via child session (child has its own _request_id counter starting at 0)
+    # Child send uses the shared router counter; root used id=1 for attach, so child gets id=2
     send_task = asyncio.create_task(child.send("Runtime.evaluate", {"expression": "1+1"}))
     await asyncio.sleep(0)
-    transport.queue_response(1, {"result": {"value": 2}}, session_id="session-xyz")
+    transport.queue_response(2, {"result": {"value": 2}}, session_id="session-xyz")
     result = await send_task
 
     assert result == {"result": {"value": 2}}
