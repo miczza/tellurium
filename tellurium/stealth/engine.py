@@ -115,6 +115,8 @@ class StealthEngine:
             session = self._get_session(session_id)
             if target_type == "iframe":
                 await self.apply_to_session(session, is_oopif=True)
+                # T7: also push runtime JS overrides into the OOPIF.
+                await self.apply_page_scripts(session)
             # Resume execution
             await session.send("Runtime.runIfWaitingForDebugger", {})
         except Exception:

@@ -338,12 +338,16 @@ class Browser:
                 # --load-extension is silently rejected.
                 await stealth_engine.apply_page_scripts(session)
 
-        # 14. Setup auto-attach for OOPIF/Worker stealth patching
-        # Note: auto-attach is deferred — for stock mode the extension's
-        # content-scripts handle JS injection in all frames.  Calling
-        # setup_auto_attach immediately would conflict with explicit
-        # Target.attachToTarget calls made by new_tab().
-        # TODO: enable auto-attach selectively for OOPIF CDP patching.
+        # 14. Setup auto-attach for OOPIF CDP patching (T7, closes TODO).
+        # _STEALTH_TARGET_FILTER excludes 'page', so explicit attachToTarget
+        # from new_tab() is unaffected. Iframes/workers trigger the listener
+        # which routes to _on_target_attached -> _patch_and_resume.
+        if stealth_engine is not None:
+            self._router.root.on(
+                "Target.attachedToTarget",
+                stealth_engine._on_target_attached,
+            )
+            await stealth_engine.setup_auto_attach(self._router.root)
 
         return self
 
