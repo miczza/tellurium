@@ -193,6 +193,25 @@ class StealthEngine:
 
         return scripts
 
+    async def apply_page_scripts(self, session) -> None:
+        """Push each stealth JS script via Page.addScriptToEvaluateOnNewDocument.
+
+        Used when --load-extension is unavailable (Chrome branded >=137)
+        or when an environment prefers CDP delivery over extension-based.
+        Idempotent per session: browser dedups identical sources.
+        """
+        if "native_navigator" in self._caps:
+            # Patched engine already handles these natively; skip JS injection.
+            return
+
+        scripts = self._build_scripts()
+        for source in scripts:
+            await session.send("Page.addScriptToEvaluateOnNewDocument", {
+                "source": source,
+                "worldName": "",          # main world, same as author scripts
+                "runImmediately": True,   # apply even if a document already exists
+            })
+
     async def _set_ua_override(self, session) -> None:
         """Set User-Agent and Client Hints via CDP."""
         p = self._profile
