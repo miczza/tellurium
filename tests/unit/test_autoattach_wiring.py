@@ -58,7 +58,9 @@ async def test_patch_and_resume_injects_page_scripts_for_iframe():
     await se._patch_and_resume(session_id="sess-1", target_type="iframe")
 
     sent = [c.args[0] for c in child.send.await_args_list]
-    assert sent.count("Page.addScriptToEvaluateOnNewDocument") >= 7, \
-        f"Expected >=7 script injections on iframe, got calls: {sent}"
+    # T7.5: stock + headed + non-proxy = 3 core scripts
+    # (chrome_runtime, plugins, keyboard_layout). Was >=7 pre-T7.5.
+    assert sent.count("Page.addScriptToEvaluateOnNewDocument") == 3, \
+        f"Expected 3 script injections on iframe, got calls: {sent}"
     # Runtime resume must still happen last
     assert sent[-1] == "Runtime.runIfWaitingForDebugger"

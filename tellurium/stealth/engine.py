@@ -152,25 +152,25 @@ class StealthEngine:
         return self._router.get_session(session_id)
 
     def _build_scripts(self) -> list[str]:
-        """Build the list of JS scripts for the extension."""
+        """Build the list of JS scripts for the extension.
+
+        T7.5 (2026-04-24): on stock backend, only 3 core scripts are
+        emitted (chrome_runtime, plugins, keyboard_layout). The previous
+        webgl.js / tostring_mask.js / webdriver.js / navigator_proto.js
+        overrides were removed because they are detection vectors for
+        CreepJS regardless of value (see specs/2026-04-24-T7.5-...md).
+        webdriver / hardwareConcurrency / platform are now covered
+        exclusively by CDP Emulation overrides; WebGL / device_memory
+        passthrough on stock; both are still rotated on patched backend
+        via the C++ FingerprintRng.
+        """
         if "native_fingerprint" in self._caps:
             return []
 
         p = self._profile
         scripts = [
-            load_script("webdriver.js"),
             load_script("chrome_runtime.js"),
             load_script("plugins.js"),
-            load_script("webgl.js", {
-                "VENDOR": p.webgl_vendor,
-                "RENDERER": p.webgl_renderer,
-            }),
-            load_script("navigator_proto.js", {
-                "HARDWARE_CONCURRENCY": str(p.hardware_concurrency),
-                "DEVICE_MEMORY": str(p.device_memory),
-                "PLATFORM": p.platform,
-            }),
-            load_script("tostring_mask.js"),
             load_script("keyboard_layout.js", {
                 "LOCALE": p.locale,
             }),
