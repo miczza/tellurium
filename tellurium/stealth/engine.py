@@ -154,21 +154,26 @@ class StealthEngine:
     def _build_scripts(self) -> list[str]:
         """Build the list of JS scripts for the extension.
 
-        T7.5 (2026-04-24): on stock backend, only 3 core scripts are
-        emitted (chrome_runtime, plugins, keyboard_layout). The previous
-        webgl.js / tostring_mask.js / webdriver.js / navigator_proto.js
+        T7.5 (2026-04-24): on stock backend, only 4 core scripts are
+        emitted (webdriver, chrome_runtime, plugins, keyboard_layout).
+        The previous webgl.js / tostring_mask.js / navigator_proto.js
         overrides were removed because they are detection vectors for
         CreepJS regardless of value (see specs/2026-04-24-T7.5-...md).
-        webdriver / hardwareConcurrency / platform are now covered
-        exclusively by CDP Emulation overrides; WebGL / device_memory
-        passthrough on stock; both are still rotated on patched backend
-        via the C++ FingerprintRng.
+        webdriver.js stays: tellurium uses `--remote-debugging-pipe`
+        which makes navigator.webdriver=true natively (unlike
+        --remote-debugging-port which nodriver uses); the spec
+        assumption that CDP-only Chrome was naturally false was
+        empirically wrong (Task 4 smoke surfaced this). hardwareConcurrency
+        / platform are covered by CDP Emulation overrides; WebGL /
+        device_memory passthrough on stock; both still rotated on
+        patched backend via the C++ FingerprintRNG.
         """
         if "native_fingerprint" in self._caps:
             return []
 
         p = self._profile
         scripts = [
+            load_script("webdriver.js"),
             load_script("chrome_runtime.js"),
             load_script("plugins.js"),
             load_script("keyboard_layout.js", {

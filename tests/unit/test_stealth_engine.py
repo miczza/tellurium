@@ -104,22 +104,24 @@ def test_build_extension_proxy_includes_webrtc():
 # ---------------------------------------------------------------------------
 
 def test_build_scripts_stock_includes_core():
-    """T7.5: stock backend builds 3 core JS overrides
-    (chrome_runtime, plugins, keyboard_layout). webgl/tostring_mask/
-    webdriver/navigator_proto were dropped because they are net-negative
-    against CreepJS detection (see specs/2026-04-24-T7.5-...md)."""
+    """T7.5: stock backend builds 4 core JS overrides
+    (webdriver, chrome_runtime, plugins, keyboard_layout). webgl/tostring_mask/
+    navigator_proto were dropped because they are net-negative
+    against CreepJS detection (see specs/2026-04-24-T7.5-...md).
+    webdriver.js is required because tellurium uses --remote-debugging-pipe
+    which makes navigator.webdriver=true natively."""
     engine = StockEngine()
     se = StealthEngine(engine, _make_profile(), headless=False, has_proxy=False)
     scripts = se._build_scripts()
-    assert len(scripts) == 3
+    assert len(scripts) == 4
 
 
 def test_build_scripts_stock_headless_proxy():
-    """T7.5: 3 core + 1 webrtc + 5 headless = 9 (was 13 pre-T7.5)."""
+    """T7.5: 4 core + 1 webrtc + 5 headless = 10 (was 13 pre-T7.5)."""
     engine = StockEngine()
     se = StealthEngine(engine, _make_profile(), headless=True, has_proxy=True)
     scripts = se._build_scripts()
-    assert len(scripts) == 9
+    assert len(scripts) == 10
 
 
 def test_build_scripts_patched_returns_empty():
@@ -130,7 +132,7 @@ def test_build_scripts_patched_returns_empty():
 
 
 def test_build_scripts_stock_excludes_dropped_scripts():
-    """T7.5: ensure the 4 dropped JS overrides cannot be silently
+    """T7.5: ensure the 3 dropped JS overrides cannot be silently
     re-introduced. Substring markers chosen to be unique to the
     deleted scripts (see spec § 4.4)."""
     engine = StockEngine()
@@ -140,8 +142,6 @@ def test_build_scripts_stock_excludes_dropped_scripts():
         "webgl.js override has reappeared in the bundle"
     assert "Function.prototype.toString" not in bundle, \
         "tostring_mask.js override has reappeared in the bundle"
-    assert "navigator.webdriver" not in bundle, \
-        "webdriver.js override has reappeared in the bundle"
     assert "hardwareConcurrency" not in bundle, \
         "navigator_proto.js override has reappeared in the bundle"
 
