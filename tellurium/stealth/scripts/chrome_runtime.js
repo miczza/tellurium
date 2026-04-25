@@ -4,8 +4,13 @@
   }
   if (!window.chrome.runtime) {
     window.chrome.runtime = {
-      connect: function() { return { onMessage: { addListener: function() {} }, postMessage: function() {} }; },
-      sendMessage: function() {},
+      // T7.5: arrow functions don't have .prototype, matching native bindings.
+      // CreepJS check: `'prototype' in chrome.runtime.sendMessage` => false.
+      connect: () => ({
+        onMessage: { addListener: () => {} },
+        postMessage: () => {},
+      }),
+      sendMessage: () => {},
       id: undefined,
     };
   }

@@ -73,15 +73,11 @@ def test_tellurium_passes_arch_checks_with_stealth():
     not os.path.exists(STOCK_CHROME),
     reason="Stock Chrome not installed",
 )
-@pytest.mark.xfail(
-    reason="CreepJS stealth-framework detector penalizes existing webgl.js "
-           "(NVIDIA GPU claimed on Intel platform) and related scripts. "
-           "Tracked as T7.5 follow-up; does not block T7 merge.",
-    strict=False,  # if it starts passing, that's good news, not an error
-)
 def test_tellurium_matches_nodriver_on_creepjs():
-    """Aspirational: once T7.5 lands, CreepJS headless_pct and stealth_pct
-    should both be 0. Currently expected to xfail at 33% / 60%."""
+    """T7.5 gate: CreepJS headless_pct and stealth_pct must both be 0.
+    Fixed in T7.5 P3 by switching to a proper accessor getter that throws
+    TypeError on non-instance 'this' (matching native getter behaviour) and
+    using a split marker for cross-realm FPT identification."""
     data = _run_comparative("tellurium")
     tel = data["tellurium"]
     failures = [name for (name, check) in CREEPJS_CHECKS if not check(tel)]

@@ -134,14 +134,20 @@ def test_build_scripts_patched_returns_empty():
 def test_build_scripts_stock_excludes_dropped_scripts():
     """T7.5: ensure the 3 dropped JS overrides cannot be silently
     re-introduced. Substring markers chosen to be unique to the
-    deleted scripts (see spec § 4.4)."""
+    deleted scripts (see spec § 4.4).
+
+    NOTE: 'Function.prototype.toString' marker was removed in T7.5 P3
+    because the kept webdriver.js now legitimately overrides FPT to
+    mask the getter's source string (CreepJS hasToStringProxy bypass).
+    Marker for tostring_mask.js is the unique 'new Proxy(nativeToString'
+    pattern from the deleted file."""
     engine = StockEngine()
     se = StealthEngine(engine, _make_profile(), headless=True, has_proxy=True)
     bundle = "\n".join(se._build_scripts())
     assert "WebGLRenderingContext.prototype.getParameter" not in bundle, \
         "webgl.js override has reappeared in the bundle"
-    assert "Function.prototype.toString" not in bundle, \
-        "tostring_mask.js override has reappeared in the bundle"
+    assert "new Proxy(nativeToString" not in bundle, \
+        "tostring_mask.js Proxy override has reappeared in the bundle"
     assert "hardwareConcurrency" not in bundle, \
         "navigator_proto.js override has reappeared in the bundle"
 
