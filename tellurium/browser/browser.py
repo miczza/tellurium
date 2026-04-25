@@ -253,8 +253,9 @@ class Browser:
             # Note: --disable-blink-features=AutomationControlled is
             # intentionally NOT added. Chrome shows an "unsupported
             # command-line flag" warning bar when it is present, which is
-            # itself a detection signal. The stealth extension's
-            # webdriver.js already overrides navigator.webdriver.
+            # itself a detection signal. T7.5: navigator.webdriver is
+            # already false natively on CDP-only Chrome (no
+            # --enable-automation flag), so no override is needed.
             if proxy:
                 stealth_flags.append(
                     "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
