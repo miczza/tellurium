@@ -1,23 +1,23 @@
 import json
 import os
+import shutil
 from tellurium.stealth.extension import load_script, create_stealth_extension
 
 
 def test_load_script_no_params():
-    content = load_script("webdriver.js")
-    assert "navigator" in content
-    assert "webdriver" in content
+    content = load_script("chrome_runtime.js")
+    assert "chrome" in content
+    assert "runtime" in content
 
 
 def test_load_script_with_params():
-    content = load_script("webgl.js", {"VENDOR": "TestVendor", "RENDERER": "TestRenderer"})
-    assert "TestVendor" in content
-    assert "TestRenderer" in content
-    assert "{{VENDOR}}" not in content
+    content = load_script("keyboard_layout.js", {"LOCALE": "fr-FR"})
+    assert "fr-FR" in content
+    assert "{{LOCALE}}" not in content
 
 
 def test_create_extension():
-    scripts = [load_script("webdriver.js")]
+    scripts = [load_script("chrome_runtime.js")]
     ext_dir = create_stealth_extension(scripts)
     assert os.path.exists(os.path.join(ext_dir, "manifest.json"))
     assert os.path.exists(os.path.join(ext_dir, "content.js"))
@@ -30,22 +30,19 @@ def test_create_extension():
 
     with open(os.path.join(ext_dir, "content.js")) as f:
         content = f.read()
-    assert "webdriver" in content
+    assert "chrome" in content
 
-    # Cleanup
-    import shutil
     shutil.rmtree(ext_dir)
 
 
 def test_create_extension_multiple_scripts():
     scripts = [
-        load_script("webdriver.js"),
         load_script("chrome_runtime.js"),
+        load_script("plugins.js"),
     ]
     ext_dir = create_stealth_extension(scripts)
     with open(os.path.join(ext_dir, "content.js")) as f:
         content = f.read()
-    assert "webdriver" in content
-    assert "chrome.runtime" in content or "chrome" in content
-    import shutil
+    assert "chrome.runtime" in content or "window.chrome" in content
+    assert "navigator.plugins" in content or "Plugin" in content
     shutil.rmtree(ext_dir)

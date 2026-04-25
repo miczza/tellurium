@@ -11,6 +11,8 @@ from tellurium.stealth.profile import StealthProfile
 
 @pytest.mark.asyncio
 async def test_apply_page_scripts_sends_addScriptToEvaluateOnNewDocument_for_each_script():
+    """T7.5: stock + headed + non-proxy = 3 core scripts injected
+    (chrome_runtime, plugins, keyboard_layout)."""
     engine = StockEngine()
     profile = StealthProfile.from_seed(42069)
     se = StealthEngine(engine, profile, headless=False, has_proxy=False)
@@ -21,10 +23,7 @@ async def test_apply_page_scripts_sends_addScriptToEvaluateOnNewDocument_for_eac
     await se.apply_page_scripts(session)
 
     method_calls = [c.args[0] for c in session.send.await_args_list]
-    # At least webdriver, chrome_runtime, plugins, webgl, navigator_proto,
-    # tostring_mask, keyboard_layout are mandatory in non-proxy/non-headless mode.
-    assert method_calls.count("Page.addScriptToEvaluateOnNewDocument") >= 7
-    # Every call carries a non-empty `source` string.
+    assert method_calls.count("Page.addScriptToEvaluateOnNewDocument") == 3
     for c in session.send.await_args_list:
         if c.args[0] == "Page.addScriptToEvaluateOnNewDocument":
             assert isinstance(c.args[1]["source"], str) and c.args[1]["source"]
