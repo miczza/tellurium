@@ -37,6 +37,16 @@ tellurium = "tellurium.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["tellurium"]
 
+[tool.hatch.build.targets.sdist]
+include = [
+  "/tellurium/",
+  "/tests/",
+  "/README.md",
+  "/LICENSE",
+  "/CHANGELOG.md",
+  "/pyproject.toml",
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 markers = [
