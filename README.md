@@ -902,7 +902,7 @@ Tellurium sets `0600` permissions on POSIX; it does not encrypt the file.
 ## Patched binary (experimental)
 
 Tellurium can drive a hardened Chromium binary built from the separate
-[`chromium-telluride`](../chromium-telluride) repository. **In v0.1, the
+`chromium-telluride` repository. **In v0.1, the
 patched-binary path is experimental and requires manual install** —
 the `tellurium update-browser` command does not auto-download yet
 (deferred to v0.1.x).
@@ -944,10 +944,19 @@ cp /path/to/tellurium-chromium ~/.tellurium/chromium/146.0.7680.188/tellurium-ch
 Then launch normally:
 
 ```python
-browser = await Browser.launch(
-    browser="patched",
-    chromium_version="146.0.7680.188",
-)
+import asyncio
+from tellurium import Browser
+
+async def main():
+    browser = await Browser.launch(
+        browser="patched",
+        chromium_version="146.0.7680.188",
+    )
+    async with browser:
+        tab = await browser.new_tab("https://example.com")
+        # ...
+
+asyncio.run(main())
 ```
 
 If `MANIFEST.json` is present, tellurium verifies the SHA256 on every launch.
