@@ -313,9 +313,14 @@ def _update_browser(check_only: bool, security_only: bool) -> None:
     if check_only:
         print("\nUpdate available. Run 'tellurium update-browser' to install.")
     else:
-        # TODO: implement actual update download
-        print("\nUpdate download not yet implemented.")
-        print("Run 'tellurium download-browser --browser patched' to install manually.")
+        # v0.1.x: implement actual update download — see CHANGELOG.md "Unreleased"
+        print(
+            "\nAuto-download is experimental and not wired in v0.1.\n"
+            "To install the patched binary manually, see README.md\n"
+            "  → 'Patched binary (experimental)'.\n"
+            "Recommended for v0.1: use stock Chrome via Browser.launch()\n"
+            "  without browser='patched'."
+        )
 
 
 def _prune_browsers(keep: int) -> None:
@@ -390,9 +395,14 @@ def _verify_browser(reinstall: bool) -> None:
                 all_valid = False
 
                 if reinstall:
-                    print(f"    Reinstalling...")
-                    # TODO: implement reinstall
-                    print("    (reinstall not yet implemented)")
+                    # v0.1.x: implement reinstall — see CHANGELOG.md "Unreleased"
+                    print(
+                        f"    --reinstall is not wired in v0.1.\n"
+                        f"    Manual fix: remove the corrupt binary at\n"
+                        f"      {browser_dir}\n"
+                        f"    and re-install via the manual workflow in\n"
+                        f"    README.md → 'Patched binary (experimental)'."
+                    )
         except Exception as e:
             print(f"  {version}: ERROR ({e})")
             all_valid = False

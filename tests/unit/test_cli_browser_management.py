@@ -93,3 +93,44 @@ def test_cli_verify_browser_mismatch(capsys, tmp_path):
             with pytest.raises(SystemExit) as exc_info:
                 main()
             assert exc_info.value.code != 0
+
+
+def test_cli_update_browser_install_messaging(capsys):
+    """update-browser (no --check) when an update is available prints honest
+    'experimental, install manually' messaging pointing at the README workflow."""
+    with patch("tellurium.cli._check_latest_patched", return_value="147.0.7700.100"):
+        with patch("tellurium.cli._get_installed_version", return_value="146.0.7680.188"):
+            with patch("sys.argv", ["tellurium", "update-browser"]):
+                main()
+    output = capsys.readouterr().out
+    # Honest about experimental status
+    assert "experimental" in output.lower()
+    # Points at the manual workflow
+    assert "manual" in output.lower() or "README" in output or "Patched binary" in output
+    # Does NOT pretend it's working
+    assert "not yet implemented" not in output
+
+
+def test_cli_verify_browser_reinstall_messaging(capsys, tmp_path):
+    """verify-browser --reinstall on corrupt binary prints honest 'not wired,
+    fix manually' messaging. SHA mismatch still exits non-zero."""
+    browser_dir = tmp_path / "chromium-patched-146.0.7680.188"
+    browser_dir.mkdir()
+    (browser_dir / "chrome").write_bytes(b"corrupted binary")
+    (browser_dir / "MANIFEST.json").write_text(
+        '{"version": "146.0.7680.188", '
+        '"sha256": "0000000000000000000000000000000000000000000000000000000000000000"}'
+    )
+
+    with patch("tellurium.cli._cache_dir", return_value=tmp_path):
+        with patch("sys.argv", ["tellurium", "verify-browser", "--reinstall"]):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            # SHA mismatch still surfaces as exit code 1 (unchanged)
+            assert exc_info.value.code != 0
+
+    output = capsys.readouterr().out
+    # Points at the manual recovery workflow
+    assert "manual" in output.lower() or "README" in output or "remove" in output.lower()
+    # Does NOT pretend reinstall worked
+    assert "not yet implemented" not in output
