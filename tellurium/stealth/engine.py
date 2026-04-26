@@ -172,6 +172,10 @@ class StealthEngine:
             return []
 
         p = self._profile
+        # webdriver.js MUST stay first: it captures the native Function.prototype.toString
+        # reference before chrome_runtime.js (and any subsequent script) defines its
+        # stub markers. Reordering will break the toString mask cross-realm path —
+        # see tests/stealth/test_webdriver_robustness.py for invariants.
         scripts = [
             load_script("webdriver.js"),
             load_script("chrome_runtime.js"),

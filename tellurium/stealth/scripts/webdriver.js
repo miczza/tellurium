@@ -34,7 +34,14 @@
   const _CR_ADD_LISTENER = _CR_PREFIX + 'addListener__';
   const _CR_POST    = _CR_PREFIX + 'postMessage__';
 
-  // Capture reference to the realm's navigator for the Illegal invocation check
+  // Capture reference to the realm's navigator for the Illegal-invocation check.
+  // T7.6 F5: we use strict-equal (`this !== _nav`) instead of
+  // `instanceof Navigator` because `Navigator` is a global lookup that an
+  // attacker can shadow, while `_nav` is a closure binding unreachable from
+  // outside this IIFE. Strict-equal on a closure-captured reference is more
+  // defensible than `instanceof` against an active threat model.
+  // See tests/stealth/test_webdriver_robustness.py::test_webdriver_getter_wrong_this_throws
+  // for the wrong-this TypeError invariant that holds regardless of choice.
   const _nav = navigator;
 
   // Create getter via object-literal accessor — results in a function with:
