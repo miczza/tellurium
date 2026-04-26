@@ -397,11 +397,11 @@ def _verify_browser(reinstall: bool) -> None:
                 if reinstall:
                     # v0.1.x: implement reinstall — see CHANGELOG.md "Unreleased"
                     print(
-                        f"    --reinstall is not wired in v0.1.\n"
-                        f"    Manual fix: remove the corrupt binary at\n"
+                        "    --reinstall is not wired in v0.1.\n"
+                        "    Manual fix: remove the corrupt binary at\n"
                         f"      {browser_dir}\n"
-                        f"    and re-install via the manual workflow in\n"
-                        f"    README.md → 'Patched binary (experimental)'."
+                        "    and re-install via the manual workflow in\n"
+                        "    README.md → 'Patched binary (experimental)'."
                     )
         except Exception as e:
             print(f"  {version}: ERROR ({e})")
