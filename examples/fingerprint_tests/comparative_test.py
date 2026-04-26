@@ -67,7 +67,8 @@ JS_CREEPJS = """
 (() => {
     const result = {
         trust_score: null, lies_detected: 0,
-        headless_pct: null, stealth_pct: null
+        headless_pct: null, stealth_pct: null,
+        version: { source: 'unknown', value: null }
     };
     const bodyText = document.body.innerText;
     const hm = bodyText.match(/(\\d+)%\\s*headless/i);
@@ -81,6 +82,21 @@ JS_CREEPJS = """
     if (result.lies_detected === 0) {
         const am = bodyText.match(/(\\d+)\\s*lie/i);
         if (am) result.lies_detected = parseInt(am[1]);
+    }
+    // T7.6 F3: best-effort capture of the CreepJS bundle version for triage.
+    // Three-strategy fallback chain; output is always a serialisable
+    // {source, value} object.
+    const meta = document.querySelector(
+        'meta[name="version"], meta[name="creepjs-version"]');
+    if (meta) {
+        result.version = { source: 'meta', value: meta.content };
+    } else {
+        const script = document.querySelector('script[src*="creep"]');
+        if (script) {
+            result.version = { source: 'script-src', value: script.src };
+        } else if (typeof window.creepjsVersion !== 'undefined') {
+            result.version = { source: 'global', value: String(window.creepjsVersion) };
+        }
     }
     return result;
 })()

@@ -75,9 +75,21 @@ def test_tellurium_passes_arch_checks_with_stealth():
 )
 def test_tellurium_matches_nodriver_on_creepjs():
     """T7.5 gate: CreepJS headless_pct and stealth_pct must both be 0.
+
     Fixed in T7.5 P3 by switching to a proper accessor getter that throws
     TypeError on non-instance 'this' (matching native getter behaviour) and
-    using a split marker for cross-realm FPT identification."""
+    using a split marker for cross-realm FPT identification. T7.6 F1
+    extended the toString mask to chrome.runtime stubs.
+
+    Triage when this gate fails:
+    1. Read comparative_results.json::tellurium.creepjs.version.value.
+    2. Compare with examples/fingerprint_tests/CREEPJS_BASELINE.txt.
+    3. If mismatch → upstream bundle changed; pull the source from
+       https://abrahamjuliot.github.io/creepjs/dist/creep.js (or the
+       current bundle URL) and identify which classifier became stricter
+       (grep for the failing pillar name — headless / stealth).
+    4. If match → tellurium regression; bisect recent stealth/* commits.
+    """
     data = _run_comparative("tellurium")
     tel = data["tellurium"]
     failures = [name for (name, check) in CREEPJS_CHECKS if not check(tel)]

@@ -1,0 +1,5 @@
+# CreepJS bundle version that produced 8/8 tellurium parity (2026-04-26).
+# Source strategy: script-src
+# URL: https://abrahamjuliot.github.io/creepjs/
+# Update this file when intentionally validating against a new bundle.
+https://abrahamjuliot.github.io/creepjs/creep.js
