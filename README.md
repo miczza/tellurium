@@ -898,3 +898,95 @@ Tellurium sets `0600` permissions on POSIX; it does not encrypt the file.
 - `SessionInvalidError` — validation failed and no `@login` is registered.
 - `SessionLoginFailedError` — login callback raised (original exception preserved as `__cause__`).
 - `SessionCorruptError` — `session.json` is unparseable.
+
+## Patched binary (experimental)
+
+Tellurium can drive a hardened Chromium binary built from the separate
+[`chromium-telluride`](../chromium-telluride) repository. **In v0.1, the
+patched-binary path is experimental and requires manual install** —
+the `tellurium update-browser` command does not auto-download yet
+(deferred to v0.1.x).
+
+Two patterns are supported today:
+
+### Pattern A — explicit binary path
+
+Bypasses the cache layout and integrity verification entirely. Best when
+you have a build at an arbitrary location:
+
+```python
+import asyncio
+from tellurium import Browser
+
+async def main():
+    browser = await Browser.launch(
+        browser="patched",
+        executable="/path/to/tellurium-chromium",
+    )
+    async with browser:
+        tab = await browser.new_tab("https://example.com")
+        # ...
+
+asyncio.run(main())
+```
+
+### Pattern B — cache layout (with optional integrity verification)
+
+Drop the binary into the standard cache directory and (optionally) place
+a `MANIFEST.json` next to it for SHA256 verification:
+
+```bash
+mkdir -p ~/.tellurium/chromium/146.0.7680.188
+cp /path/to/tellurium-chromium ~/.tellurium/chromium/146.0.7680.188/tellurium-chromium
+# Optional: ship MANIFEST.json (with sha256 field) for integrity verification
+```
+
+Then launch normally:
+
+```python
+browser = await Browser.launch(
+    browser="patched",
+    chromium_version="146.0.7680.188",
+)
+```
+
+If `MANIFEST.json` is present, tellurium verifies the SHA256 on every launch.
+If absent, tellurium emits a warning but proceeds.
+
+### Where to get the binary
+
+`chromium-telluride` doesn't yet have a public release. Until it does,
+build from source (see `chromium-telluride/docs/`) or request a dev
+binary from the maintainer.
+
+Auto-download (`tellurium update-browser`) is planned for v0.1.x —
+see `CHANGELOG.md`.
+
+## Known limitations
+
+### `like_headless ~38%` on CreepJS
+
+CreepJS reports `like_headless ≈ 38%` when tellurium runs against a
+headless container. This is an **environmental** signal — display server,
+GPU profile, audio device presence — not a behavioral lie. Real headed
+sessions (e.g. `DISPLAY=:0` with Xorg + GPU) typically score lower.
+
+In v0.1 this is documented as accepted state. The runtime stealth posture
+itself reports `headless=0%, lies=0` and matches nodriver 8/8 on CreepJS.
+
+### Patched binary: 3 residual CreepJS lies
+
+When using the experimental patched binary, three lies remain on CreepJS:
+
+1. Client Hints `platformVersion: ""` (medium severity — Cloudflare/DataDome check this)
+2. `speechSynthesis.getVoices()` returns Google Cloud voices on Linux (low-medium)
+3. One unidentified (under investigation in `chromium-telluride`)
+
+These are tracked in `chromium-telluride/docs/known-issues.md`. The
+stock-Chrome runtime stealth path is **not** affected by these.
+
+### Auto-download deferred
+
+`tellurium update-browser` and `tellurium verify-browser --reinstall`
+are not wired in v0.1. See "Patched binary (experimental)" above for the
+manual workflow. Auto-download is planned for v0.1.x.
