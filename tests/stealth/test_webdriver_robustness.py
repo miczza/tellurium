@@ -308,3 +308,83 @@ async def test_webdriver_descriptor_shape():
             "configurable": True,
             "getMatchesPath": True,
         }
+
+
+@_skip_no_chrome
+async def test_chrome_runtime_sendMessage_native_shape():
+    """#10 — chrome.runtime.sendMessage.toString() returns native shape.
+
+    Closes the F1 leak: stub previously returned "() => {...}" which would
+    fire any classifier that checks the trailing `[native code] }`.
+    """
+    async with await Browser.launch(headless=True, stealth=True) as browser:
+        tab = await browser.new_tab("about:blank")
+        result = await tab.eval("chrome.runtime.sendMessage.toString()")
+        assert result == "function sendMessage() { [native code] }"
+
+
+@_skip_no_chrome
+async def test_chrome_runtime_other_stubs_native_shape():
+    """#11 — connect / addListener (nested) / postMessage (nested) all native shape."""
+    async with await Browser.launch(headless=True, stealth=True) as browser:
+        tab = await browser.new_tab("about:blank")
+        result = await tab.eval("""
+            (() => {
+              const c = chrome.runtime.connect();
+              return {
+                connect: chrome.runtime.connect.toString(),
+                addListener: c.onMessage.addListener.toString(),
+                postMessage: c.postMessage.toString(),
+              };
+            })()
+        """)
+        assert result == {
+            "connect": "function connect() { [native code] }",
+            "addListener": "function addListener() { [native code] }",
+            "postMessage": "function postMessage() { [native code] }",
+        }
+
+
+@_skip_no_chrome
+async def test_chrome_runtime_toString_consistency_via_fpt():
+    """#13 — Function.prototype.toString.call(stub) matches stub.toString()."""
+    async with await Browser.launch(headless=True, stealth=True) as browser:
+        tab = await browser.new_tab("about:blank")
+        result = await tab.eval("""
+            (() => {
+              const fn = chrome.runtime.sendMessage;
+              return {
+                via_method: fn.toString(),
+                via_fpt:    Function.prototype.toString.call(fn),
+                equal:      fn.toString() === Function.prototype.toString.call(fn),
+              };
+            })()
+        """)
+        assert result["equal"] is True
+        assert result["via_method"] == "function sendMessage() { [native code] }"
+
+
+@_skip_no_chrome
+async def test_oopif_chrome_runtime_native_shape():
+    """#15 — chrome.runtime mask propagates into same-origin iframe.
+
+    Uses a pre-existing iframe in initial HTML (same mechanism as test #14)
+    because tellurium's CDP `addScriptToEvaluateOnNewDocument` propagates
+    to iframes in the initial document load lifecycle but does NOT
+    propagate to dynamically-appended iframes (documented as F7 gap).
+    """
+    async with await Browser.launch(headless=True, stealth=True) as browser:
+        tab = await browser.new_tab(
+            "data:text/html,<html><body><iframe id=t></iframe></body></html>"
+        )
+        # Small settle wait for the iframe realm initialization (matches #14).
+        result = await tab.eval("""
+            (async () => {
+              await new Promise(r => setTimeout(r, 100));
+              const w = document.getElementById('t').contentWindow;
+              return w.chrome && w.chrome.runtime
+                ? w.chrome.runtime.sendMessage.toString()
+                : null;
+            })()
+        """)
+        assert result == "function sendMessage() { [native code] }"

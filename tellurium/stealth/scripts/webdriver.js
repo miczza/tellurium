@@ -24,6 +24,16 @@
   // Split across two strings so fakeToString's own source doesn't match itself.
   const _WD_MARK = '__tellurium' + '_wd__';
 
+  // T7.6 F1: chrome.runtime stub markers. Joined at runtime; the joined
+  // literal does NOT appear in fakeToString's source, only the split-string
+  // expression does. The actual stubs in chrome_runtime.js DO contain the
+  // joined literal as a body comment, so src.includes() matches them.
+  const _CR_PREFIX = '__tellurium' + '_chrome_';
+  const _CR_CONNECT = _CR_PREFIX + 'connect__';
+  const _CR_SEND    = _CR_PREFIX + 'sendMessage__';
+  const _CR_LISTEN  = _CR_PREFIX + 'addListener__';
+  const _CR_POST    = _CR_PREFIX + 'postMessage__';
+
   // Capture reference to the realm's navigator for the Illegal invocation check
   const _nav = navigator;
 
@@ -63,21 +73,36 @@
       }
 
       const src = originalToString.call(this);
+      if (typeof src !== 'string') return src;
+
+      // Cross-realm fakeToString self-match. Each realm's fakeToString source
+      // contains every native-shape return-value literal; matching any of
+      // them identifies a peer fakeToString from another realm. This branch
+      // MUST run before the marker checks below because iframe fakeToString
+      // sources contain joined marker literals as the arguments to their own
+      // includes() calls. Order = correctness here.
+      if (src.includes("'function get webdriver() { [native code] }'") ||
+          src.includes("'function connect() { [native code] }'") ||
+          src.includes("'function sendMessage() { [native code] }'") ||
+          src.includes("'function addListener() { [native code] }'") ||
+          src.includes("'function postMessage() { [native code] }'")) {
+        return 'function toString() { [native code] }';
+      }
 
       // Cross-realm webdriver getter: each realm's getWebDriver contains the
-      // marker comment in its body. _WD_MARK is split so fakeToString's own
-      // source does not match this check.
-      if (typeof src === 'string' && src.includes(_WD_MARK)) {
+      // marker comment in its body. _WD_MARK is split-string so fakeToString's
+      // own source does not match this check.
+      if (src.includes(_WD_MARK)) {
         return 'function get webdriver() { [native code] }';
       }
 
-      // Cross-realm fakeToString: when CreepJS calls scope_FPT on the
-      // main window's fakeToString, the source will contain our unique
-      // literal. Return the native-shape string for it.
-      if (typeof src === 'string' &&
-          src.includes("'function get webdriver() { [native code] }'")) {
-        return 'function toString() { [native code] }';
-      }
+      // T7.6 F1: cross-realm chrome.runtime stub identification.
+      // Each marker is a runtime-joined string (split-string in fakeToString
+      // source) so fakeToString itself doesn't false-match.
+      if (src.includes(_CR_CONNECT)) return 'function connect() { [native code] }';
+      if (src.includes(_CR_SEND))    return 'function sendMessage() { [native code] }';
+      if (src.includes(_CR_LISTEN))  return 'function addListener() { [native code] }';
+      if (src.includes(_CR_POST))    return 'function postMessage() { [native code] }';
 
       return src;
     },
