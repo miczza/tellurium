@@ -66,17 +66,21 @@ JS_SANNYSOFT = """
 JS_CREEPJS = """
 (() => {
     const result = {
-        trust_score: null, lies_detected: 0,
-        headless_pct: null, stealth_pct: null,
+        lies_detected: 0,
+        headless_pct: null, like_headless_pct: null, stealth_pct: null,
         version: { source: 'unknown', value: null }
     };
     const bodyText = document.body.innerText;
+    // CreepJS emits "<n>% headless: <hash>" and "<n>% like headless: <hash>".
+    // The two are disjoint: \\s*headless requires whitespace-only between %
+    // and headless, so 'like' (non-whitespace) prevents the headless regex
+    // from matching the like-headless line.
     const hm = bodyText.match(/(\\d+)%\\s*headless/i);
     if (hm) result.headless_pct = parseInt(hm[1]);
+    const lhm = bodyText.match(/(\\d+)%\\s*like\\s*headless/i);
+    if (lhm) result.like_headless_pct = parseInt(lhm[1]);
     const sm = bodyText.match(/(\\d+)%\\s*stealth/i);
     if (sm) result.stealth_pct = parseInt(sm[1]);
-    const tm = bodyText.match(/trust[:\\s]*?(\\d+)%/i);
-    if (tm) result.trust_score = parseInt(tm[1]);
     const lm = bodyText.match(/lies\\s*\\((\\d+)\\)/i);
     if (lm) result.lies_detected = parseInt(lm[1]);
     if (result.lies_detected === 0) {
@@ -590,11 +594,11 @@ def print_report(all_results: dict, chrome_path: str) -> None:
         if r.get("status") == "error":
             print(f"  {fw:<26} ERROR: {r.get('error', 'unknown')[:60]}")
             continue
-        trust = r.get("trust_score", "?")
         headless = r.get("headless_pct", "?")
+        like_headless = r.get("like_headless_pct", "?")
         stealth = r.get("stealth_pct", "?")
         lies = r.get("lies_detected", "?")
-        print(f"  {fw:<26} trust={trust}% headless={headless}% stealth={stealth}% lies={lies}")
+        print(f"  {fw:<26} headless={headless}% like_headless={like_headless}% stealth={stealth}% lies={lies}")
 
     # Canvas
     print("\n--- BrowserLeaks Canvas ---")
