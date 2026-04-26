@@ -31,7 +31,7 @@
   const _CR_PREFIX = '__tellurium' + '_chrome_';
   const _CR_CONNECT = _CR_PREFIX + 'connect__';
   const _CR_SEND    = _CR_PREFIX + 'sendMessage__';
-  const _CR_LISTEN  = _CR_PREFIX + 'addListener__';
+  const _CR_ADD_LISTENER = _CR_PREFIX + 'addListener__';
   const _CR_POST    = _CR_PREFIX + 'postMessage__';
 
   // Capture reference to the realm's navigator for the Illegal invocation check
@@ -101,7 +101,7 @@
       // source) so fakeToString itself doesn't false-match.
       if (src.includes(_CR_CONNECT)) return 'function connect() { [native code] }';
       if (src.includes(_CR_SEND))    return 'function sendMessage() { [native code] }';
-      if (src.includes(_CR_LISTEN))  return 'function addListener() { [native code] }';
+      if (src.includes(_CR_ADD_LISTENER)) return 'function addListener() { [native code] }';
       if (src.includes(_CR_POST))    return 'function postMessage() { [native code] }';
 
       return src;
