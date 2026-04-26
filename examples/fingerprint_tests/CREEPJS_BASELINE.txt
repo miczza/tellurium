@@ -2,4 +2,9 @@
 # Source strategy: script-src
 # URL: https://abrahamjuliot.github.io/creepjs/
 # Update this file when intentionally validating against a new bundle.
+#
+# Limitation: upstream serves a stable URL with no version query string or
+# hashed filename. Equality against this baseline catches URL changes only,
+# not bundle content drift behind the same URL. For content drift checks,
+# pull https://abrahamjuliot.github.io/creepjs/creep.js directly and diff.
 https://abrahamjuliot.github.io/creepjs/creep.js

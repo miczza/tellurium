@@ -83,11 +83,14 @@
       if (typeof src !== 'string') return src;
 
       // Cross-realm fakeToString self-match. Each realm's fakeToString source
-      // contains every native-shape return-value literal; matching any of
-      // them identifies a peer fakeToString from another realm. This branch
-      // MUST run before the marker checks below because iframe fakeToString
-      // sources contain joined marker literals as the arguments to their own
-      // includes() calls. Order = correctness here.
+      // contains every native-shape return-value literal as part of its return
+      // statements; matching any of them identifies a peer fakeToString from
+      // another realm. The marker checks below correctly miss on a peer
+      // fakeToString today (the joined marker text never appears in
+      // fakeToString source — only the split-string expressions and variable
+      // references do), so the order here is defensive rather than strictly
+      // required. Keeping self-match first short-circuits any future case
+      // where a peer's source happens to contain marker text.
       if (src.includes("'function get webdriver() { [native code] }'") ||
           src.includes("'function connect() { [native code] }'") ||
           src.includes("'function sendMessage() { [native code] }'") ||
