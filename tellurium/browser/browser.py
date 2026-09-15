@@ -25,7 +25,7 @@ from tellurium.browser.proxy import ProxyForwarder, parse_proxy_url
 from tellurium.browser.tab import Tab
 from tellurium.cdp.transport import create_transport
 from tellurium.cdp.transport._session import SessionRouter
-from tellurium.stealth._grease import parse_grease_brands
+from tellurium.stealth._grease import parse_grease_brands, parse_product_version
 from tellurium.stealth._webrtc import resolve_webrtc_ip
 
 logger = logging.getLogger("tellurium")
@@ -393,6 +393,12 @@ class Browser:
             raw_brands = version_info.get("userAgentData", {}).get("brands") or []
             # Build a single replace() call for both GREASE and webrtc fields
             replace_kwargs: dict = {}
+            # Align UA / Client Hints with the version the binary really has
+            # ("Chrome/153.0.8010.36", "HeadlessChrome/..."): the profile's
+            # default browser_version is only a fallback.
+            real_version = parse_product_version(version_info.get("product", ""))
+            if real_version and real_version != stealth_profile.browser_version:
+                stealth_profile = stealth_profile.with_browser_version(real_version)
             if raw_brands:
                 g_brand, g_version = parse_grease_brands(raw_brands)
                 replace_kwargs["grease_brand"] = g_brand
@@ -401,6 +407,7 @@ class Browser:
                 replace_kwargs["webrtc_public_ip"] = resolved_webrtc_ip
             if replace_kwargs:
                 stealth_profile = dataclasses.replace(stealth_profile, **replace_kwargs)
+            if stealth_profile is not self._stealth_profile:
                 stealth_engine.update_profile(stealth_profile)
                 self._stealth_profile = stealth_profile
             # else: leave profile.grease_brand = None → engine falls back to "Not_A Brand"/"24"

@@ -305,6 +305,25 @@ class StealthProfile:
     # Factory methods
     # ------------------------------------------------------------------
 
+    def with_browser_version(self, browser_version: str) -> StealthProfile:
+        """Return a copy whose UA and Client Hints reflect *browser_version*.
+
+        Used to align the profile with the version reported by the launched
+        binary (``Browser.getVersion``): a UA claiming an older Chrome than the
+        one actually running is a soft detection signal, and Client Hints'
+        full-version list must match the UA major.
+        """
+        import dataclasses as _dc
+
+        major = browser_version.split(".")[0]
+        return _dc.replace(
+            self,
+            browser_version=browser_version,
+            user_agent=_UA_BUILDERS[self.target_os](browser_version),
+            ch_ua=_CH_UA_BRAND_TMPL.format(major=major),
+            ch_ua_full_version_list=_CH_UA_FULL_VER_TMPL.format(full=browser_version),
+        )
+
     @classmethod
     def from_seed(
         cls,

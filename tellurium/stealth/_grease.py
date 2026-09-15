@@ -33,3 +33,18 @@ def parse_grease_brands(brands: list[dict]) -> tuple[str, str]:
         if brand and brand not in _KNOWN_PRODUCT_BRANDS:
             return brand, str(entry.get("version", _FALLBACK_VERSION))
     return _FALLBACK_BRAND, _FALLBACK_VERSION
+
+
+def parse_product_version(product: str) -> str | None:
+    """Extract the full version from a ``Browser.getVersion`` product string.
+
+    ``"Chrome/153.0.8010.36"`` and ``"HeadlessChrome/153.0.8010.36"`` both
+    yield ``"153.0.8010.36"``; anything else yields ``None``.
+    """
+    if not product or "/" not in product:
+        return None
+    version = product.rsplit("/", 1)[1].strip()
+    parts = version.split(".")
+    if len(parts) == 4 and all(p.isdigit() for p in parts):
+        return version
+    return None
