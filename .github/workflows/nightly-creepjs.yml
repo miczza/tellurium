@@ -1,0 +1,54 @@
+name: Nightly CreepJS parity
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Mondays 04:17 UTC — weekly, off the hour to dodge scheduler congestion.
+    - cron: "17 4 * * 1"
+
+concurrency:
+  group: nightly-creepjs
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    name: CreepJS stock-runtime parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Network-dependent, third-party-site gate: informational only, never blocking.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Chrome (stable)
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+          install-dependencies: true
+      - name: Install xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[geoip,dev]"
+      - name: Run parity test
+        continue-on-error: true
+        env:
+          STOCK_CHROME: ${{ steps.setup-chrome.outputs.chrome-path || '/usr/bin/google-chrome-stable' }}
+        run: xvfb-run -a pytest examples/fingerprint_tests/test_stock_runtime_parity.py -q
+      - name: Upload comparative results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: creepjs-comparative-results
+          path: |
+            examples/fingerprint_tests/comparative_results.json
+          if-no-files-found: warn
