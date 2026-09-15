@@ -17,6 +17,46 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `TELLURIUM_CACHE_DIR` environment override for the browser cache.
 - `tellurium stealth-test`: fixed (`async with` on a coroutine), adds toString
   shape invariants, `--full` visits sannysoft/browserscan, `--headed`.
+- OOPIF and worker stealth patching: `Target.setAutoAttach` with
+  `waitForDebuggerOnStart=True`, wired on **every page session** (a
+  browser-root-only auto-attach never fires for a page's OOPIFs or dedicated
+  workers), `Page.enable` on OOPIF sessions so scripts run at document-start,
+  and `Runtime.runIfWaitingForDebugger` only after the patches land — an
+  anti-bot inside a cross-origin frame never sees an unpatched value.
+- `tellurium/stealth/scripts/worker_navigator.js`: worker targets get
+  `hardwareConcurrency` parity with the main world. `navigator.webdriver` is
+  deliberately left undefined in workers — real Chrome's `WorkerNavigator` has
+  no such property, so defining one would be a new fingerprint (closes the
+  T7.6 F6 candidate by deciding against it).
+- `Tab.window_offset()` and P0.4 screen parity: Chrome already derives
+  `screenX`/`screenY` from the window origin, so tellurium only repairs the
+  degenerate placement (window at `(0,0)` without a frame, where
+  `screenX === clientX`). All mouse dispatch now goes through
+  `Tab._dispatch_mouse()`; no-op on backends advertising `native_cdp_fix`.
+- `Browser.launch(stealth_idle=True)`: `Tab.wait()` emits low-amplitude mouse
+  micro-movements via `IdleSimulator` instead of a perfectly still cursor.
+- `ActionTimer` wired into `human=True` click / type / scroll / navigate, with
+  a log-normal fallback (median ~270 ms, capped at 2 s) for action pairs that
+  `ACTION_TRANSITION_DELAYS` does not list.
+- `tellurium download-geoip`: installs DB-IP Country Lite (CC BY 4.0, no
+  account) or MaxMind GeoLite2-Country with `--maxmind-license-key` into
+  `~/.tellurium/geolite2/`. `resolve_geoip()` also searches
+  `$TELLURIUM_GEOIP_DB` and falls back to a one-shot online IP→country lookup
+  when no database is installed (a bundled database is not licensable).
+  `tellurium info` reports the database in use.
+- `tests/integration/test_patched_e2e.py`: patched-backend end-to-end coverage
+  (skipped unless a `chromium-telluride` binary is installed in the cache or
+  via `TELLURIUM_PATCHED_EXECUTABLE`) — `--fingerprint` flag, random-seed
+  default, per-seed canvas determinism, `stealth=True` on the native backend.
+- CI/tooling: `ci.yml` activated (ruff lint non-blocking, unit matrix
+  3.10–3.13, integration + stealth under xvfb with Chrome stable, build +
+  `twine check`), `release.yml` (tag `v*` → build → PyPI trusted publishing →
+  GitHub Release with the CHANGELOG section as body), `nightly-creepjs.yml`
+  (weekly parity gate, results uploaded as an artifact), `[tool.ruff]` in
+  `pyproject.toml`, and a `Makefile` (`test`, `lint`, `fmt`, `build`,
+  `parity`, `clean`).
+- `docs/RELEASE.md`: end-to-end publishing procedure for tellurium and for
+  `chromium-telluride`.
 
 ### Changed
 
@@ -30,11 +70,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   given: the fork requires it) and no longer emits `--fingerprint-timezone` /
   `--fingerprint-locale`, which no chromium-telluride patch implements.
 - Update-check and release URLs point at `github.com/miczza/chromium-telluride`.
+- Repo housekeeping: architecture specs migrated into `docs/superpowers/specs/architecture/`,
+  build noise untracked, the one-off `diagnose_*` fingerprint scripts archived
+  out of `examples/fingerprint_tests/`.
 
 ### Fixed
 
 - CHANGELOG/README claimed 3 residual CreepJS lies on the patched binary; the
   2026-04-27 triage measured `totalLies = 0`.
+- Accept-Language: `Emulation.setUserAgentOverride.acceptLanguage` leaked the
+  raw q-value string into `navigator.languages` (`["en-US", "en;q=0.9"]`),
+  produced a malformed header (`"en-US, en;q=0.9;q=0.9"`) and a window/worker
+  mismatch — a value real Chrome never emits. Chrome now derives both from
+  `--accept-lang=<profile languages>`: header `en-US,en;q=0.9`,
+  `navigator.languages` `["en-US","en"]` in window and workers. Measured on
+  Chrome 153; CreepJS gate re-run 8/8, lies 0.
+- `Tab.xpath()`: dropped an unused root id, always calls
+  `DOM.discardSearchResults`, uses `get_running_loop()` in callbacks, and
+  removed a no-op `native_client_hints` branch.
+- Stealth documentation in `README.md` described the pre-T7/T7.5 posture
+  (extension-only delivery, WebGL spoofing, `toString` masking); realigned
+  with the shipped engine.
 
 ## [0.1.0] - 2026-04-26
 
@@ -92,17 +148,21 @@ Stock-Chrome path is fully functional; patched-binary path is experimental
 
 ### Deferred (future)
 
-- Auto-download tooling for patched binary (`update-browser`, `verify-browser --reinstall`)
-- T7 Honeypot + robots.txt detection
-- F6 worker-scope webdriver masking
+- (closed in Unreleased) Auto-download tooling for the patched binary
+  (`download-browser --browser patched`, `update-browser`,
+  `verify-browser --reinstall`); F6 worker-scope masking — resolved by
+  patching `hardwareConcurrency` only and deliberately *not* defining
+  `navigator.webdriver` in workers; periodic baseline re-validation cadence —
+  now the weekly `nightly-creepjs.yml` parity gate.
+- T8 Honeypot + robots.txt detection (renamed from "T7" on 2026-09-15 to avoid
+  colliding with the T7 runtime stealth layer)
 - F7 dynamic same-origin iframe injection
 - `_NATIVE_SHAPES` array refactor (T7.6 reviewer note)
 - CreepJS bundle content hashing for drift detection (T7.6 reviewer note)
-- Periodic baseline re-validation cadence
-- Multi-OS CI matrix (macOS, Windows)
+- Multi-OS CI matrix (macOS, Windows) — CI is Linux-only
 
 ### Notes
 
-- CI workflow `.github/workflows/ci.yml` exists in draft state, not yet active
-  (no GitHub remote at v0.1 release time)
+- CI workflow `.github/workflows/ci.yml` existed in draft state at v0.1 release
+  time (no GitHub remote); activated in Unreleased
 - Pre-migration history of C-series specs (chromium-telluride patches) reachable from `tellurium@ace0afa`

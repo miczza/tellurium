@@ -107,6 +107,10 @@ browser = await Browser.launch(
     executable="/path/to/chrome",    # Explicit binary path
     user_data_dir="/path/to/profile", # Persistent profile
     args=["--disable-gpu"],          # Extra Chrome flags
+    timezone="Europe/Rome",          # Manual timezone override
+    languages=["it-IT", "it", "en"], # Manual navigator.languages override
+    viewport=(1280, 720),            # Window size
+    mouse_profile="careful",         # Wind Mouse personality
 )
 ```
 
@@ -120,6 +124,37 @@ browser = await Browser.launch(
 | `executable` | `str \| None` | `None` | Explicit Chrome binary path |
 | `user_data_dir` | `str \| None` | `None` | Profile directory (temp if None) |
 | `args` | `list[str] \| None` | `None` | Extra Chrome CLI flags |
+| `timezone` | `str \| None` | `None` | IANA timezone override (wins over GeoIP) |
+| `languages` | `list[str] \| None` | `None` | `navigator.languages` override (wins over GeoIP) |
+| `viewport` | `tuple[int, int] \| None` | `None` | Window size as `(width, height)` |
+| `mouse_profile` | `str` | `"normal"` | `"careful"`, `"normal"` or `"hasty"` |
+
+#### Manual overrides
+
+`timezone` and `languages` always take precedence over the GeoIP result and
+over the seeded stealth profile, and they work with `stealth=False` too:
+
+```python
+browser = await Browser.launch(
+    proxy="socks5://de-exit:1080",
+    stealth=True,
+    timezone="Europe/Rome",           # instead of the proxy's Berlin timezone
+    languages=["it-IT", "it", "en"],  # -> Accept-Language: it-IT,it;q=0.9,en;q=0.8
+)
+```
+
+Languages are passed to Chrome as `--accept-lang`, so the browser derives both
+`navigator.languages` and the `Accept-Language` header natively — no CDP
+override, no fingerprint mismatch.
+
+`viewport` is applied as `--window-size` at launch (plus `Browser.setWindowBounds`
+for a headed window). `Emulation.setDeviceMetricsOverride` is deliberately not
+used: it desynchronises `window.outerWidth` / `screen` from the emulated
+viewport, which is itself a detection signal.
+
+`mouse_profile` selects the Wind Mouse personality used by every `human=True`
+mouse movement: `"careful"` (slow, precise), `"normal"` (default), `"hasty"`
+(fast, overshooting).
 
 #### Context manager
 
@@ -226,20 +261,31 @@ await tab.wait_for_url("*/success*", timeout=10)
 el = await tab.select("#login-button")
 el = await tab.select("div.card:first-child", timeout=5)
 
-# All matching elements
+# All matching elements (returns immediately, may be empty)
 items = await tab.select_all("ul.results > li")
+items = await tab.select_all("ul.results > li", timeout=10)  # wait for >= 1 match
 
 # Find by visible text
 el = await tab.find("Sign In")
 el = await tab.find("Sign In", exact=True)  # Exact match
 all_links = await tab.find_all("Read more")
+all_links = await tab.find_all("Read more", timeout=10)  # wait for >= 1 match
 
 # XPath
 el = await tab.xpath("//div[@class='price']")
+prices = await tab.xpath_all("//div[@class='price']")
+prices = await tab.xpath_all("//div[@class='price']", timeout=10)
 
-# Wait for element
+# Wait for element state: "visible" (default), "hidden", "attached", "detached"
 el = await tab.wait_for("#dynamic-content", timeout=30)
+el = await tab.wait_for("#modal", state="attached")
+await tab.wait_for("#spinner", state="hidden", timeout=15)   # returns None
+await tab.wait_for("#toast", state="detached")               # returns None
 ```
+
+`select_all`, `find_all` and `xpath_all` default to `timeout=0` (no waiting) and
+return an empty list instead of raising; `select`, `find` and `wait_for` raise
+`TimeoutError`.
 
 #### JavaScript
 
@@ -270,13 +316,17 @@ await tab.keyboard_press("Enter")
 await tab.keyboard_press("Tab")
 await tab.keyboard_type("Hello world")
 await tab.keyboard_type("Hello world", human=True)  # Realistic timing
+await tab.keyboard_type("Hello world", human=True, typos=True)  # + typo/backspace
 
 # Scroll
 await tab.scroll(delta_y=500)                  # Instant scroll
 await tab.scroll(delta_y=500, human=True)      # Natural scroll with inertia
 ```
 
-#### Screenshots
+The Wind Mouse personality used by `human=True` comes from
+`Browser.launch(mouse_profile=...)`.
+
+#### Screenshots and PDF
 
 ```python
 # Get PNG bytes
@@ -286,9 +336,34 @@ data = await tab.screenshot()
 await tab.screenshot(path="page.png")
 await tab.screenshot(path="full.png", full_page=True)
 
+# Lossy formats accept a quality (ignored for PNG)
+await tab.screenshot(path="page.jpg", format="jpeg", quality=70)
+
+# PDF (headless only — Page.printToPDF is not implemented in headed Chrome)
+pdf_bytes = await tab.pdf()
+await tab.pdf("page.pdf", landscape=True, paperWidth=8.5, printBackground=False)
+
 # Get full HTML
 html = await tab.content()
 ```
+
+Extra keyword arguments to `tab.pdf()` are forwarded verbatim as
+[`Page.printToPDF`](https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-printToPDF)
+parameters; `printBackground=True` is the default.
+
+#### Window
+
+```python
+await tab.set_viewport(1280, 720)   # Browser.setWindowBounds — no CDP emulation
+await tab.maximize()
+await tab.minimize()
+await tab.bring_to_front()          # Page.bringToFront
+```
+
+`set_viewport` resizes the real window, so `innerWidth`, `outerWidth` and
+`screenX` stay consistent. If `Browser.setWindowBounds` is unavailable it falls
+back to `Emulation.setDeviceMetricsOverride` and logs a warning — that command
+is a detectable signal, so prefer `Browser.launch(viewport=(w, h))`.
 
 #### Network capture
 
@@ -325,8 +400,14 @@ await tab.capture_stop()
 
 ```python
 await tab.wait(2)            # Pause 2 seconds
-await tab.wait_for_url("*/success*", timeout=10)
+await tab.wait_for_url("*/success*", timeout=10)   # glob pattern
+await tab.wait_for_url("/success")                 # substring (no * or ?)
+await tab.wait_for_navigation(url="*/dashboard*")
 ```
+
+`wait_for_url` and `wait_for_navigation` treat a pattern containing `*` or `?`
+as a glob (`fnmatch`, matched against the whole URL) and anything else as a
+substring.
 
 #### Raw CDP
 
@@ -344,7 +425,9 @@ Represents a DOM element. Obtained from `tab.select()`, `tab.find()`, etc.
 #### Properties
 
 ```python
-text = await el.text()             # Visible text content
+text = await el.text()             # Own text: direct child text nodes, trimmed
+text = await el.own_text()         # Alias of text()
+text = await el.text_all()         # Full textContent of the subtree
 tag = await el.tag()               # Tag name (lowercase): "div", "a", "input"
 html = await el.html()             # Outer HTML
 href = await el.attr("href")       # Single attribute
@@ -354,6 +437,17 @@ box = await el.bounding_box()      # {x, y, width, height}
 visible = await el.is_visible()
 enabled = await el.is_enabled()
 checked = await el.is_checked()
+```
+
+`text()` returns only the element's *own* text, `text_all()` the whole subtree.
+For `<p>Price <b>9.99</b></p>` that is `"Price"` vs `"Price 9.99"`; for a leaf
+element such as `<h1>Hello</h1>` both return `"Hello"`.
+
+#### Tree navigation
+
+```python
+kids = await el.children()         # Direct element children
+parent = await el.parent()         # Parent element, or None for the root
 ```
 
 #### Interaction
@@ -367,6 +461,7 @@ await el.click(human=True)         # Wind Mouse trajectory + CDP click
 await el.type("hello@test.com")
 await el.type("hello@test.com", human=True)   # Realistic keystroke timing
 await el.type("new text", clear=True)          # Clear field first
+await el.type("hello world", human=True, wpm=70, typos=True)  # Opt-in typos
 
 # Other interactions
 await el.hover()
@@ -383,7 +478,15 @@ await el.drag_to(target_element, steps=10)
 ```python
 # Find elements relative to this one
 child = await el.select(".child-class")
-children = await el.select_all("li")
+items = await el.select_all("li")
+
+# By visible text, scoped to this element's descendants
+link = await el.find("Buy now")                # raises LookupError if missing
+links = await el.find_all("Buy now", exact=True)
+
+# XPath with this element as the context node
+price = await el.xpath(".//span[@class='price']")   # None if no match
+prices = await el.xpath_all(".//span[@class='price']")
 ```
 
 #### Custom JS
@@ -593,7 +696,7 @@ async def record_session():
         await tab.wait(2)
 
         # Export the recorded session
-        session = recorder.export()
+        session = await recorder.export()
         session.save("api_recording.json")
         print(f"Recorded {len(session.requests)} API calls")
         await recorder.stop()
@@ -738,9 +841,9 @@ This avoids using `Fetch.enable` via CDP (which would add a detectable surface).
 When `stealth=True` and a proxy is configured, Tellurium determines the correct timezone, locale, and language by:
 
 1. **Making an HTTP request through the proxy** to an IP-echo service (`api.ipify.org`, `checkip.amazonaws.com`, etc.) to discover the **real exit IP** — not the proxy hostname
-2. **Resolving the exit IP** via the GeoLite2-Country database to get the country code
+2. **Resolving the exit IP** via a local country database (`GeoLite2-Country` or DB-IP Country Lite, searched in `$TELLURIUM_GEOIP_DB` then `~/.tellurium/geolite2/`) to get the country code
 3. **Mapping the country** to timezone and languages (42 countries covered)
-4. **Applying the result** to the stealth profile: `Emulation.setTimezoneOverride`, `Emulation.setLocaleOverride`, `Accept-Language` header, keyboard layout
+4. **Applying the result** to the stealth profile: `Emulation.setTimezoneOverride`, `Emulation.setLocaleOverride`, `--accept-lang` (which drives both the `Accept-Language` header and `navigator.languages`), keyboard layout
 
 This ensures that a German proxy produces German timezone/locale regardless of where the proxy server's hostname resolves to.
 
@@ -753,14 +856,15 @@ Browser.launch(stealth=True, proxy="socks5://user:pass@de:1080")
     |-- timezone="Europe/Berlin", locale="de-DE", languages=["de-DE", "en"]
     |-- CDP: Emulation.setTimezoneOverride("Europe/Berlin")
     |-- CDP: Emulation.setLocaleOverride("de-DE")
-    |-- Extension: keyboard_layout.js with LOCALE="de-DE"
+    |-- Chrome flag: --accept-lang=de-DE,en
+    |-- Stealth script: keyboard_layout.js with LOCALE="de-DE"
 ```
 
 **Fallback behavior:**
 - If `tellurium[geoip]` is not installed: logs a warning, uses OS timezone/locale
 - If the IP-echo services are unreachable: falls back to DNS resolution of the proxy hostname
 - If no local database is installed: one online IP-to-country lookup (warning logged); run `tellurium download-geoip` for offline resolution
-- Manual override always takes precedence: `Browser.launch(timezone="Europe/Berlin", languages=["de-DE"])`
+- Manual overrides win over auto-detection: `Browser.launch(timezone="Europe/Berlin", languages=["de-DE", "en"])` replaces the GeoIP/OS values (timezone via CDP, languages via `--accept-lang`). Point `TELLURIUM_GEOIP_DB` at a specific database to control which one is consulted
 
 **SOCKS5 without auth (no forwarder):** `urllib` does not support SOCKS natively, so the exit IP cannot be determined via HTTP. Falls back to DNS resolution of the proxy hostname. For best results, use proxies with auth or HTTP proxies.
 
@@ -780,24 +884,92 @@ Browser.launch(stealth=True, proxy="socks5://user:pass@de:1080")
 
 When `stealth=True`, Tellurium automatically:
 
-- Communicates via pipe transport (no detectable WebSocket port)
+- Communicates via pipe transport (`--remote-debugging-pipe`, no observable
+  WebSocket port)
 - Never calls `Runtime.enable` (prevents console-based detection)
-- Injects stealth patches via a real Chrome extension (no detectable `Page.addScriptToEvaluateOnNewDocument`)
-- Removes `navigator.webdriver`
-- Fakes `navigator.plugins` (5 PDF viewers)
-- Spoofs WebGL vendor/renderer from a real GPU database
-- Overrides `hardwareConcurrency` and `deviceMemory` on the navigator prototype (propagates to Workers)
-- Masks overridden functions to appear native (`Function.prototype.toString`)
-- Spoofs keyboard layout to match locale
-- Prevents WebRTC IP leaks (when using a proxy)
-- Fixes headless-mode signals (outer dimensions, notifications, connection, voices, media devices)
-- Sets User-Agent and Client Hints consistently (Sec-CH-UA, platform, architecture)
+- Delivers its stealth patches as a real MV3 Chrome extension when the binary
+  accepts `--load-extension` (Chrome for Testing, plain Chromium) and via
+  `Page.addScriptToEvaluateOnNewDocument` otherwise — Chrome branded >= 137
+  silently ignores `--load-extension`, so CDP delivery is the path on a stock
+  Google Chrome install
+- Removes `navigator.webdriver` (`--remote-debugging-pipe` sets it to `true`
+  natively, unlike `--remote-debugging-port`)
+- Restores `window.chrome` (`runtime`, `loadTimes`, `csi`)
+- Fakes `navigator.plugins` (5 PDF viewers, real `PluginArray` shape)
+- Spoofs the keyboard layout to match the locale
+- Prevents WebRTC IP leaks (only when a proxy is configured or `webrtc_ip=` is set)
+- Fixes headless-mode signals when `headless=True` (outer dimensions,
+  notification permission, connection, voices, media devices)
+- Sets User-Agent, platform and Client Hints consistently through
+  `Emulation.setUserAgentOverride`, `hardwareConcurrency` through
+  `Emulation.setHardwareConcurrencyOverride`, and timezone/locale through
+  `Emulation.setTimezoneOverride` / `Emulation.setLocaleOverride`
+- Sets the `Accept-Language` header **and** `navigator.languages` natively via
+  `--accept-lang`. Overriding `acceptLanguage` through CDP leaks the raw
+  q-value string into `navigator.languages` and emits a malformed header, so
+  Tellurium passes an empty `acceptLanguage` and lets Chrome derive both
+- Freezes every cross-origin iframe and worker at creation
+  (`Target.setAutoAttach` with `waitForDebuggerOnStart`), patches it, and only
+  then resumes it — an anti-bot running inside an OOPIF never observes an
+  unpatched value
+- Keeps `screenX`/`screenY` plausible: Chrome already derives them from the
+  window origin, so Tellurium only repairs the degenerate placement where the
+  window sits at `(0, 0)` with no frame and `screenX === clientX`
+
+Core scripts on the stock backend: `webdriver.js`, `chrome_runtime.js`,
+`plugins.js`, `keyboard_layout.js`; plus `webrtc.js` (with a proxy),
+`headless_*.js` (headless only) and `worker_navigator.js` (worker targets).
+On the patched backend all of these are skipped — the binary does it in C++.
+
+### What is deliberately *not* spoofed on stock Chrome
+
+WebGL vendor/renderer (`webgl.js`), `Function.prototype.toString` masking
+(`tostring_mask.js`) and the `Navigator.prototype` overrides
+(`navigator_proto.js`) were **removed** in T7.5. Each one is a CreepJS
+`stealth` signal *regardless of the value it returns*: a spoofed NVIDIA
+renderer on an Intel machine is a cross-check failure, and a `toString` Proxy
+is a classifier flag on its own. `deviceMemory` is passthrough for the same
+reason. Real GPU and canvas entropy are only rotated by the patched binary.
+
+`navigator.webdriver` is likewise **not** defined inside workers:
+`WorkerNavigator` has no such property in real Chrome, so adding one would be a
+new fingerprint rather than a fix. Only `hardwareConcurrency` is aligned with
+the main world.
+
+### Human behaviour
 
 With `human=True` on individual actions:
 
-- Mouse uses Wind Mouse algorithm with Sigma-Lognormal velocity profile
-- Typing uses realistic keystroke dynamics (digraph effects, micro-pauses, dwell time)
+- Mouse uses the Wind Mouse algorithm with a Sigma-Lognormal velocity profile
+- Typing uses realistic keystroke dynamics (digraph effects, micro-pauses,
+  dwell time, key rollover)
 - Scrolling uses CDP wheel events with natural inertia
+- An `ActionTimer` inserts an inter-action pause before every human click,
+  type and scroll, drawn from a table of measured transition delays with a
+  log-normal fallback for the pairs the table does not cover
+
+`Browser.launch(stealth_idle=True)` additionally makes `Tab.wait()` emit
+occasional low-amplitude mouse micro-movements instead of leaving the cursor
+perfectly still for the whole wait.
+
+### Measured detection scores
+
+Stock Chrome, headed, `stealth=True`
+(`examples/fingerprint_tests/comparative_results.json`):
+
+| Check | Result |
+|---|---|
+| CreepJS `lies` | 0 |
+| CreepJS `headless` | 0% |
+| CreepJS `stealth` | 0% |
+| CreepJS `like_headless` | 38% — environmental, see Known limitations |
+| bot.sannysoft.com | 31 passed, **0 failed**, 0 warnings |
+| browserscan.net | no bot detected |
+| `navigator.webdriver` | `false` |
+| Comparative suite | **8/8** — parity with the nodriver baseline |
+
+Reproduce with `make parity` (needs network and a display); the same gate runs
+weekly in `.github/workflows/nightly-creepjs.yml`.
 
 ### Deterministic fingerprints
 
@@ -817,13 +989,59 @@ Use `user_data_dir` with a fixed `seed` for persistent identity across sessions.
 ## CLI
 
 ```bash
-tellurium info                          # Show installation info
-tellurium download-browser              # Download Chrome for Testing
-tellurium download-browser --browser patched  # Download patched Chromium
-tellurium update-cdp                    # Regenerate CDP bindings
-tellurium stealth-test                  # Quick stealth verification
-tellurium stealth-test --full           # Full stealth test suite
+tellurium info                                              # installation info
+tellurium update-cdp [--chrome-version VERSION]             # regenerate CDP bindings
+tellurium download-browser [--browser {stock,patched}] [--version VERSION]
+tellurium download-geoip [--maxmind-license-key KEY]
+tellurium stealth-test [--browser {stock,patched}] [--full] [--headed]
+tellurium list-browsers
+tellurium update-browser [--check] [--security-only]
+tellurium prune-browsers [--keep N]
+tellurium verify-browser [--reinstall]
 ```
+
+| Command | What it does |
+|---|---|
+| `update-cdp` | Regenerate the CDP bindings in `tellurium/cdp/domains/` from the upstream protocol. `--chrome-version` targets a specific Chrome release. |
+| `download-browser` | `--browser stock` (default) fetches Chrome for Testing; `--browser patched` installs a `chromium-telluride` release. `--version` pins a Chromium version, otherwise the latest release is used. |
+| `download-geoip` | Install a country MMDB into `~/.tellurium/geolite2/`. Without a key it fetches DB-IP Country Lite (CC BY 4.0, no account needed); `--maxmind-license-key` uses MaxMind GeoLite2-Country instead. |
+| `stealth-test` | Offline stealth assertions (webdriver, `window.chrome`, plugins, `toString` shape). `--full` also visits sannysoft/browserscan (needs network), `--headed` runs with a visible window. |
+| `info` | Tellurium version, Python version, detected Chrome, cache directory, installed patched versions, GeoIP database in use. |
+| `list-browsers` | Installed patched Chromium versions in the cache, marking the one `current` points at. |
+| `update-browser` | Check the `chromium-telluride` releases and install a newer one. `--check` only reports, `--security-only` installs security releases only. |
+| `prune-browsers` | Delete old cached versions, keeping the `--keep N` most recent. The version behind `current` is never pruned. |
+| `verify-browser` | Re-hash the installed binary and compare with `binary_sha256` in `MANIFEST.json`. `--reinstall` re-downloads when the check fails. |
+
+---
+
+## Development
+
+```bash
+make test        # unit + integration + stealth (integration/stealth use xvfb-run when no DISPLAY)
+make test-unit   # fast, offline, no browser
+make lint        # ruff check + ruff format --check (same gate as CI)
+make fmt         # ruff check --fix + ruff format
+make build       # uv build + twine check --strict into dist/
+make parity      # CreepJS stock-runtime parity gate (NEEDS NETWORK, not part of CI)
+make clean
+```
+
+Test layout:
+
+| Path | Needs |
+|---|---|
+| `tests/unit/` | nothing — offline, no browser |
+| `tests/integration/` | headless Chrome + local HTTP servers (~47 s) |
+| `tests/stealth/` | a `DISPLAY` (offline otherwise, ~15 s) |
+| `examples/fingerprint_tests/test_stock_runtime_parity.py` | network + display; the `make parity` gate, deliberately outside CI |
+
+`tests/integration/test_patched_e2e.py` is skipped unless a `chromium-telluride`
+binary is installed (in the cache or via `TELLURIUM_PATCHED_EXECUTABLE`).
+
+CI lives in `.github/workflows/` (`ci.yml`, `release.yml`,
+`nightly-creepjs.yml`); see `.github/workflows/README.md` for what each job
+does. The publishing procedure for both tellurium and `chromium-telluride` is
+in [`docs/RELEASE.md`](docs/RELEASE.md).
 
 ---
 
@@ -976,17 +1194,52 @@ Notes:
 
 ### `like_headless ~38%` on CreepJS
 
-CreepJS reports `like_headless ≈ 38%` when tellurium runs against a
-headless container. This is an **environmental** signal — display server,
-GPU profile, audio device presence — not a behavioral lie. Real headed
-sessions (e.g. `DISPLAY=:0` with Xorg + GPU) typically score lower.
+CreepJS reports `like_headless ~= 38%` even when the runtime posture is clean
+(`headless = 0%`, `stealth = 0%`, `lies = 0`). This is an **environmental**
+signal — display server, GPU profile, audio device presence, font set — not a
+behavioural lie, and it is the only residual CreepJS bucket that is non-zero.
+Real headed sessions (e.g. `DISPLAY=:0` with Xorg + a real GPU) score lower;
+containers and virtual displays score higher. Documented as accepted state:
+tellurium still matches the nodriver baseline 8/8 on the comparative suite.
 
-In v0.1 this is documented as accepted state. The runtime stealth posture
-itself reports `headless=0%, lies=0` and matches nodriver 8/8 on CreepJS.
+### Patched binary (`chromium-telluride`)
 
-### Patched binary: CreepJS status
+- CreepJS reports `lies = 0` (`window.Fingerprint.lies.totalLies`; triage in
+  `chromium-telluride/docs/superpowers/notes/2026-04-26-lie3-triage.md`).
+  Residual non-lie signals (`like_headless`, canvas entropy cluster) are
+  tracked in `chromium-telluride/docs/known-issues.md`.
+- The v0.1 release tarball does **not** ship `chrome_sandbox` (the GN target is
+  not in the build graph for the current `BUILD_ARGS.gn`; the manifest records
+  this as `sandbox.chrome_sandbox_bundled = false` /
+  `missing_optional_files: ["chrome_sandbox"]`). Launch with
+  `args=["--no-sandbox"]`, or run on a kernel with unprivileged user
+  namespaces enabled (`user.max_user_namespaces > 0`).
+- Only `linux-x64` is built. `--fingerprint-timezone` and
+  `--fingerprint-locale` are **not** implemented by any patch and are not
+  passed; `supported_flags` in `MANIFEST.json` lists only `--fingerprint`,
+  `--fingerprint-platform` and `--fingerprint-webrtc-ip`.
 
-The patched binary reports `lies = 0` on CreepJS (`window.Fingerprint.lies.totalLies`,
-triage in `chromium-telluride/docs/superpowers/notes/2026-04-26-lie3-triage.md`).
-Residual non-lie signals (`like_headless`, canvas entropy cluster) are tracked in
-`chromium-telluride/docs/known-issues.md`.
+### Platform support
+
+Linux x64 is the only tested platform. A Windows CDP pipe transport exists
+(`tellurium/cdp/transport/_pipe_win.py`) but is **untested**, and there is no
+Windows or macOS job in CI — a multi-OS matrix is planned, not shipped. The
+patched binary is Linux-only.
+
+### WebGPU
+
+WebGPU exposes adapter and limit information that cannot be masked from
+JavaScript without producing a detectable override, so on stock Chrome it is
+left untouched and reports the real GPU. Only a patched binary can rotate it
+coherently; that work is not in v0.1 of `chromium-telluride` either. Disable
+WebGPU at launch (`args=["--disable-features=WebGPU"]`) if the exposure
+matters more than the anomaly of a browser without it.
+
+### Network-layer fingerprints (JA3/JA4/JA4T)
+
+Tellurium operates above the TLS and TCP stacks. The ClientHello and the TCP
+options Chrome emits are the host's and Chrome's own, which is the right
+answer as long as the spoofed OS matches the real one. Forcing a different
+`target_os` in the stealth profile creates a mismatch that JA4T / TCP
+fingerprinting can see (a "Windows" UA arriving with Linux TCP window scaling
+and options ordering). The proxy forwarder does not rewrite TLS.
