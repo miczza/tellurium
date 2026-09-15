@@ -150,9 +150,11 @@ def _find_chrome_candidates() -> list[tuple[str, str]]:
             os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"),
             os.environ.get("LOCALAPPDATA", ""),
         ]
+        # Same priority as the other platforms: Chromium before branded
+        # Chrome, because Chrome >= 137 dropped --load-extension.
         win_apps = [
-            (r"Google\Chrome\Application\chrome.exe", "chrome"),
             (r"Chromium\Application\chrome.exe", "chromium"),
+            (r"Google\Chrome\Application\chrome.exe", "chrome"),
             (r"Microsoft\Edge\Application\msedge.exe", "edge"),
             (r"BraveSoftware\Brave-Browser\Application\brave.exe", "brave"),
         ]
@@ -444,3 +446,225 @@ def launch_chrome_posix(
     os.close(chrome_write_fd)
 
     return process, parent_write_fd, parent_read_fd
+
+
+# ---------------------------------------------------------------------------
+# Windows launch
+# ---------------------------------------------------------------------------
+
+# Flags from the MSVC CRT (internal/ioinit.cpp): a handle entry is only
+# adopted when FOPEN is set; FPIPE tells the CRT the handle is a pipe.
+_CRT_FOPEN = 0x01
+_CRT_FPIPE = 0x08
+
+#: ``INVALID_HANDLE_VALUE`` — the placeholder for an fd slot the child must
+#: resolve itself (the CRT falls back to ``GetStdHandle`` for fds 0/1/2).
+_INVALID_HANDLE_VALUE = -1
+
+
+def build_crt_inherit_block(handles: list[int | None],
+                            handle_size: int = 8) -> bytes:
+    """Encode the MSVC CRT ``STARTUPINFO.lpReserved2`` inheritance block.
+
+    Windows' ``CreateProcess`` can only pass three handles explicitly
+    (stdin/stdout/stderr).  Every other inherited handle reaches the child as a
+    bare HANDLE with no file-descriptor number — but Chrome's
+    ``--remote-debugging-pipe`` reads the pipe through ``_get_osfhandle(3)`` /
+    ``_get_osfhandle(4)``, i.e. it expects *CRT file descriptors* 3 and 4.
+
+    The only mechanism that populates a child's CRT fd table is the
+    undocumented block the MSVC runtime reads from ``lpReserved2`` (the same
+    one libuv/Node write, which is how Puppeteer's pipe transport works on
+    Windows).  Its layout is::
+
+        int   count;               // number of fd slots
+        char  flags[count];        // per-fd CRT flags
+        HANDLE osfhnd[count];      // per-fd OS handle (pointer-sized)
+
+    *handles* is indexed by file descriptor; ``None`` marks an unused slot.
+    *handle_size* is the child's pointer size (8 on win64, 4 on win32).
+    """
+    count = len(handles)
+    flags = bytearray()
+    raw = bytearray()
+    mask = (1 << (handle_size * 8)) - 1
+    for handle in handles:
+        if handle is None:
+            flags.append(0)
+            raw += (_INVALID_HANDLE_VALUE & mask).to_bytes(handle_size, "little")
+        else:
+            flags.append(_CRT_FOPEN | _CRT_FPIPE)
+            raw += (handle & mask).to_bytes(handle_size, "little")
+    return count.to_bytes(4, "little") + bytes(flags) + bytes(raw)
+
+
+def launch_chrome_windows(
+    chrome_path: str,
+    args: list[str],
+) -> tuple[object, int, int]:
+    """Launch Chrome with CDP pipe handles on Windows.
+
+    **Untested on real Windows** — Tellurium's CI and development machines are
+    POSIX only.  The logic is covered by unit tests that fake ``sys.platform``
+    and the Win32 entry points (``tests/unit/test_launcher_windows.py``); the
+    end-to-end behaviour against a real ``chrome.exe`` has never been observed.
+    Treat a failure here as a bug report, not as a supported path.
+
+    Mirrors :func:`launch_chrome_posix`: two anonymous pipes are created, the
+    child ends are handed over as file descriptors 3 (Chrome reads) and 4
+    (Chrome writes), and the parent ends are returned as CRT file descriptors
+    ready for :class:`~tellurium.cdp.transport._pipe_win.PipeWindowsTransport`.
+
+    ``subprocess.Popen`` is bypassed on purpose: it can only pass handles for
+    fds 0-2, and ``STARTUPINFO.lpAttributeList["handle_list"]`` makes a handle
+    *inheritable* without giving it an fd number in the child.  Chrome needs
+    real CRT fds 3/4, so the process is created through ``CreateProcessW``
+    with the CRT block from :func:`build_crt_inherit_block` in ``lpReserved2``.
+
+    Returns ``(process, parent_write_fd, parent_read_fd)`` where *process* is a
+    small ``Popen``-compatible wrapper exposing ``pid``/``poll``/``wait``/
+    ``terminate``/``kill``.
+    """
+    if sys.platform != "win32":  # pragma: no cover - guarded by the dispatcher
+        raise RuntimeError(
+            "launch_chrome_windows() is Windows-only; use launch_chrome()."
+        )
+    import ctypes
+    import ctypes.wintypes as wintypes
+    import msvcrt
+    import _winapi
+
+    class _STARTUPINFOW(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("lpReserved", wintypes.LPWSTR),
+            ("lpDesktop", wintypes.LPWSTR),
+            ("lpTitle", wintypes.LPWSTR),
+            ("dwX", wintypes.DWORD),
+            ("dwY", wintypes.DWORD),
+            ("dwXSize", wintypes.DWORD),
+            ("dwYSize", wintypes.DWORD),
+            ("dwXCountChars", wintypes.DWORD),
+            ("dwYCountChars", wintypes.DWORD),
+            ("dwFillAttribute", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("wShowWindow", wintypes.WORD),
+            ("cbReserved2", wintypes.WORD),
+            ("lpReserved2", ctypes.POINTER(ctypes.c_ubyte)),
+            ("hStdInput", wintypes.HANDLE),
+            ("hStdOutput", wintypes.HANDLE),
+            ("hStdError", wintypes.HANDLE),
+        ]
+
+    class _PROCESS_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("hProcess", wintypes.HANDLE),
+            ("hThread", wintypes.HANDLE),
+            ("dwProcessId", wintypes.DWORD),
+            ("dwThreadId", wintypes.DWORD),
+        ]
+
+    # CreatePipe() in CPython returns *inheritable* handles; only the two the
+    # child must see may stay that way, otherwise the child keeps the parent's
+    # ends open and the pipe never reports EOF.
+    chrome_read_h, parent_write_h = _winapi.CreatePipe(None, 0)
+    parent_read_h, chrome_write_h = _winapi.CreatePipe(None, 0)
+    os.set_handle_inheritable(parent_write_h, False)
+    os.set_handle_inheritable(parent_read_h, False)
+    os.set_handle_inheritable(chrome_read_h, True)
+    os.set_handle_inheritable(chrome_write_h, True)
+
+    # fds 0/1/2 are left unset: the CRT resolves them from the std handles.
+    block = build_crt_inherit_block(
+        [None, None, None, chrome_read_h, chrome_write_h],
+        handle_size=ctypes.sizeof(ctypes.c_void_p),
+    )
+    buffer = (ctypes.c_ubyte * len(block)).from_buffer_copy(block)
+
+    startup = _STARTUPINFOW()
+    startup.cb = ctypes.sizeof(_STARTUPINFOW)
+    startup.cbReserved2 = len(block)
+    startup.lpReserved2 = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte))
+
+    info = _PROCESS_INFORMATION()
+    command_line = subprocess.list2cmdline([chrome_path, *args])
+    created = ctypes.windll.kernel32.CreateProcessW(
+        ctypes.c_wchar_p(chrome_path),
+        ctypes.c_wchar_p(command_line),
+        None,            # process security attributes
+        None,            # thread security attributes
+        True,            # bInheritHandles — required for the two pipe ends
+        0,               # dwCreationFlags
+        None,            # environment (inherit)
+        None,            # current directory (inherit)
+        ctypes.byref(startup),
+        ctypes.byref(info),
+    )
+    if not created:
+        for handle in (chrome_read_h, chrome_write_h, parent_read_h, parent_write_h):
+            _winapi.CloseHandle(handle)
+        raise OSError(
+            ctypes.GetLastError(), f"CreateProcessW failed for {chrome_path}"
+        )
+
+    _winapi.CloseHandle(info.hThread)
+    # The child owns its ends now.
+    _winapi.CloseHandle(chrome_read_h)
+    _winapi.CloseHandle(chrome_write_h)
+
+    # Hand the parent ends to the transport as CRT file descriptors; the fd
+    # now owns the handle, so it must not be closed separately.
+    parent_write_fd = msvcrt.open_osfhandle(parent_write_h, 0)
+    parent_read_fd = msvcrt.open_osfhandle(parent_read_h, os.O_RDONLY)
+
+    return _WindowsProcess(info.hProcess, info.dwProcessId), parent_write_fd, parent_read_fd
+
+
+class _WindowsProcess:
+    """Minimal ``subprocess.Popen`` stand-in around a raw process handle.
+
+    Only the surface ``Browser.close()`` uses is implemented.  **Untested on
+    real Windows.**
+    """
+
+    def __init__(self, handle: int, pid: int):
+        self._handle = handle
+        self.pid = pid
+        self.returncode: int | None = None
+
+    def poll(self) -> int | None:
+        import _winapi
+        if self.returncode is None:
+            if _winapi.WaitForSingleObject(self._handle, 0) == 0:  # WAIT_OBJECT_0
+                self.returncode = _winapi.GetExitCodeProcess(self._handle)
+        return self.returncode
+
+    def wait(self, timeout: float | None = None) -> int:
+        import _winapi
+        if self.returncode is None:
+            ms = 0xFFFFFFFF if timeout is None else int(timeout * 1000)
+            if _winapi.WaitForSingleObject(self._handle, ms) != 0:
+                raise subprocess.TimeoutExpired("chrome", timeout)
+            self.returncode = _winapi.GetExitCodeProcess(self._handle)
+        return self.returncode
+
+    def terminate(self) -> None:
+        import ctypes
+        if self.returncode is None:
+            ctypes.windll.kernel32.TerminateProcess(self._handle, 1)
+
+    kill = terminate
+
+
+def launch_chrome(
+    chrome_path: str,
+    args: list[str],
+) -> tuple[object, int, int]:
+    """Launch Chrome with CDP pipes using the current platform's mechanism.
+
+    Returns ``(process, parent_write_fd, parent_read_fd)`` — see
+    :func:`launch_chrome_posix` / :func:`launch_chrome_windows`.
+    """
+    if sys.platform == "win32":
+        return launch_chrome_windows(chrome_path, args)
+    return launch_chrome_posix(chrome_path, args)

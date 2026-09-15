@@ -9,6 +9,56 @@ if TYPE_CHECKING:
     from tellurium.cdp.transport._session import Session
     from tellurium.browser.tab import Tab
 
+# TreeWalker restricted to this element's subtree — the relative counterpart
+# of Tab._TEXT_WALKER_JS.
+_REL_TEXT_WALKER_JS = """
+function(text, exact) {
+    var results = [];
+    var walker = document.createTreeWalker(this, NodeFilter.SHOW_TEXT, null, false);
+    while (walker.nextNode()) {
+        var node = walker.currentNode;
+        var content = node.textContent.trim();
+        if (!content) continue;
+        var match = exact ? (content === text) : (content.indexOf(text) !== -1);
+        if (match && node.parentElement) results.push(node.parentElement);
+    }
+    return [...new Set(results)];
+}
+"""
+
+# XPath evaluated with this element as the context node.
+_REL_XPATH_JS = """
+function(expr) {
+    var snap = document.evaluate(
+        expr, this, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null
+    );
+    var out = [];
+    for (var i = 0; i < snap.snapshotLength; i++) out.push(snap.snapshotItem(i));
+    return out;
+}
+"""
+
+
+async def _elements_from_remote_array(session: Session, tab: Tab,
+                                      array_object_id: str) -> list[Element]:
+    """Map a remote JS array of DOM nodes to a list of :class:`Element`."""
+    props = await session.send("Runtime.getProperties", {
+        "objectId": array_object_id, "ownProperties": True,
+    })
+    elements: list[Element] = []
+    for prop in props.get("result", []):
+        if not prop.get("name", "").isdigit():
+            continue
+        obj = prop.get("value", {})
+        object_id = obj.get("objectId")
+        if not object_id:
+            continue
+        node = await session.send("DOM.requestNode", {"objectId": object_id})
+        node_id = node.get("nodeId", 0)
+        if node_id:
+            elements.append(Element(session, tab, node_id))
+    return elements
+
 
 class Element:
     """Represents a DOM element backed by a CDP *nodeId*.
@@ -37,9 +87,9 @@ class Element:
             self._object_id = result["object"]["objectId"]
         return self._object_id
 
-    async def _call(self, function_declaration: str, arguments: list | None = None,
-                    return_by_value: bool = True) -> Any:
-        """Run *Runtime.callFunctionOn* against this element's remote object."""
+    async def _call_raw(self, function_declaration: str, arguments: list | None = None,
+                        return_by_value: bool = True) -> dict:
+        """Run *Runtime.callFunctionOn* and return the raw remote object."""
         object_id = await self._resolve()
         params: dict[str, Any] = {
             "functionDeclaration": function_declaration,
@@ -53,9 +103,49 @@ class Element:
         remote = result.get("result", {})
         if remote.get("subtype") == "error":
             raise RuntimeError(remote.get("description", "callFunctionOn failed"))
+        return remote
+
+    async def _call(self, function_declaration: str, arguments: list | None = None,
+                    return_by_value: bool = True) -> Any:
+        """Run *Runtime.callFunctionOn* against this element's remote object."""
+        remote = await self._call_raw(function_declaration, arguments, return_by_value)
         if remote.get("type") == "undefined":
             return None
         return remote.get("value")
+
+    async def _call_elements(self, function_declaration: str,
+                             arguments: list | None = None) -> list[Element]:
+        """Call JS returning an array of nodes and map it to :class:`Element`s."""
+        # DOM.requestNode can only map remote objects to nodeIds once the DOM
+        # agent has the full tree in its node map — but DOM.getDocument also
+        # invalidates every previously handed-out nodeId, so this element is
+        # resolved to a (stable) objectId *first*.
+        await self._resolve()
+        await self._session.send("DOM.getDocument", {"depth": -1})
+        remote = await self._call_raw(
+            function_declaration, arguments, return_by_value=False
+        )
+        array_id = remote.get("objectId")
+        if not array_id or remote.get("subtype") != "array":
+            return []
+        return await _elements_from_remote_array(self._session, self._tab, array_id)
+
+    async def _call_element(self, function_declaration: str,
+                            arguments: list | None = None) -> Element | None:
+        """Call JS returning a single node (or null) and map it to an Element."""
+        await self._resolve()  # before getDocument invalidates our nodeId
+        await self._session.send("DOM.getDocument", {"depth": -1})
+        remote = await self._call_raw(
+            function_declaration, arguments, return_by_value=False
+        )
+        object_id = remote.get("objectId")
+        if not object_id or remote.get("subtype") == "null":
+            return None
+        node = await self._session.send("DOM.requestNode", {"objectId": object_id})
+        node_id = node.get("nodeId", 0)
+        if not node_id:
+            return None
+        return Element(self._session, self._tab, node_id)
 
     async def _center(self) -> tuple[float, float]:
         """Return the (x, y) centre of the element's bounding box."""
@@ -67,7 +157,33 @@ class Element:
     # ------------------------------------------------------------------
 
     async def text(self) -> str:
-        """Return the element's ``textContent``."""
+        """Return the element's *own* visible text (design doc 03 §Element).
+
+        Only direct child text nodes are concatenated — text inside nested
+        elements is excluded — and the result is trimmed.  Use
+        :meth:`text_all` for the full ``textContent`` of the subtree.
+
+        For a leaf element (``<h1>Hi</h1>``) the two are identical; they
+        differ for containers such as ``<li>Price <b>9.99</b></li>``, where
+        ``text()`` is ``"Price"`` and ``text_all()`` is ``"Price 9.99"``.
+        """
+        val = await self._call(
+            "function() {"
+            "  var out = '';"
+            "  for (var n = this.firstChild; n; n = n.nextSibling) {"
+            "    if (n.nodeType === 3) out += n.nodeValue;"
+            "  }"
+            "  return out.trim();"
+            "}"
+        )
+        return val or ""
+
+    async def own_text(self) -> str:
+        """Alias of :meth:`text` — direct child text nodes only."""
+        return await self.text()
+
+    async def text_all(self) -> str:
+        """Return the element's full ``textContent`` (all descendants)."""
         val = await self._call("function() { return this.textContent; }")
         return val or ""
 
@@ -151,6 +267,16 @@ class Element:
             return await self.bounding_box()
         return val
 
+    async def children(self) -> list[Element]:
+        """Return the direct element children (text nodes excluded)."""
+        return await self._call_elements(
+            "function() { return Array.prototype.slice.call(this.children); }"
+        )
+
+    async def parent(self) -> Element | None:
+        """Return the parent element, or *None* for the document root."""
+        return await self._call_element("function() { return this.parentElement; }")
+
     async def is_visible(self) -> bool:
         return await self._call(
             "function() {"
@@ -186,18 +312,24 @@ class Element:
             await self._tab.mouse_click(x, y, human=True)  # Uses Wind Mouse trajectory
 
     async def type(
-        self, text: str, *, human: bool = False, clear: bool = False, wpm: float = 52
+        self, text: str, *, human: bool = False, clear: bool = False,
+        wpm: float = 52, typos: bool = False,
     ) -> None:
         """Focus this element and type *text*.
 
         *clear=True* — clear the field value before typing.
         *human=True* — use HumanTyping with realistic inter-key intervals and dwell times.
         *wpm* — typing speed when *human=True* (default 52; higher = faster).
+        *typos=True* — occasionally hit an adjacent QWERTY key, then correct it
+        with Backspace (design doc 05 §"Typo Simulation", ~2%/char).  Requires
+        *human=True*; opt-in because a stray keystroke can break a password or
+        URL field.
         """
         await self.focus()
         if clear:
             await self._call("function() { this.value = ''; this.dispatchEvent(new Event('input')); }")
-        await self._tab.keyboard_type(text, human=human, wpm=wpm)  # Delegates to Tab's human typing
+        # Delegates to Tab's human typing
+        await self._tab.keyboard_type(text, human=human, wpm=wpm, typos=typos)
 
     async def upload(self, *files: str) -> None:
         """Set files on an ``<input type="file">`` element."""
@@ -283,6 +415,36 @@ class Element:
             Element(self._session, self._tab, nid)
             for nid in result.get("nodeIds", [])
         ]
+
+    async def find(self, text: str, *, exact: bool = False) -> Element:
+        """Find a descendant by visible text.  Raises ``LookupError``."""
+        matches = await self.find_all(text, exact=exact)
+        if not matches:
+            raise LookupError(f"No descendant containing text {text!r}")
+        return matches[0]
+
+    async def find_all(self, text: str, *, exact: bool = False) -> list[Element]:
+        """Return every descendant whose own text matches *text*."""
+        return await self._call_elements(
+            _REL_TEXT_WALKER_JS,
+            arguments=[{"value": text}, {"value": bool(exact)}],
+        )
+
+    async def xpath(self, expression: str) -> Element | None:
+        """Evaluate an XPath *relative to this element*.  First match or None.
+
+        Uses ``document.evaluate`` with this element as the context node, so
+        ``"./div"`` and ``".//a"`` are resolved against it (unlike
+        :meth:`Tab.xpath`, which searches the whole document).
+        """
+        matches = await self.xpath_all(expression)
+        return matches[0] if matches else None
+
+    async def xpath_all(self, expression: str) -> list[Element]:
+        """Return every node matching an XPath relative to this element."""
+        return await self._call_elements(
+            _REL_XPATH_JS, arguments=[{"value": expression}]
+        )
 
     async def apply(self, js: str) -> Any:
         """Run arbitrary JS against this element.

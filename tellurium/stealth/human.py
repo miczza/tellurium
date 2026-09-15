@@ -180,19 +180,96 @@ FINGER_MAP = {
 }
 
 
+# QWERTY physical neighbours, used by the opt-in typo simulation.  Only the
+# keys a touch typist can realistically hit by mis-aiming are listed; digits
+# and symbols are intentionally absent so that typo injection never corrupts
+# a password or a URL beyond a single-letter slip.
+KEYBOARD_NEIGHBOURS = {
+    'q': 'wa', 'w': 'qeas', 'e': 'wrsd', 'r': 'etdf', 't': 'ryfg',
+    'y': 'tugh', 'u': 'yihj', 'i': 'uojk', 'o': 'ipkl', 'p': 'ol',
+    'a': 'qwsz', 's': 'awedxz', 'd': 'serfcx', 'f': 'drtgvc',
+    'g': 'ftyhbv', 'h': 'gyujnb', 'j': 'huikmn', 'k': 'jiolm',
+    'l': 'kop', 'z': 'asx', 'x': 'zsdc', 'c': 'xdfv', 'v': 'cfgb',
+    'b': 'vghn', 'n': 'bhjm', 'm': 'njk',
+}
+
+#: Per-character probability of a typo when ``typos=True`` (design doc 05
+#: §"Typo Simulation" quotes 1-2%; 2% is the upper bound of that range).
+TYPO_RATE = 0.02
+
+#: Named key emitted to erase a mistyped character.
+BACKSPACE_KEY = "Backspace"
+
+
+def adjacent_key(char: str, rng=random) -> str | None:
+    """Return a plausible mis-hit neighbour of *char*, or ``None``.
+
+    Case is preserved, so mistyping ``"S"`` yields an upper-case neighbour.
+    """
+    neighbours = KEYBOARD_NEIGHBOURS.get(char.lower())
+    if not neighbours:
+        return None
+    wrong = rng.choice(neighbours)
+    return wrong.upper() if char.isupper() else wrong
+
+
 class HumanTyping:
-    def __init__(self, wpm: float = 52):
+    """Keystroke-dynamics generator.
+
+    Parameters
+    ----------
+    wpm:
+        Typing speed in words per minute (5 characters per word).
+    typos:
+        Opt-in typo simulation (design doc 05 §"Typo Simulation").  When
+        enabled, each character has a ``typo_rate`` chance of being typed as
+        an adjacent QWERTY key, immediately followed by a ``Backspace`` and
+        the correct character.  Off by default because a stray keystroke in
+        a password or URL field is worse than a perfect typing rhythm.
+    typo_rate:
+        Per-character typo probability (default :data:`TYPO_RATE` = 2%).
+    rng:
+        Source of randomness for the typo decisions — pass a seeded
+        :class:`random.Random` (e.g. derived from ``StealthProfile.seed``) to
+        make a run reproducible.  Timing jitter always uses the global
+        :mod:`random` module, unchanged.
+    """
+
+    def __init__(self, wpm: float = 52, *, typos: bool = False,
+                 typo_rate: float = TYPO_RATE, rng=None):
         self._base_iki = 60_000 / (wpm * 5)  # ms per character
+        self._typos = typos
+        self._typo_rate = typo_rate
+        self._rng = rng if rng is not None else random
+
+    def _triple(self, char: str, iki: float) -> list[dict]:
+        return [
+            {"type": "rawKeyDown", "key": char, "delay_ms": iki},
+            {"type": "char", "key": char, "delay_ms": random.uniform(1, 5)},
+            {"type": "keyUp", "key": char, "delay_ms": self._compute_dwell(char)},
+        ]
 
     def get_events(self, text: str) -> list[dict]:
-        events = []
+        events: list[dict] = []
         prev_char = None
         for i, char in enumerate(text):
             iki = self._compute_iki(prev_char, char) if i > 0 else random.gauss(300, 80)
-            dwell = self._compute_dwell(char)
-            events.append({"type": "rawKeyDown", "key": char, "delay_ms": iki})
-            events.append({"type": "char", "key": char, "delay_ms": random.uniform(1, 5)})
-            events.append({"type": "keyUp", "key": char, "delay_ms": dwell})
+            wrong = None
+            if self._typos and self._rng.random() < self._typo_rate:
+                wrong = adjacent_key(char, self._rng)
+            if wrong is not None:
+                # Mis-hit, notice it, erase it, then type the right key.
+                events.extend(self._triple(wrong, iki))
+                # Reaction time before the correction is longer than a normal
+                # inter-key interval: the typist has to see the mistake.
+                events.extend(self._triple(
+                    BACKSPACE_KEY, max(80.0, random.gauss(self._base_iki * 2.2, 60)),
+                ))
+                events.extend(self._triple(
+                    char, max(40.0, random.gauss(self._base_iki, self._base_iki * 0.2)),
+                ))
+            else:
+                events.extend(self._triple(char, iki))
             prev_char = char
         return events
 

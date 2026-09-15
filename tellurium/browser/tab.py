@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import fnmatch
+import logging
 import random
 import re
 import time
 from typing import TYPE_CHECKING, Any
 
 from tellurium.browser.element import Element
+
+logger = logging.getLogger("tellurium")
 
 if TYPE_CHECKING:
     from tellurium.cdp.transport._session import Session
@@ -36,6 +40,21 @@ _TEXT_WALKER_JS = """
 """
 
 
+def url_matches(pattern: str, url: str) -> bool:
+    """Match *url* against *pattern*.
+
+    Design doc 03 specifies glob patterns for ``wait_for_url`` /
+    ``wait_for_navigation``.  A pattern containing ``*`` or ``?`` is matched
+    with :func:`fnmatch.fnmatchcase`; anything else falls back to the historical
+    substring match, so ``wait_for_url("/dashboard")`` keeps working.
+    """
+    if not url:
+        return False
+    if "*" in pattern or "?" in pattern:
+        return fnmatch.fnmatchcase(url, pattern)
+    return pattern in url
+
+
 class Tab:
     """High-level wrapper around a single browser tab (CDP target session)."""
 
@@ -46,9 +65,20 @@ class Tab:
     _screen_offset: tuple[float, float] | None = None
     _screen_parity_done: bool = False
     _window_id: int | None = None
+    _mouse_profile: str = "normal"
+    _typo_rng = None
 
     def __init__(self, session: Session, browser: Browser, target_id: str,
-                 *, stealth_idle: bool = False):
+                 *, stealth_idle: bool = False, mouse_profile: str = "normal"):
+        from tellurium.stealth.human import MOUSE_PROFILES
+
+        if mouse_profile not in MOUSE_PROFILES:
+            raise ValueError(
+                f"Unknown mouse_profile {mouse_profile!r}; "
+                f"expected one of {sorted(MOUSE_PROFILES)}"
+            )
+        self._mouse_profile = mouse_profile
+        self._typo_rng = None  # lazily seeded from the stealth profile
         self._session = session
         self._browser = browser
         self._target_id = target_id
@@ -141,7 +171,8 @@ class Tab:
     async def wait_for_navigation(self, url: str | None = None, timeout: float = 30) -> None:
         """Wait for a navigation (frame-stopped-loading) event.
 
-        If *url* is given, wait until the frame URL matches (substring match).
+        If *url* is given, wait until the frame URL matches it — glob pattern
+        when it contains ``*`` or ``?``, substring match otherwise.
         """
         done = asyncio.get_running_loop().create_future()
 
@@ -149,7 +180,7 @@ class Tab:
             if done.done():
                 return
             new_url = params.get("url", params.get("frame", {}).get("url", ""))
-            if url is None or url in new_url:
+            if url is None or url_matches(url, new_url):
                 done.set_result(new_url)
 
         await self._session.send("Page.enable", {})
@@ -254,16 +285,30 @@ class Tab:
                 raise TimeoutError(f"Timed out waiting for selector {selector!r}")
             await asyncio.sleep(0.2)
 
-    async def select_all(self, selector: str) -> list[Element]:
-        """Return all elements matching a CSS selector (no waiting)."""
-        root = await self._get_document_root()
-        result = await self._session.send(
-            "DOM.querySelectorAll", {"nodeId": root, "selector": selector}
-        )
-        return [
-            Element(self._session, self, nid)
-            for nid in result.get("nodeIds", [])
-        ]
+    async def select_all(self, selector: str, *, timeout: float = 0) -> list[Element]:
+        """Return all elements matching a CSS selector.
+
+        *timeout* — seconds to keep polling until at least one element
+        matches.  The default of ``0`` returns immediately (possibly an empty
+        list), which is the historical behaviour; design doc 03 documents a
+        default of 10 but that would silently block for 10s on the common
+        "count the matches, maybe zero" call, so waiting stays opt-in.
+        An empty list is returned when the timeout expires — no exception,
+        unlike :meth:`select`.
+        """
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            root = await self._get_document_root()
+            result = await self._session.send(
+                "DOM.querySelectorAll", {"nodeId": root, "selector": selector}
+            )
+            elements = [
+                Element(self._session, self, nid)
+                for nid in result.get("nodeIds", [])
+            ]
+            if elements or asyncio.get_running_loop().time() >= deadline:
+                return elements
+            await asyncio.sleep(0.2)
 
     async def find(self, text: str, *, timeout: float = 10, exact: bool = False) -> Element:
         """Find an element by visible text content (polls until found or timeout)."""
@@ -276,9 +321,20 @@ class Tab:
                 raise TimeoutError(f"Timed out waiting for text {text!r}")
             await asyncio.sleep(0.2)
 
-    async def find_all(self, text: str, *, exact: bool = False) -> list[Element]:
-        """Return all elements containing *text* (no waiting)."""
-        return await self._find_text_elements(text, exact)
+    async def find_all(self, text: str, *, timeout: float = 0,
+                       exact: bool = False) -> list[Element]:
+        """Return all elements containing *text*.
+
+        *timeout* — seconds to keep polling until at least one match appears
+        (default ``0``: return immediately, possibly empty).  Returns an empty
+        list on expiry rather than raising, unlike :meth:`find`.
+        """
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            elements = await self._find_text_elements(text, exact)
+            if elements or asyncio.get_running_loop().time() >= deadline:
+                return elements
+            await asyncio.sleep(0.2)
 
     async def _find_text_elements(self, text: str, exact: bool) -> list[Element]:
         """Use a TreeWalker JS snippet to locate elements by text."""
@@ -360,18 +416,117 @@ class Tab:
                 return None
             await asyncio.sleep(0.2)
 
-    async def wait_for(self, selector: str, *, timeout: float = 30) -> Element:
-        """Wait for a CSS selector to appear (longer default timeout)."""
-        return await self.select(selector, timeout=timeout)
+    async def xpath_all(self, expression: str, *, timeout: float = 0) -> list[Element]:
+        """Return every node matching an XPath expression.
+
+        *timeout* — seconds to keep polling until at least one node matches
+        (default ``0``: return immediately, possibly empty).  Like
+        :meth:`xpath`, every ``DOM.performSearch`` result set is released with
+        ``DOM.discardSearchResults``; without it each poll would leak one set
+        inside the browser's DOM agent for the lifetime of the tab.
+        """
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            await self._session.send("DOM.getDocument", {"depth": 0})
+            result = await self._session.send(
+                "DOM.performSearch", {"query": expression}
+            )
+            search_id = result.get("searchId", "")
+            count = result.get("resultCount", 0)
+            elements: list[Element] = []
+            try:
+                if count:
+                    nodes = await self._session.send(
+                        "DOM.getSearchResults",
+                        {"searchId": search_id, "fromIndex": 0, "toIndex": count},
+                    )
+                    elements = [
+                        Element(self._session, self, nid)
+                        for nid in nodes.get("nodeIds", []) if nid
+                    ]
+            finally:
+                if search_id:
+                    try:
+                        await self._session.send(
+                            "DOM.discardSearchResults", {"searchId": search_id}
+                        )
+                    except Exception:  # noqa: BLE001 — best effort cleanup
+                        pass
+            if elements or asyncio.get_running_loop().time() >= deadline:
+                return elements
+            await asyncio.sleep(0.2)
+
+    async def wait_for(self, selector: str, *, state: str = "visible",
+                       timeout: float = 30) -> Element | None:
+        """Wait until *selector* reaches *state* (design doc 03 §Attesa).
+
+        ``state``:
+
+        * ``"attached"`` — present in the DOM (returns the :class:`Element`)
+        * ``"visible"`` — attached *and* rendered (non-zero box, not
+          ``display:none`` / ``visibility:hidden`` / ``opacity:0``); returns
+          the :class:`Element`
+        * ``"hidden"`` — either detached or attached but not rendered
+        * ``"detached"`` — no longer present in the DOM
+
+        The two negative states return ``None``.  A timeout raises
+        :class:`TimeoutError`.
+        """
+        if state not in ("visible", "hidden", "attached", "detached"):
+            raise ValueError(
+                f"Unknown state {state!r}; expected one of "
+                "'visible', 'hidden', 'attached', 'detached'"
+            )
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            element: Element | None = None
+            root = await self._get_document_root()
+            result = await self._session.send(
+                "DOM.querySelector", {"nodeId": root, "selector": selector}
+            )
+            node_id = result.get("nodeId", 0)
+            if node_id:
+                element = Element(self._session, self, node_id)
+                element._selector = selector
+
+            if state == "attached" and element is not None:
+                return element
+            if state == "detached" and element is None:
+                return None
+            if state in ("visible", "hidden"):
+                visible = bool(element is not None and await element.is_visible())
+                if state == "visible" and visible:
+                    return element
+                if state == "hidden" and not visible:
+                    return None
+
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError(
+                    f"Timed out waiting for selector {selector!r} to be {state}"
+                )
+            await asyncio.sleep(0.2)
 
     # ------------------------------------------------------------------
     # Screenshots / content
     # ------------------------------------------------------------------
 
     async def screenshot(self, path: str | None = None, *, full_page: bool = False,
-                         format: str = "png") -> bytes:
-        """Capture a screenshot of the visible viewport or full page."""
+                         quality: int | None = None, format: str = "png") -> bytes:
+        """Capture a screenshot of the visible viewport or full page.
+
+        *quality* (0-100) only applies to lossy formats (``"jpeg"``,
+        ``"webp"``); Chrome rejects it for PNG, so it is dropped with a
+        warning instead of failing the call.
+        """
         params: dict[str, Any] = {"format": format}
+        if quality is not None:
+            if format == "png":
+                logger.warning(
+                    "screenshot(quality=%s) ignored: quality only applies to "
+                    "lossy formats (jpeg, webp), not png.", quality,
+                )
+            else:
+                params["quality"] = int(quality)
         if full_page:
             metrics = await self._session.send("Page.getLayoutMetrics", {})
             content_size = metrics.get("contentSize", metrics.get("cssContentSize", {}))
@@ -396,6 +551,103 @@ class Tab:
             "DOM.getOuterHTML", {"nodeId": root_id}
         )
         return result.get("outerHTML", "")
+
+    async def pdf(self, path: str | None = None, **opts: Any) -> bytes:
+        """Render the page to PDF via ``Page.printToPDF`` and return the bytes.
+
+        *path* — when given, the bytes are also written there.
+        *opts* — forwarded verbatim as ``Page.printToPDF`` parameters
+        (``landscape``, ``printBackground``, ``scale``, ``paperWidth``,
+        ``paperHeight``, ``marginTop``, ``pageRanges``, ``preferCSSPageSize``…).
+        ``printBackground=True`` is the default here because a PDF without
+        backgrounds rarely matches what the page looks like.
+
+        Chrome only implements ``Page.printToPDF`` in headless mode; a headed
+        browser answers with a CDP error ("PrintToPDF is not implemented").
+        """
+        params: dict[str, Any] = {"printBackground": True, "transferMode": "ReturnAsBase64"}
+        params.update(opts)
+        result = await self._session.send("Page.printToPDF", params)
+        data = base64.b64decode(result.get("data", ""))
+        if path:
+            from pathlib import Path as P
+            P(path).write_bytes(data)
+        return data
+
+    # ------------------------------------------------------------------
+    # Window
+    # ------------------------------------------------------------------
+
+    async def _get_window_id(self) -> int | None:
+        """Resolve (and cache) this tab's browser window id, or *None*."""
+        if self._window_id is not None:
+            return self._window_id
+        try:
+            resp = await self._browser._router.root.send(
+                "Browser.getWindowForTarget", {"targetId": self._target_id},
+                timeout=5.0,
+            )
+        except Exception:  # noqa: BLE001 — not implemented on every target type
+            return None
+        self._window_id = resp.get("windowId")
+        return self._window_id
+
+    async def _set_window_bounds(self, bounds: dict) -> bool:
+        """Send ``Browser.setWindowBounds``; return False when unavailable."""
+        window_id = await self._get_window_id()
+        if window_id is None:
+            return False
+        try:
+            await self._browser._router.root.send("Browser.setWindowBounds", {
+                "windowId": window_id, "bounds": bounds,
+            }, timeout=5.0)
+        except Exception:  # noqa: BLE001 — degrade, never break the caller
+            return False
+        # Window geometry changed → the cached screenX/screenY offset is stale.
+        self._screen_offset = None
+        return True
+
+    async def set_viewport(self, width: int, height: int) -> None:
+        """Resize the browser window to *width* x *height*.
+
+        Resizing is done with ``Browser.setWindowBounds``, which moves the real
+        window — every JS-visible metric (``innerWidth``, ``outerWidth``,
+        ``screenX``…) stays self-consistent.  ``--window-size`` cannot be
+        changed after launch, so it is not an option here.
+
+        Fallback: if ``Browser.setWindowBounds`` is unavailable (older
+        headless shells, non-top-level targets) the call degrades to
+        ``Emulation.setDeviceMetricsOverride`` and logs a warning — that
+        command is itself a detection signal (it desynchronises
+        ``window.outerWidth``/``screen`` from the emulated viewport), so
+        prefer ``Browser.launch(viewport=(w, h))`` when stealth matters.
+        """
+        if await self._set_window_bounds({
+            "width": int(width), "height": int(height), "windowState": "normal",
+        }):
+            return
+        logger.warning(
+            "Browser.setWindowBounds unavailable; falling back to "
+            "Emulation.setDeviceMetricsOverride, which is a detectable "
+            "fingerprint signal. Prefer Browser.launch(viewport=(%d, %d)).",
+            int(width), int(height),
+        )
+        await self._session.send("Emulation.setDeviceMetricsOverride", {
+            "width": int(width), "height": int(height),
+            "deviceScaleFactor": 0, "mobile": False,
+        })
+
+    async def maximize(self) -> None:
+        """Maximize the browser window (no-op when unavailable)."""
+        await self._set_window_bounds({"windowState": "maximized"})
+
+    async def minimize(self) -> None:
+        """Minimize the browser window (no-op when unavailable)."""
+        await self._set_window_bounds({"windowState": "minimized"})
+
+    async def bring_to_front(self) -> None:
+        """Focus this tab / bring its window to the foreground."""
+        await self._session.send("Page.bringToFront", {})
 
     # ------------------------------------------------------------------
     # Input
@@ -559,7 +811,7 @@ class Tab:
     async def mouse_move(self, x: float, y: float, human: bool = False) -> None:
         if human:
             from tellurium.stealth.human import wind_mouse, apply_lognormal_velocity, MOUSE_PROFILES
-            params = MOUSE_PROFILES["normal"]
+            params = MOUSE_PROFILES[self._mouse_profile]
             path = wind_mouse(*self._mouse_pos, x, y, **params["wind"])
             timed_path = apply_lognormal_velocity(path, mu=params["mu"], sigma=params["sigma"])
             t_start = time.monotonic()
@@ -658,23 +910,68 @@ class Tab:
             "type": "keyUp", "key": actual_key, "modifiers": modifiers,
         })
 
+    #: Named keys that the human-typing path may emit, with their Windows
+    #: virtual key codes (Chrome needs the code to act on the key).
+    _NAMED_KEYS = {"Backspace": 8, "Enter": 13, "Tab": 9, "Delete": 46, "Escape": 27}
+
+    async def _dispatch_named_key(self, key: str, event_type: str) -> None:
+        """Dispatch one half of a named-key press (no ``text`` payload)."""
+        if event_type == "char":
+            return  # named keys produce no character
+        await self._session.send("Input.dispatchKeyEvent", {
+            "type": "keyDown" if event_type == "rawKeyDown" else "keyUp",
+            "key": key,
+            "code": key,
+            "windowsVirtualKeyCode": self._NAMED_KEYS.get(key, 0),
+            "nativeVirtualKeyCode": self._NAMED_KEYS.get(key, 0),
+        })
+
+    def _get_typo_rng(self):
+        """Random source for typo decisions, seeded from the stealth profile.
+
+        One generator per tab, so repeated ``typos=True`` calls differ from
+        each other yet the whole session replays identically for a given
+        ``Browser.launch(seed=...)``.  Without a stealth profile the global
+        :mod:`random` module is used.
+        """
+        if self._typo_rng is None:
+            seed = getattr(
+                getattr(self._browser, "_stealth_profile", None), "seed", None
+            )
+            self._typo_rng = random.Random(seed) if seed is not None else random
+        return self._typo_rng
+
     async def keyboard_type(
-        self, text: str, human: bool = False, wpm: float = 52
+        self, text: str, human: bool = False, wpm: float = 52,
+        typos: bool = False,
     ) -> None:
         """Type a string character-by-character via ``Input.dispatchKeyEvent``.
 
         When ``human=True``, ``wpm`` tunes the typing speed (words per minute,
         5 chars/word). Default 52 ≈ average human. Higher = faster.
+
+        ``typos=True`` (requires ``human=True``) occasionally hits an adjacent
+        QWERTY key and corrects it with a real ``Backspace`` keystroke —
+        design doc 05 §"Typo Simulation", ~2% per character.
         """
+        if typos and not human:
+            raise ValueError("keyboard_type(typos=True) requires human=True")
         if human:
             from tellurium.stealth.human import HumanTyping, apply_key_rollover
             await self._human_action("type")
-            typer = HumanTyping(wpm=wpm)
+            typer = HumanTyping(
+                wpm=wpm, typos=typos, rng=self._get_typo_rng() if typos else None,
+            )
             events = apply_key_rollover(typer.get_events(text))
             for event in events:
                 if event["delay_ms"] > 0:
                     await asyncio.sleep(event["delay_ms"] / 1000)
                 char = event["key"]
+                if len(char) > 1:
+                    # Named key (Backspace from the typo simulation): no text
+                    # payload, otherwise Chrome inserts the literal word.
+                    await self._dispatch_named_key(char, event["type"])
+                    continue
                 key_code = ord(char.upper()) if len(char) == 1 and char.isascii() else 0
                 code = f"Key{char.upper()}" if char.isalpha() else ""
                 if event["type"] == "rawKeyDown":
@@ -749,11 +1046,15 @@ class Tab:
         await asyncio.sleep(seconds)
 
     async def wait_for_url(self, url: str, *, timeout: float = 30) -> None:
-        """Poll until the page URL contains *url*."""
+        """Poll until the page URL matches *url*.
+
+        *url* is a glob pattern (``"*/dashboard*"``) when it contains ``*`` or
+        ``?``; otherwise it is matched as a substring, as before.
+        """
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
             current = await self.eval("window.location.href")
-            if current and url in current:
+            if url_matches(url, current or ""):
                 self._url = current
                 return
             if asyncio.get_running_loop().time() >= deadline:

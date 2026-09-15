@@ -42,7 +42,8 @@ class BrowserContext:
         target_id = result["targetId"]
         session = await self._browser._router.attach(target_id)
         tab = Tab(session, self._browser, target_id,
-                  stealth_idle=getattr(self._browser, "_stealth_idle", False))
+                  stealth_idle=getattr(self._browser, "_stealth_idle", False),
+                  mouse_profile=getattr(self._browser, "_mouse_profile", "normal"))
         tab._url = url
         self._tabs.append(tab)
         self._browser._tabs.append(tab)

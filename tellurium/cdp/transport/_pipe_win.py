@@ -12,10 +12,23 @@ from tellurium.cdp.transport._base import CDPTransport
 
 
 class PipeWindowsTransport(CDPTransport):
+    """CDP transport over Windows pipes exposed as CRT file descriptors.
+
+    The fds come from :func:`tellurium.browser.launcher.launch_chrome_windows`
+    (``msvcrt.open_osfhandle``).  Windows has no ``connect_read_pipe`` support
+    in asyncio's proactor loop for anonymous pipes, so blocking ``os.read`` /
+    ``os.write`` calls are pushed to the default thread executor instead.
+
+    **Untested on real Windows.**
+    """
+
     def __init__(self, read_fd: int, write_fd: int):
         self._read_fd = read_fd
         self._write_fd = write_fd
         self._buffer = bytearray()
+
+    async def start(self) -> None:
+        """No-op: the fds are usable as-is (kept for transport parity)."""
 
     async def send(self, data: bytes) -> None:
         loop = asyncio.get_running_loop()

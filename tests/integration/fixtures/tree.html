@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html><head><title>Tree Test Page</title></head>
+<body>
+  <main id="root">
+    <section id="products">
+      <article class="card" id="card-1">
+        <h3>Widget</h3>
+        <p class="price">Price <b>9.99</b></p>
+        <a class="buy" href="/buy/1">Buy now</a>
+      </article>
+      <article class="card" id="card-2">
+        <h3>Gadget</h3>
+        <p class="price">Price <b>19.99</b></p>
+        <a class="buy" href="/buy/2">Buy now</a>
+      </article>
+    </section>
+    <section id="empty"></section>
+    <p id="hidden-note" style="display:none">Secret</p>
+    <input id="typed" type="text">
+  </main>
+  <script>
+    // #late appears after 400ms; #doomed disappears after 400ms.
+    var doomed = document.createElement('p');
+    doomed.id = 'doomed';
+    doomed.textContent = 'Going away';
+    document.body.appendChild(doomed);
+    setTimeout(function () {
+      var late = document.createElement('p');
+      late.id = 'late';
+      late.textContent = 'Here at ' + 'last';  // split: keep the literal out of the script text node
+      document.body.appendChild(late);
+      doomed.remove();
+    }, 400);
+  </script>
+</body></html>

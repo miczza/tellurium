@@ -21,7 +21,7 @@ from tellurium.browser.launcher import (
     build_chrome_flags,
     build_load_extension_flag,
     check_chrome_version_for_extensions,
-    launch_chrome_posix,
+    launch_chrome,
     validate_extension_paths,
 )
 from tellurium.browser.proxy import ProxyForwarder, parse_proxy_url
@@ -53,6 +53,10 @@ class Browser:
         self._stealth_engine = None
         self._stealth_profile = None
         self._stealth_idle = False
+        self._mouse_profile = "normal"
+        # Manual override applied to every session when stealth is off
+        # (with stealth on the StealthEngine already owns the timezone).
+        self._timezone_override: str | None = None
 
     # ------------------------------------------------------------------
     # Launch
@@ -76,6 +80,10 @@ class Browser:
         chromium_sha256: str | None = None,
         auto_security_update: bool = False,
         webrtc_ip: str | None = None,
+        timezone: str | None = None,
+        languages: list[str] | None = None,
+        viewport: tuple[int, int] | None = None,
+        mouse_profile: str = "normal",
     ) -> Browser:
         """Launch a Chrome process and return a connected :class:`Browser`.
 
@@ -110,9 +118,51 @@ class Browser:
             containing ``manifest.json`` (.crx files are not supported).
             Raises :class:`~tellurium.browser.launcher.LaunchError` when
             Chrome branded >= 137 is used (use Chrome for Testing instead).
+        timezone:
+            Manual IANA timezone override (``"Europe/Rome"``).  Takes
+            precedence over the GeoIP result and over the stealth profile's
+            default.  Applied with ``Emulation.setTimezoneOverride`` even when
+            ``stealth=False``.
+        languages:
+            Manual ``navigator.languages`` override (``["it-IT", "it", "en"]``).
+            Takes precedence over GeoIP / profile.  Passed to Chrome as
+            ``--accept-lang`` so the browser derives both ``navigator.languages``
+            and the ``Accept-Language`` header natively (a CDP
+            ``acceptLanguage`` override leaks the raw q-value string into
+            ``navigator.languages``).
+        viewport:
+            ``(width, height)`` of the browser window, applied as
+            ``--window-size=W,H`` at launch.  Headed windows are additionally
+            pinned with ``Browser.setWindowBounds`` once the tab exists.
+            ``Emulation.setDeviceMetricsOverride`` is deliberately **not** used:
+            it desynchronises ``window.outerWidth``/``screen`` from the emulated
+            viewport, which is a detection signal.
+        mouse_profile:
+            Wind-Mouse personality for every ``human=True`` mouse movement:
+            ``"careful"``, ``"normal"`` (default) or ``"hasty"`` — see
+            ``MOUSE_PROFILES`` in ``tellurium.stealth.human``.
         """
+        from tellurium.stealth.human import MOUSE_PROFILES
+
+        if mouse_profile not in MOUSE_PROFILES:
+            raise ValueError(
+                f"Unknown mouse_profile {mouse_profile!r}; "
+                f"expected one of {sorted(MOUSE_PROFILES)}"
+            )
+        if languages is not None and (
+            not isinstance(languages, (list, tuple)) or not languages
+        ):
+            raise ValueError("languages must be a non-empty list, e.g. ['it-IT', 'it']")
+        if viewport is not None:
+            if len(tuple(viewport)) != 2:
+                raise ValueError("viewport must be a (width, height) tuple")
+            if int(viewport[0]) <= 0 or int(viewport[1]) <= 0:
+                raise ValueError("viewport width and height must be positive")
+
         self = cls()
         self._stealth_idle = stealth_idle
+        self._mouse_profile = mouse_profile
+        languages = list(languages) if languages is not None else None
 
         # 0. Validate extension paths up-front (before any async work)
         validate_extension_paths(extensions or [])
@@ -227,6 +277,19 @@ class Browser:
                 except (ImportError, Exception) as e:
                     logger.warning("GeoIP not available: %s. Using default locale.", e)
 
+            # Manual overrides win over both GeoIP and the seeded defaults
+            # (design doc 01 §"Override manuali (ignorano auto-detect)").
+            manual: dict[str, Any] = {}
+            if timezone is not None:
+                manual["timezone"] = timezone
+            if languages is not None:
+                from tellurium.stealth.profile import build_accept_language
+                manual["languages"] = languages
+                manual["locale"] = languages[0]
+                manual["accept_language"] = build_accept_language(languages)
+            if manual:
+                stealth_profile = dataclasses.replace(stealth_profile, **manual)
+
             stealth_engine = StealthEngine(
                 engine, stealth_profile, headless, proxy is not None,
             )
@@ -248,17 +311,26 @@ class Browser:
         # 7. Stealth flags (extension + WebRTC)
         stealth_flags: list[str] = []
         user_exts: list[str] = extensions or []
+
+        # Languages: let Chrome derive both navigator.languages and the
+        # Accept-Language header (with its native q-values) from the
+        # --accept-lang pref. Overriding acceptLanguage via
+        # Emulation.setUserAgentOverride leaks the raw string into
+        # navigator.languages (["en-US", "en;q=0.9"]) and produces a
+        # malformed header ("en-US, en;q=0.9;q=0.9"). Measured on Chrome 153.
+        # The same flag carries a manual languages= override with stealth off.
+        effective_languages = languages
+        if effective_languages is None and stealth and stealth_profile is not None:
+            effective_languages = stealth_profile.languages
+        if effective_languages:
+            stealth_flags.append("--accept-lang=" + ",".join(effective_languages))
+
+        if viewport is not None:
+            stealth_flags.append(
+                f"--window-size={int(viewport[0])},{int(viewport[1])}"
+            )
+
         if stealth and stealth_engine is not None:
-            # Languages: let Chrome derive both navigator.languages and the
-            # Accept-Language header (with its native q-values) from the
-            # --accept-lang pref. Overriding acceptLanguage via
-            # Emulation.setUserAgentOverride leaks the raw string into
-            # navigator.languages (["en-US", "en;q=0.9"]) and produces a
-            # malformed header ("en-US, en;q=0.9;q=0.9"). Measured on Chrome 153.
-            if stealth_profile is not None and stealth_profile.languages:
-                stealth_flags.append(
-                    "--accept-lang=" + ",".join(stealth_profile.languages)
-                )
             ext_path = stealth_engine.build_extension()
             if ext_path or user_exts:
                 stealth_flags.append(
@@ -296,7 +368,7 @@ class Browser:
         )
 
         # 9. Launch Chrome
-        process, write_fd, read_fd = launch_chrome_posix(chrome_path, flags)
+        process, write_fd, read_fd = launch_chrome(chrome_path, flags)
         self._process = process
 
         # 10. Transport + router
@@ -344,10 +416,16 @@ class Browser:
         if page_target:
             session = await self._router.attach(page_target["targetId"])
             tab = Tab(session, self, page_target["targetId"],
-                      stealth_idle=stealth_idle)
+                      stealth_idle=stealth_idle, mouse_profile=mouse_profile)
             tab._url = page_target.get("url", "")
             self._tabs.append(tab)
             self._main_tab = tab
+
+            # 12a. Manual timezone override without stealth: the StealthEngine
+            # is not there to send it, so do it here (design doc 01 §Override).
+            if timezone is not None and stealth_engine is None:
+                self._timezone_override = timezone
+                await self._apply_manual_overrides(session)
 
             # 13. Apply stealth to initial tab session
             if stealth_engine is not None:
@@ -371,7 +449,30 @@ class Browser:
             if self._main_tab is not None:
                 await stealth_engine.wire_session(self._main_tab._session)
 
+        # 15. Pin the window geometry for a headed browser. --window-size is
+        # honoured at startup by headless Chrome but a window manager can
+        # ignore/adjust it for a real window, so re-assert it over CDP.
+        if viewport is not None and not headless and self._main_tab is not None:
+            try:
+                await self._main_tab.set_viewport(int(viewport[0]), int(viewport[1]))
+            except Exception as exc:  # noqa: BLE001 — cosmetic, never fatal
+                logger.warning("Could not apply viewport %r: %s", viewport, exc)
+
         return self
+
+    async def _apply_manual_overrides(self, session: Any) -> None:
+        """Apply non-stealth manual overrides to a freshly attached session."""
+        if self._timezone_override is None:
+            return
+        try:
+            await session.send("Emulation.setTimezoneOverride", {
+                "timezoneId": self._timezone_override,
+            })
+        except Exception as exc:  # noqa: BLE001 — a bad IANA id must not kill launch
+            logger.warning(
+                "Timezone override %r rejected by Chrome: %s",
+                self._timezone_override, exc,
+            )
 
     # ------------------------------------------------------------------
     # Tabs
@@ -389,8 +490,11 @@ class Browser:
             await self._stealth_engine.apply_page_scripts(session)
             # T7.7: OOPIF/worker auto-attach is per-page-session.
             await self._stealth_engine.wire_session(session)
+        else:
+            await self._apply_manual_overrides(session)
 
-        tab = Tab(session, self, target_id, stealth_idle=self._stealth_idle)
+        tab = Tab(session, self, target_id, stealth_idle=self._stealth_idle,
+                  mouse_profile=self._mouse_profile)
         self._tabs.append(tab)
         if url and url != "about:blank":
             await tab.get(url)

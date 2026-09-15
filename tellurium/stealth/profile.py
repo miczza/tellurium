@@ -107,6 +107,19 @@ def _detect_real_os() -> str:
     return _REAL_OS_MAP.get(platform.system(), "linux")
 
 
+def build_accept_language(languages: list) -> str:
+    """Build an ``Accept-Language`` header value from a language list.
+
+    ``["it-IT", "it", "en"]`` -> ``"it-IT, it;q=0.9, en;q=0.8"``.  Shared by
+    :meth:`StealthProfile._build_profile` and by ``Browser.launch`` when the
+    caller overrides ``languages=`` manually, so the two paths cannot drift.
+    """
+    return ", ".join(
+        f"{lang};q={round(1.0 - 0.1 * i, 1)}" if i > 0 else lang
+        for i, lang in enumerate(languages)
+    )
+
+
 # ---------------------------------------------------------------------------
 # User-Agent / Client-Hints builders
 # ---------------------------------------------------------------------------
@@ -263,10 +276,7 @@ class StealthProfile:
         tz = timezone if timezone is not None else _TIMEZONE_BY_OS[target_os]
         loc = locale if locale is not None else _LOCALE_BY_OS[target_os]
         langs = _LANGUAGES_BY_OS[target_os]
-        accept_lang = ", ".join(
-            f"{l};q={round(1.0 - 0.1 * i, 1)}" if i > 0 else l
-            for i, l in enumerate(langs)
-        )
+        accept_lang = build_accept_language(langs)
 
         return StealthProfile(
             seed=seed,

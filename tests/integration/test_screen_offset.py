@@ -63,9 +63,11 @@ async def test_screen_coords_are_offset_from_client_coords(stealth):
         # Headed windows add a frame border on top of window.screenX.
         assert dx >= win_x, f"dx={dx} below window.screenX={win_x}"
         assert dy >= win_y, f"dy={dy} below window.screenY={win_y}"
-        if chrome_ui and chrome_ui > 0:
+        if chrome_ui and chrome_ui > 0 and not HEADED:
             # dy = window origin + chrome UI (outerHeight-innerHeight is an
-            # estimate: on headed Linux it also covers the bottom frame).
+            # estimate: on headed Linux it also covers the bottom frame, and
+            # window.screenY can still read 0 right after launch while the WM
+            # is placing the window, so the upper bound is headless-only).
             assert dy <= win_y + chrome_ui + 2
     finally:
         await browser.close()
