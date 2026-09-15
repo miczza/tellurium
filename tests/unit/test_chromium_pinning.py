@@ -1,6 +1,7 @@
 import hashlib
+
 import pytest
-from pathlib import Path
+
 from tellurium.browser.engine import PatchedEngine
 
 
@@ -27,9 +28,7 @@ def test_pinned_version_bypasses_update_check(tmp_path, monkeypatch):
     def fake_check(*a, **kw):
         called.append(True)
 
-    monkeypatch.setattr(
-        "tellurium.browser._update_check.check_for_update", fake_check
-    )
+    monkeypatch.setattr("tellurium.browser._update_check.check_for_update", fake_check)
     cache_root = tmp_path / ".tellurium" / "chromium"
     pinned = cache_root / "146.0.7680.188"
     pinned.mkdir(parents=True)
@@ -53,6 +52,7 @@ def test_pinned_sha256_verified(tmp_path):
     expected_sha = hashlib.sha256(b"binary-content").hexdigest()
 
     from tellurium.browser.engine import BinaryCorruptedError
+
     eng = PatchedEngine(
         cache_root=cache_root,
         chromium_version="146.0.7680.188",
@@ -73,15 +73,20 @@ def test_auto_security_update_installs_security_release(tmp_path, monkeypatch):
     """auto_security_update=True downloads a security release when the daily
     check reports one; non-security releases are only warned about."""
     from tellurium.browser._update_check import UpdateInfo
+
     cache_root = tmp_path / ".tellurium" / "chromium"
     cur = cache_root / "146.0.7680.180"
     cur.mkdir(parents=True)
     (cur / "chrome").write_text("binary")
     from tellurium.browser import _cache
+
     _cache.set_current("146.0.7680.180", cache_root)
 
-    info = UpdateInfo(installed="146.0.7680.180", latest="146.0.7680.195",
-                      manifest={"security": True, "cve": ["CVE-2026-1"]})
+    info = UpdateInfo(
+        installed="146.0.7680.180",
+        latest="146.0.7680.195",
+        manifest={"security": True, "cve": ["CVE-2026-1"]},
+    )
     monkeypatch.setattr("tellurium.browser._update_check.check_for_update", lambda **kw: info)
     downloaded = []
     monkeypatch.setattr(

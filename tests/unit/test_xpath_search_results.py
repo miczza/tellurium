@@ -3,6 +3,7 @@
 Without DOM.discardSearchResults each poll iteration leaked one result set
 inside the browser's DOM agent for the lifetime of the tab.
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock

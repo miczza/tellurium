@@ -1,4 +1,5 @@
 """Element wrapper — interact with a single DOM node via CDP."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,8 +7,8 @@ import random
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from tellurium.cdp.transport._session import Session
     from tellurium.browser.tab import Tab
+    from tellurium.cdp.transport._session import Session
 
 # TreeWalker restricted to this element's subtree — the relative counterpart
 # of Tab._TEXT_WALKER_JS.
@@ -39,12 +40,17 @@ function(expr) {
 """
 
 
-async def _elements_from_remote_array(session: Session, tab: Tab,
-                                      array_object_id: str) -> list[Element]:
+async def _elements_from_remote_array(
+    session: Session, tab: Tab, array_object_id: str
+) -> list[Element]:
     """Map a remote JS array of DOM nodes to a list of :class:`Element`."""
-    props = await session.send("Runtime.getProperties", {
-        "objectId": array_object_id, "ownProperties": True,
-    })
+    props = await session.send(
+        "Runtime.getProperties",
+        {
+            "objectId": array_object_id,
+            "ownProperties": True,
+        },
+    )
     elements: list[Element] = []
     for prop in props.get("result", []):
         if not prop.get("name", "").isdigit():
@@ -71,8 +77,12 @@ class Element:
         self._tab = tab
         self._node_id = node_id
         self._object_id: str | None = None
-        self._selector: str | None = None  # CSS selector used to locate this element (for isolated-world queries)
-        self._frame_id: str | None = None  # frame this element belongs to (None → use tab._frame_id)
+        self._selector: str | None = (
+            None  # CSS selector used to locate this element (for isolated-world queries)
+        )
+        self._frame_id: str | None = (
+            None  # frame this element belongs to (None → use tab._frame_id)
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -81,14 +91,13 @@ class Element:
     async def _resolve(self) -> str:
         """Resolve *nodeId* to a remote *objectId* (cached)."""
         if self._object_id is None:
-            result = await self._session.send(
-                "DOM.resolveNode", {"nodeId": self._node_id}
-            )
+            result = await self._session.send("DOM.resolveNode", {"nodeId": self._node_id})
             self._object_id = result["object"]["objectId"]
         return self._object_id
 
-    async def _call_raw(self, function_declaration: str, arguments: list | None = None,
-                        return_by_value: bool = True) -> dict:
+    async def _call_raw(
+        self, function_declaration: str, arguments: list | None = None, return_by_value: bool = True
+    ) -> dict:
         """Run *Runtime.callFunctionOn* and return the raw remote object."""
         object_id = await self._resolve()
         params: dict[str, Any] = {
@@ -105,16 +114,18 @@ class Element:
             raise RuntimeError(remote.get("description", "callFunctionOn failed"))
         return remote
 
-    async def _call(self, function_declaration: str, arguments: list | None = None,
-                    return_by_value: bool = True) -> Any:
+    async def _call(
+        self, function_declaration: str, arguments: list | None = None, return_by_value: bool = True
+    ) -> Any:
         """Run *Runtime.callFunctionOn* against this element's remote object."""
         remote = await self._call_raw(function_declaration, arguments, return_by_value)
         if remote.get("type") == "undefined":
             return None
         return remote.get("value")
 
-    async def _call_elements(self, function_declaration: str,
-                             arguments: list | None = None) -> list[Element]:
+    async def _call_elements(
+        self, function_declaration: str, arguments: list | None = None
+    ) -> list[Element]:
         """Call JS returning an array of nodes and map it to :class:`Element`s."""
         # DOM.requestNode can only map remote objects to nodeIds once the DOM
         # agent has the full tree in its node map — but DOM.getDocument also
@@ -122,22 +133,19 @@ class Element:
         # resolved to a (stable) objectId *first*.
         await self._resolve()
         await self._session.send("DOM.getDocument", {"depth": -1})
-        remote = await self._call_raw(
-            function_declaration, arguments, return_by_value=False
-        )
+        remote = await self._call_raw(function_declaration, arguments, return_by_value=False)
         array_id = remote.get("objectId")
         if not array_id or remote.get("subtype") != "array":
             return []
         return await _elements_from_remote_array(self._session, self._tab, array_id)
 
-    async def _call_element(self, function_declaration: str,
-                            arguments: list | None = None) -> Element | None:
+    async def _call_element(
+        self, function_declaration: str, arguments: list | None = None
+    ) -> Element | None:
         """Call JS returning a single node (or null) and map it to an Element."""
         await self._resolve()  # before getDocument invalidates our nodeId
         await self._session.send("DOM.getDocument", {"depth": -1})
-        remote = await self._call_raw(
-            function_declaration, arguments, return_by_value=False
-        )
+        remote = await self._call_raw(function_declaration, arguments, return_by_value=False)
         object_id = remote.get("objectId")
         if not object_id or remote.get("subtype") == "null":
             return None
@@ -194,9 +202,7 @@ class Element:
 
     async def html(self) -> str:
         """Return the outer HTML of this element."""
-        result = await self._session.send(
-            "DOM.getOuterHTML", {"nodeId": self._node_id}
-        )
+        result = await self._session.send("DOM.getOuterHTML", {"nodeId": self._node_id})
         return result.get("outerHTML", "")
 
     async def attr(self, name: str) -> str | None:
@@ -208,11 +214,9 @@ class Element:
 
     async def attributes(self) -> dict[str, str]:
         """Return all attributes as a dict."""
-        result = await self._session.send(
-            "DOM.getAttributes", {"nodeId": self._node_id}
-        )
+        result = await self._session.send("DOM.getAttributes", {"nodeId": self._node_id})
         flat = result.get("attributes", [])
-        return dict(zip(flat[::2], flat[1::2]))
+        return dict(zip(flat[::2], flat[1::2], strict=False))
 
     async def bounding_box(self) -> dict:
         """Return ``{x, y, width, height}`` from *getBoundingClientRect*."""
@@ -239,8 +243,9 @@ class Element:
         preserves identity.  Users who need stable identity should rely on the
         fallback (don't pass a selector, or use XPath-based selection).
         """
-        from tellurium.stealth._isolated import get_hsim_world
         import json
+
+        from tellurium.stealth._isolated import get_hsim_world
 
         frame_id = getattr(self, "_frame_id", None) or self._tab._frame_id
         ctx = await get_hsim_world(self._tab, frame_id=frame_id)
@@ -259,9 +264,14 @@ class Element:
             f"  return {{x: r.x, y: r.y, width: r.width, height: r.height}};"
             f"}})()"
         )
-        resp = await self._session.send("Runtime.evaluate", {
-            "expression": expr, "contextId": ctx, "returnByValue": True,
-        })
+        resp = await self._session.send(
+            "Runtime.evaluate",
+            {
+                "expression": expr,
+                "contextId": ctx,
+                "returnByValue": True,
+            },
+        )
         val = resp.get("result", {}).get("value")
         if val is None:
             return await self.bounding_box()
@@ -278,12 +288,15 @@ class Element:
         return await self._call_element("function() { return this.parentElement; }")
 
     async def is_visible(self) -> bool:
-        return await self._call(
-            "function() {"
-            "  var s = window.getComputedStyle(this);"
-            "  return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';"
-            "}"
-        ) or False
+        return (
+            await self._call(
+                "function() {"
+                "  var s = window.getComputedStyle(this);"
+                "  return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';"
+                "}"
+            )
+            or False
+        )
 
     async def is_enabled(self) -> bool:
         return not (await self._call("function() { return this.disabled; }") or False)
@@ -312,8 +325,13 @@ class Element:
             await self._tab.mouse_click(x, y, human=True)  # Uses Wind Mouse trajectory
 
     async def type(
-        self, text: str, *, human: bool = False, clear: bool = False,
-        wpm: float = 52, typos: bool = False,
+        self,
+        text: str,
+        *,
+        human: bool = False,
+        clear: bool = False,
+        wpm: float = 52,
+        typos: bool = False,
     ) -> None:
         """Focus this element and type *text*.
 
@@ -327,7 +345,9 @@ class Element:
         """
         await self.focus()
         if clear:
-            await self._call("function() { this.value = ''; this.dispatchEvent(new Event('input')); }")
+            await self._call(
+                "function() { this.value = ''; this.dispatchEvent(new Event('input')); }"
+            )
         # Delegates to Tab's human typing
         await self._tab.keyboard_type(text, human=human, wpm=wpm, typos=typos)
 
@@ -379,18 +399,30 @@ class Element:
         tx, ty = await target._center()
 
         await self._tab.mouse_move(sx, sy)
-        await self._tab._dispatch_mouse({
-            "type": "mousePressed", "x": sx, "y": sy, "button": "left", "clickCount": 1,
-        })
+        await self._tab._dispatch_mouse(
+            {
+                "type": "mousePressed",
+                "x": sx,
+                "y": sy,
+                "button": "left",
+                "clickCount": 1,
+            }
+        )
         for i in range(1, steps + 1):
             frac = i / steps
             mx = sx + (tx - sx) * frac
             my = sy + (ty - sy) * frac
             await self._tab.mouse_move(mx, my)
             await asyncio.sleep(0.01)
-        await self._tab._dispatch_mouse({
-            "type": "mouseReleased", "x": tx, "y": ty, "button": "left", "clickCount": 1,
-        })
+        await self._tab._dispatch_mouse(
+            {
+                "type": "mouseReleased",
+                "x": tx,
+                "y": ty,
+                "button": "left",
+                "clickCount": 1,
+            }
+        )
 
     # ------------------------------------------------------------------
     # Relative selection
@@ -411,10 +443,7 @@ class Element:
         result = await self._session.send(
             "DOM.querySelectorAll", {"nodeId": self._node_id, "selector": selector}
         )
-        return [
-            Element(self._session, self._tab, nid)
-            for nid in result.get("nodeIds", [])
-        ]
+        return [Element(self._session, self._tab, nid) for nid in result.get("nodeIds", [])]
 
     async def find(self, text: str, *, exact: bool = False) -> Element:
         """Find a descendant by visible text.  Raises ``LookupError``."""
@@ -442,9 +471,7 @@ class Element:
 
     async def xpath_all(self, expression: str) -> list[Element]:
         """Return every node matching an XPath relative to this element."""
-        return await self._call_elements(
-            _REL_XPATH_JS, arguments=[{"value": expression}]
-        )
+        return await self._call_elements(_REL_XPATH_JS, arguments=[{"value": expression}])
 
     async def apply(self, js: str) -> Any:
         """Run arbitrary JS against this element.
@@ -469,8 +496,10 @@ class Element:
         await self.scroll_into_view()
         box = await self.bounding_box()
         clip = {
-            "x": box["x"], "y": box["y"],
-            "width": box["width"], "height": box["height"],
+            "x": box["x"],
+            "y": box["y"],
+            "width": box["width"],
+            "height": box["height"],
             "scale": 1,
         }
         result = await self._session.send(
@@ -478,8 +507,10 @@ class Element:
             {"format": "png", "clip": clip},
         )
         import base64
+
         data = base64.b64decode(result["data"])
         if path:
             from pathlib import Path as P
+
             P(path).write_bytes(data)
         return data

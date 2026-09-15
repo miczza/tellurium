@@ -1,4 +1,4 @@
-from tellurium.stealth.profile import StealthProfile, _LCG
+from tellurium.stealth.profile import _LCG, StealthProfile
 
 
 def test_lcg_determinism():

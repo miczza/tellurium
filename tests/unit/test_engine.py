@@ -1,4 +1,4 @@
-from tellurium.browser.engine import StockEngine, PatchedEngine
+from tellurium.browser.engine import PatchedEngine, StockEngine
 
 
 def test_stock_engine_capabilities_empty():
@@ -36,11 +36,13 @@ def test_patched_engine_build_args_explicit_seed_without_profile():
 
 def test_patched_engine_build_args_with_profile():
     engine = PatchedEngine()
+
     class FakeProfile:
         seed = 42069
         target_os = "linux"
         timezone = "Europe/Berlin"
         locale = "de-DE"
+
     args = engine.build_args(FakeProfile())
     assert args == ["--fingerprint=42069", "--fingerprint-platform=linux"]
     # timezone/locale are NOT flags of chromium-telluride (no patch implements them)
@@ -49,10 +51,12 @@ def test_patched_engine_build_args_with_profile():
 
 def test_patched_engine_build_args_partial_profile():
     engine = PatchedEngine()
+
     class FakeProfile:
         seed = 100
         target_os = None
         timezone = None
         locale = None
+
     args = engine.build_args(FakeProfile())
     assert args == ["--fingerprint=100"]

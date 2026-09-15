@@ -12,18 +12,16 @@ Usage:
     python test_fingerprint_sites.py [--seed SEED] [--chrome PATH]
 """
 
-import asyncio
 import argparse
+import asyncio
 import json
-import hashlib
+import sys
 from datetime import datetime
 from pathlib import Path
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from tellurium import Browser
-
 
 CHROMIUM_TELLURIDE_PATH = "/home/miczza/PycharmProjects/chromium-telluride/src/out/Release/chrome"
 
@@ -69,10 +67,12 @@ async def test_fingerprintjs(tab, results: dict) -> None:
     """)
 
     results["fingerprintjs"] = data
-    await tab.screenshot(str(Path(__file__).parent / "screenshots" / "fingerprintjs.png"), full_page=True)
+    await tab.screenshot(
+        str(Path(__file__).parent / "screenshots" / "fingerprintjs.png"), full_page=True
+    )
     print(f"    Visitor ID: {data.get('visitorId', 'N/A')}")
     print(f"    Warnings: {len(data.get('warnings', []))}")
-    if not data.get('visitorId'):
+    if not data.get("visitorId"):
         print("    WARNING: No Visitor ID captured — FingerprintJS may have failed to load")
 
 
@@ -182,10 +182,12 @@ async def test_browserleaks_canvas(tab, results: dict) -> None:
     """)
 
     results["browserleaks_canvas"] = data
-    await tab.screenshot(str(Path(__file__).parent / "screenshots" / "browserleaks_canvas.png"), full_page=True)
-    canvas_hash = data.get('canvasHash') or 'N/A'
+    await tab.screenshot(
+        str(Path(__file__).parent / "screenshots" / "browserleaks_canvas.png"), full_page=True
+    )
+    canvas_hash = data.get("canvasHash") or "N/A"
     print(f"    Canvas Hash: {canvas_hash[:16] if canvas_hash != 'N/A' else 'N/A'}...")
-    if not data.get('canvasHash'):
+    if not data.get("canvasHash"):
         print("    WARNING: No canvas hash captured — canvas fingerprinting may not be working")
 
 
@@ -214,13 +216,15 @@ async def test_browserleaks_webgl(tab, results: dict) -> None:
     """)
 
     results["browserleaks_webgl"] = data
-    await tab.screenshot(str(Path(__file__).parent / "screenshots" / "browserleaks_webgl.png"), full_page=True)
+    await tab.screenshot(
+        str(Path(__file__).parent / "screenshots" / "browserleaks_webgl.png"), full_page=True
+    )
     print(f"    WebGL Vendor: {data.get('vendor', 'N/A')}")
     print(f"    WebGL Renderer: {data.get('renderer', 'N/A')}")
-    if data.get('renderer') and data.get('renderer') != 'N/A':
+    if data.get("renderer") and data.get("renderer") != "N/A":
         print(f"    Renderer is spoofed (value: {data['renderer']})")
     else:
-        print(f"    WARNING: No unmasked renderer found")
+        print("    WARNING: No unmasked renderer found")
 
 
 async def test_fingerprint_demo(tab, results: dict) -> None:
@@ -237,7 +241,10 @@ async def test_fingerprint_demo(tab, results: dict) -> None:
     except TimeoutError:
         print("    WARNING: Could not find 'BROWSER SMART SIGNALS' tab")
         results["fingerprint_demo"] = {"status": "error", "error": "smart_signals_button_not_found"}
-        await tab.screenshot(str(Path(__file__).parent / "screenshots" / "fingerprint_demo_smart_signals.png"), full_page=True)
+        await tab.screenshot(
+            str(Path(__file__).parent / "screenshots" / "fingerprint_demo_smart_signals.png"),
+            full_page=True,
+        )
         return
 
     data = await tab.eval("""
@@ -311,14 +318,23 @@ async def test_fingerprint_demo(tab, results: dict) -> None:
     })()
     """)
 
-    results["fingerprint_demo"] = data if data else {"status": "error", "error": "eval_returned_none"}
-    await tab.screenshot(str(Path(__file__).parent / "screenshots" / "fingerprint_demo_smart_signals.png"), full_page=True)
+    results["fingerprint_demo"] = (
+        data if data else {"status": "error", "error": "eval_returned_none"}
+    )
+    await tab.screenshot(
+        str(Path(__file__).parent / "screenshots" / "fingerprint_demo_smart_signals.png"),
+        full_page=True,
+    )
 
     if data:
         print(f"    Suspect Score: {data.get('suspect_score', 'N/A')}")
-        print(f"    Developer Tools: {'DETECTED' if data.get('developer_tools') else 'Not detected'}")
+        print(
+            f"    Developer Tools: {'DETECTED' if data.get('developer_tools') else 'Not detected'}"
+        )
         print(f"    Bot Detection: {data.get('bot_detected', 'N/A')}")
-        print(f"    Browser Tampering: {'DETECTED' if data.get('browser_tampering') else 'Not detected'}")
+        print(
+            f"    Browser Tampering: {'DETECTED' if data.get('browser_tampering') else 'Not detected'}"
+        )
         print(f"    VM Detection: {'DETECTED' if data.get('vm_detected') else 'Not detected'}")
         print(f"    Incognito: {'DETECTED' if data.get('incognito') else 'Not detected'}")
 
@@ -358,12 +374,16 @@ async def test_sannysoft(tab, results: dict) -> None:
     """)
 
     results["sannysoft"] = data if data else {"status": "error"}
-    await tab.screenshot(str(Path(__file__).parent / "screenshots" / "sannysoft.png"), full_page=True)
+    await tab.screenshot(
+        str(Path(__file__).parent / "screenshots" / "sannysoft.png"), full_page=True
+    )
 
     if data:
-        print(f"    Passed: {data.get('passed', 0)}, Failed: {data.get('failed', 0)}, Warnings: {data.get('warnings', 0)}")
-        for name, info in data.get('details', {}).items():
-            if info.get('status') == 'failed':
+        print(
+            f"    Passed: {data.get('passed', 0)}, Failed: {data.get('failed', 0)}, Warnings: {data.get('warnings', 0)}"
+        )
+        for name, info in data.get("details", {}).items():
+            if info.get("status") == "failed":
                 print(f"    FAIL: {name} = {info.get('value')}")
 
 
@@ -410,14 +430,16 @@ async def test_browserscan(tab, results: dict) -> None:
     """)
 
     results["browserscan"] = data if data else {"status": "error"}
-    await tab.screenshot(str(Path(__file__).parent / "screenshots" / "browserscan.png"), full_page=True)
+    await tab.screenshot(
+        str(Path(__file__).parent / "screenshots" / "browserscan.png"), full_page=True
+    )
 
     if data:
         print(f"    Bot Detected: {data.get('bot_detected', 'N/A')}")
-        details = data.get('details', {})
-        if 'UserAgent' in details:
+        details = data.get("details", {})
+        if "UserAgent" in details:
             print(f"    User Agent: {details['UserAgent'][:60]}...")
-        if 'WebGLRenderer' in details:
+        if "WebGLRenderer" in details:
             print(f"    WebGL Renderer: {details['WebGLRenderer']}")
 
 
@@ -470,15 +492,17 @@ async def test_fingerprint_scan(tab, results: dict) -> None:
     """)
 
     results["fingerprint_scan"] = data if data else {"status": "error"}
-    await tab.screenshot(str(Path(__file__).parent / "screenshots" / "fingerprint_scan.png"), full_page=True)
+    await tab.screenshot(
+        str(Path(__file__).parent / "screenshots" / "fingerprint_scan.png"), full_page=True
+    )
 
     if data:
         print(f"    Bot Risk Score: {data.get('bot_risk_score', 'N/A')}")
-        signals = data.get('signals', {})
+        signals = data.get("signals", {})
         print(f"    navigator.webdriver: {signals.get('webdriver', 'N/A')}")
         print(f"    noTaskbar: {signals.get('noTaskbar', 'N/A')}")
         print(f"    scrollbarWidth: {signals.get('scrollbarWidth', 'N/A')}")
-        for test, val in data.get('bot_tests', {}).items():
+        for test, val in data.get("bot_tests", {}).items():
             print(f"    {test}: {val}")
 
 
@@ -604,9 +628,9 @@ async def compare_seeds(seeds: list[int], chrome_path: str) -> None:
         print(f"  Results saved to {output_file}")
 
     # Compare results
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("COMPARISON REPORT")
-    print("="*60)
+    print("=" * 60)
 
     if len(all_results) >= 2:
         r1, r2 = all_results[0], all_results[1]
@@ -631,9 +655,9 @@ async def compare_seeds(seeds: list[int], chrome_path: str) -> None:
         print(f"  Lies Detected: Seed {r1['seed']}={l1}, Seed {r2['seed']}={l2}")
 
     # Stability check (run same seed twice)
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("STABILITY CHECK")
-    print("="*60)
+    print("=" * 60)
 
     seed = seeds[0]
     print(f"\nRunning seed {seed} twice to verify determinism...")
@@ -655,7 +679,7 @@ async def compare_seeds(seeds: list[int], chrome_path: str) -> None:
             "canvas_hash_run1": c1,
             "canvas_hash_run2": c2,
             "stable": c1 == c2 if c1 and c2 else None,
-        }
+        },
     }
 
     report_file = Path(__file__).parent / "comparison_report.json"
@@ -667,9 +691,15 @@ async def compare_seeds(seeds: list[int], chrome_path: str) -> None:
 async def main():
     parser = argparse.ArgumentParser(description="Test chromium-telluride fingerprinting")
     parser.add_argument("--seed", type=int, default=42069, help="Fingerprint seed")
-    parser.add_argument("--seeds", type=str, help="Comma-separated seeds for comparison (e.g., 42069,99999)")
-    parser.add_argument("--chrome", type=str, default=CHROMIUM_TELLURIDE_PATH, help="Chrome executable path")
-    parser.add_argument("--site", type=str, help="Run only a specific site test (e.g., fingerprint_demo, creepjs)")
+    parser.add_argument(
+        "--seeds", type=str, help="Comma-separated seeds for comparison (e.g., 42069,99999)"
+    )
+    parser.add_argument(
+        "--chrome", type=str, default=CHROMIUM_TELLURIDE_PATH, help="Chrome executable path"
+    )
+    parser.add_argument(
+        "--site", type=str, help="Run only a specific site test (e.g., fingerprint_demo, creepjs)"
+    )
     args = parser.parse_args()
 
     if args.seeds:

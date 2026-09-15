@@ -5,6 +5,7 @@ sleep through :meth:`IdleSimulator.idle` so that a wait produces the kind of
 low-amplitude background mouse activity a real user generates while reading,
 instead of a perfectly still cursor. Design doc 05 "Idle Simulation".
 """
+
 import asyncio
 import random
 

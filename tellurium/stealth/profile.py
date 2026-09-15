@@ -5,17 +5,15 @@ from __future__ import annotations
 import os
 import platform
 import random
-import sys
 from dataclasses import dataclass
-from typing import Optional
 
 from tellurium.stealth.data.gpu import GPU_PROFILES
 from tellurium.stealth.data.screens import SCREEN_RESOLUTIONS
 
-
 # ---------------------------------------------------------------------------
 # LCG — identical to C++ FingerprintRNG for seed coherence
 # ---------------------------------------------------------------------------
+
 
 class _LCG:
     """LCG identical to C++ FingerprintRNG for seed coherence."""
@@ -115,8 +113,7 @@ def build_accept_language(languages: list) -> str:
     caller overrides ``languages=`` manually, so the two paths cannot drift.
     """
     return ", ".join(
-        f"{lang};q={round(1.0 - 0.1 * i, 1)}" if i > 0 else lang
-        for i, lang in enumerate(languages)
+        f"{lang};q={round(1.0 - 0.1 * i, 1)}" if i > 0 else lang for i, lang in enumerate(languages)
     )
 
 
@@ -124,9 +121,7 @@ def build_accept_language(languages: list) -> str:
 # User-Agent / Client-Hints builders
 # ---------------------------------------------------------------------------
 
-_CH_UA_BRAND_TMPL = (
-    '"Chromium";v="{major}", "Google Chrome";v="{major}", "Not-A.Brand";v="99"'
-)
+_CH_UA_BRAND_TMPL = '"Chromium";v="{major}", "Google Chrome";v="{major}", "Not-A.Brand";v="99"'
 
 _CH_UA_FULL_VER_TMPL = (
     '"Chromium";v="{full}", "Google Chrome";v="{full}", "Not-A.Brand";v="99.0.0.0"'
@@ -134,7 +129,7 @@ _CH_UA_FULL_VER_TMPL = (
 
 
 def _build_ua_windows(version: str) -> str:
-    major = version.split(".")[0]
+    version.split(".")[0]
     return (
         f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         f"AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -187,6 +182,7 @@ _CH_UA_PLATFORM_MAP = {
 # StealthProfile dataclass
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class StealthProfile:
     # Core identity
@@ -228,13 +224,13 @@ class StealthProfile:
     # GREASE brand — populated post-construction by Browser.launch() after
     # Browser.getVersion is called on the root session (review 2026-04-15 #5).
     # None means the engine should fall back to the historical literal.
-    grease_brand: Optional[str] = None
-    grease_version: Optional[str] = None
+    grease_brand: str | None = None
+    grease_version: str | None = None
 
     # WebRTC public IP — populated post-construction by Browser.launch() after
     # resolve_webrtc_ip() runs (review 2026-04-15 #9, aspect #18).
     # None means no IP spoofing via webrtc.js.
-    webrtc_public_ip: Optional[str] = None
+    webrtc_public_ip: str | None = None
 
     # ------------------------------------------------------------------
     # Internal builder
@@ -245,9 +241,9 @@ class StealthProfile:
         seed: int,
         target_os: str,
         browser_version: str,
-        timezone: Optional[str] = None,
-        locale: Optional[str] = None,
-    ) -> "StealthProfile":
+        timezone: str | None = None,
+        locale: str | None = None,
+    ) -> StealthProfile:
         rng = _LCG(seed)
 
         # GPU
@@ -313,9 +309,9 @@ class StealthProfile:
     def from_seed(
         cls,
         seed: int,
-        os: Optional[str] = None,
+        os: str | None = None,
         browser_version: str = "146.0.7680.188",
-    ) -> "StealthProfile":
+    ) -> StealthProfile:
         """Create a deterministic profile from a seed."""
         target_os = os if os is not None else _detect_real_os()
         return cls._build_profile(seed, target_os, browser_version)
@@ -324,7 +320,7 @@ class StealthProfile:
     def auto(
         cls,
         browser_version: str = "146.0.7680.188",
-    ) -> "StealthProfile":
+    ) -> StealthProfile:
         """Create a profile with a random seed using the real OS."""
         seed = random.randint(1, 0xFFFFFFFF)
         target_os = _detect_real_os()
@@ -335,17 +331,15 @@ class StealthProfile:
         cls,
         proxy_ip: str,
         browser_version: str = "146.0.7680.188",
-    ) -> "StealthProfile":
+    ) -> StealthProfile:
         """Create a profile with timezone/locale from GeoIP of proxy_ip."""
-        timezone: Optional[str] = None
-        locale: Optional[str] = None
+        timezone: str | None = None
+        locale: str | None = None
 
         try:
             import maxminddb  # type: ignore
 
-            db_path = os.path.join(
-                os.path.dirname(__file__), "data", "GeoLite2-City.mmdb"
-            )
+            db_path = os.path.join(os.path.dirname(__file__), "data", "GeoLite2-City.mmdb")
             if os.path.exists(db_path):
                 with maxminddb.open_database(db_path) as reader:
                     record = reader.get(proxy_ip)
@@ -353,16 +347,14 @@ class StealthProfile:
                         tz_val = record.get("location", {}).get("time_zone")
                         if tz_val:
                             timezone = tz_val
-                        lang_val = (
-                            record.get("country", {})
-                            .get("names", {})
-                            .get("en")
-                        )
+                        lang_val = record.get("country", {}).get("names", {}).get("en")
                         if lang_val:
                             locale = "en-US"
-        except Exception:
+        except Exception:  # noqa: BLE001 - locale detection is best-effort
             pass
 
         seed = random.randint(1, 0xFFFFFFFF)
         target_os = _detect_real_os()
-        return cls._build_profile(seed, target_os, browser_version, timezone=timezone, locale=locale)
+        return cls._build_profile(
+            seed, target_os, browser_version, timezone=timezone, locale=locale
+        )

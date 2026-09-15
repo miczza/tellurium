@@ -1,4 +1,5 @@
 """Element tree/text/relative-query API against real Chrome."""
+
 from __future__ import annotations
 
 import pytest

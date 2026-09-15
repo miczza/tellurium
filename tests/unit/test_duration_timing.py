@@ -1,4 +1,5 @@
 """Tests for request duration timing calculation."""
+
 from tellurium.capture.manager import CaptureManager
 
 
@@ -7,23 +8,34 @@ def test_duration_calculated_from_elapsed_time():
     mgr = CaptureManager(None)
 
     # Simulate request at t=1000.0
-    mgr._on_request({
-        "requestId": "r1",
-        "timestamp": 1000.0,
-        "request": {"url": "https://api.example.com/data", "method": "GET", "headers": {}},
-    })
+    mgr._on_request(
+        {
+            "requestId": "r1",
+            "timestamp": 1000.0,
+            "request": {"url": "https://api.example.com/data", "method": "GET", "headers": {}},
+        }
+    )
 
     # Simulate response (doesn't affect duration)
-    mgr._on_response({
-        "requestId": "r1",
-        "response": {"status": 200, "headers": {}, "mimeType": "application/json", "encodedDataLength": 500},
-    })
+    mgr._on_response(
+        {
+            "requestId": "r1",
+            "response": {
+                "status": 200,
+                "headers": {},
+                "mimeType": "application/json",
+                "encodedDataLength": 500,
+            },
+        }
+    )
 
     # Simulate finished at t=1000.220 (220ms elapsed)
-    mgr._on_finished({
-        "requestId": "r1",
-        "timestamp": 1000.220,
-    })
+    mgr._on_finished(
+        {
+            "requestId": "r1",
+            "timestamp": 1000.220,
+        }
+    )
 
     req = mgr._by_id["r1"]
     assert req._complete is True
@@ -35,10 +47,12 @@ def test_duration_zero_when_timestamps_missing():
     mgr = CaptureManager(None)
 
     # Request without timestamp
-    mgr._on_request({
-        "requestId": "r2",
-        "request": {"url": "https://x.com", "method": "GET", "headers": {}},
-    })
+    mgr._on_request(
+        {
+            "requestId": "r2",
+            "request": {"url": "https://x.com", "method": "GET", "headers": {}},
+        }
+    )
 
     # Finished without timestamp
     mgr._on_finished({"requestId": "r2"})

@@ -4,9 +4,12 @@ This is the Python-layer complement of patch T0.2 (Inspector ownKeys
 guard in V8). Double-layer protection: architectural (here) + native
 (patched Chromium). See design doc 07 and 09.
 """
+
 import asyncio
 import json
+
 import pytest
+
 from tellurium.cdp.transport._base import CDPTransport
 from tellurium.cdp.transport._session import Session, SessionRouter
 

@@ -1,5 +1,5 @@
 """End-to-end tests for human simulation (mouse, typing, scroll)."""
-import pytest
+
 from tellurium import Browser
 
 
@@ -36,14 +36,14 @@ async def test_human_scroll_moves_viewport(local_server):
         tab = await browser.new_tab(f"{local_server}/basic.html")
 
         # Get initial scroll position
-        initial = await tab.eval("window.scrollY")
+        await tab.eval("window.scrollY")
 
         # Scroll down
         await tab.scroll(delta_y=500, human=True)
         await tab.wait(0.5)  # Allow scroll to complete
 
         # Verify scrolled (may not be exactly 500 due to page height)
-        final = await tab.eval("window.scrollY")
+        await tab.eval("window.scrollY")
         # Just verify some scrolling happened (page may not be tall enough for 500px)
         assert True  # Scroll API doesn't error
 

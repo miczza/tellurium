@@ -1,5 +1,7 @@
 """Integration: T7 runtime script injection on stock Chrome branded."""
+
 from __future__ import annotations
+
 import os
 import shutil
 
@@ -59,7 +61,7 @@ async def test_runtime_injection_survives_navigation():
         wd1 = await tab.eval("navigator.webdriver")
         await tab.get("data:text/html,<html><body>nav2</body></html>")
         wd2 = await tab.eval("navigator.webdriver")
-        assert (wd1 is None or wd1 is False)
-        assert (wd2 is None or wd2 is False)
+        assert wd1 is None or wd1 is False
+        assert wd2 is None or wd2 is False
     finally:
         await browser.close()

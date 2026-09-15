@@ -12,7 +12,6 @@ from typing import Any
 
 from tellurium.session import storage
 from tellurium.session.errors import (
-    SessionCorruptError,
     SessionInvalidError,
     SessionLoginFailedError,
 )
@@ -35,8 +34,8 @@ class Session:
             )
 
         self.name = name
-        self.path = os.path.abspath(path) if path else os.path.abspath(
-            os.path.join("sessions", name)
+        self.path = (
+            os.path.abspath(path) if path else os.path.abspath(os.path.join("sessions", name))
         )
         self.validate_mode = validate_mode
         self._validators: list = []
@@ -45,7 +44,7 @@ class Session:
         self._last_launch_params: dict[str, Any] | None = None
         self._started = False
         self._created_at: str | None = None
-        self._chromium_version_used: str | None = None   # set by Browser.launch/Session.start
+        self._chromium_version_used: str | None = None  # set by Browser.launch/Session.start
         self._chromium_version_loaded: str | None = None
 
         loaded = storage.load(self._json_path())
@@ -55,8 +54,10 @@ class Session:
             self.metadata: dict[str, Any] = {}
         else:
             # File wins: constructor seed is ignored
-            self.seed = int(loaded["seed"]) if "seed" in loaded else (
-                seed if seed is not None else random.randint(1, 0xFFFFFFFF)
+            self.seed = (
+                int(loaded["seed"])
+                if "seed" in loaded
+                else (seed if seed is not None else random.randint(1, 0xFFFFFFFF))
             )
             self.metadata = dict(loaded.get("metadata", {}))
             if "launch" in loaded and isinstance(loaded["launch"], dict):
@@ -180,7 +181,9 @@ class Session:
             # after a failed start() does not persist a bad configuration.
             self._last_launch_params = dict(merged)
             # Persist-worthy: record the chromium_version we actually launched with.
-            self._chromium_version_used = merged.get("chromium_version") or self._chromium_version_used
+            self._chromium_version_used = (
+                merged.get("chromium_version") or self._chromium_version_used
+            )
             self._started = True
             await self._run_validation_and_login(browser)
             yield browser
@@ -189,7 +192,7 @@ class Session:
             if browser is not None:
                 try:
                     await browser.close()
-                except Exception:
+                except Exception:  # noqa: BLE001 - cleanup after failure
                     pass
 
     async def _run_validation_and_login(self, browser) -> None:
@@ -222,9 +225,7 @@ def _merge_launch_params(kwargs: dict, hints: dict) -> dict:
     """
     bad = _MANAGED_LAUNCH_KEYS & kwargs.keys()
     if bad:
-        raise TypeError(
-            f"session.start() manages these parameters internally: {sorted(bad)}"
-        )
+        raise TypeError(f"session.start() manages these parameters internally: {sorted(bad)}")
     safe_hints = {k: v for k, v in hints.items() if k not in _MANAGED_LAUNCH_KEYS}
     return {**safe_hints, **kwargs}
 
@@ -243,7 +244,7 @@ async def _combine_validators(validators, mode: str, *, tab) -> bool:
         for v in validators:
             try:
                 result = await v(tab)
-            except Exception:
+            except Exception:  # noqa: BLE001 - user validator errors mean invalid
                 return False
             if not result:
                 return False
@@ -253,7 +254,7 @@ async def _combine_validators(validators, mode: str, *, tab) -> bool:
         for v in validators:
             try:
                 result = await v(tab)
-            except Exception:
+            except Exception:  # noqa: BLE001 - user validator errors are skipped
                 continue
             if result:
                 return True

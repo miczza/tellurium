@@ -2,6 +2,7 @@
 
 Both used to be dead code; these tests pin the wiring so they stay reachable.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,6 +28,7 @@ def _fake_tab(**kwargs) -> Tab:
 # IdleSimulator
 # ---------------------------------------------------------------------------
 
+
 def test_tab_has_no_idle_simulator_by_default():
     assert _fake_tab()._idle_simulator is None
 
@@ -50,9 +52,10 @@ async def test_wait_with_idle_emits_mouse_moves():
     tab.mouse_move = AsyncMock()
 
     # Force every iteration to pick a micro-move and to sleep ~instantly.
-    with patch("tellurium.stealth.idle.random.choices",
-               return_value=["micro_move"]), \
-         patch("tellurium.stealth.idle.random.uniform", return_value=0.001):
+    with (
+        patch("tellurium.stealth.idle.random.choices", return_value=["micro_move"]),
+        patch("tellurium.stealth.idle.random.uniform", return_value=0.001),
+    ):
         await tab.wait(0.05)
 
     assert tab.mouse_move.await_count >= 1
@@ -76,10 +79,11 @@ async def test_idle_seeds_from_current_mouse_position():
     tab = _fake_tab(stealth_idle=True)
     tab._mouse_pos = (640.0, 480.0)
     tab.mouse_move = AsyncMock()
-    with patch("tellurium.stealth.idle.random.choices",
-               return_value=["micro_move"]), \
-         patch("tellurium.stealth.idle.random.uniform", return_value=0.001), \
-         patch("tellurium.stealth.idle.random.gauss", return_value=0.0):
+    with (
+        patch("tellurium.stealth.idle.random.choices", return_value=["micro_move"]),
+        patch("tellurium.stealth.idle.random.uniform", return_value=0.001),
+        patch("tellurium.stealth.idle.random.gauss", return_value=0.0),
+    ):
         await tab.wait(0.02)
     x, y = tab.mouse_move.await_args_list[0].args
     assert (x, y) == (640.0, 480.0)
@@ -88,6 +92,7 @@ async def test_idle_seeds_from_current_mouse_position():
 # ---------------------------------------------------------------------------
 # ActionTimer
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_action_timer_first_action_has_no_delay():

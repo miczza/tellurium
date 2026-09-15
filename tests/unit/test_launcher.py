@@ -1,7 +1,9 @@
-import sys
 from unittest.mock import patch
+
 from tellurium.browser.launcher import (
-    _detect_chrome_version, _find_chrome_candidates, _determine_platform, build_chrome_flags,
+    _detect_chrome_version,
+    _determine_platform,
+    build_chrome_flags,
 )
 
 
@@ -29,8 +31,9 @@ def test_determine_platform_linux():
 
 
 def test_build_chrome_flags_base():
-    flags = build_chrome_flags(headless=False, user_data_dir="/tmp/td", proxy=None,
-                               extra_args=None, engine_args=[])
+    flags = build_chrome_flags(
+        headless=False, user_data_dir="/tmp/td", proxy=None, extra_args=None, engine_args=[]
+    )
     assert "--remote-debugging-pipe" in flags
     assert "--no-first-run" in flags
     assert "--user-data-dir=/tmp/td" in flags
@@ -38,19 +41,30 @@ def test_build_chrome_flags_base():
 
 
 def test_build_chrome_flags_headless():
-    flags = build_chrome_flags(headless=True, user_data_dir="/tmp/td", proxy=None,
-                               extra_args=None, engine_args=[])
+    flags = build_chrome_flags(
+        headless=True, user_data_dir="/tmp/td", proxy=None, extra_args=None, engine_args=[]
+    )
     assert "--headless=new" in flags
 
 
 def test_build_chrome_flags_proxy():
-    flags = build_chrome_flags(headless=False, user_data_dir="/tmp/td",
-                               proxy="localhost:8080", extra_args=None, engine_args=[])
+    flags = build_chrome_flags(
+        headless=False,
+        user_data_dir="/tmp/td",
+        proxy="localhost:8080",
+        extra_args=None,
+        engine_args=[],
+    )
     assert "--proxy-server=localhost:8080" in flags
 
 
 def test_build_chrome_flags_extra():
-    flags = build_chrome_flags(headless=False, user_data_dir="/tmp/td", proxy=None,
-                               extra_args=["--disable-gpu"], engine_args=["--fingerprint=42"])
+    flags = build_chrome_flags(
+        headless=False,
+        user_data_dir="/tmp/td",
+        proxy=None,
+        extra_args=["--disable-gpu"],
+        engine_args=["--fingerprint=42"],
+    )
     assert "--disable-gpu" in flags
     assert "--fingerprint=42" in flags

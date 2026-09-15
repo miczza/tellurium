@@ -1,5 +1,3 @@
-import asyncio
-import pytest
 from tellurium.browser.proxy import ProxyForwarder, parse_proxy_url
 
 

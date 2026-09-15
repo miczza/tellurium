@@ -1,12 +1,12 @@
-import asyncio
 import os
 import shutil
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from tellurium.browser.engine import StockEngine, PatchedEngine
+import pytest
+
+from tellurium.browser.engine import PatchedEngine, StockEngine
+from tellurium.stealth.engine import _STEALTH_TARGET_FILTER, StealthEngine
 from tellurium.stealth.profile import StealthProfile
-from tellurium.stealth.engine import StealthEngine, _STEALTH_TARGET_FILTER
 
 
 def _make_profile(**overrides):
@@ -44,6 +44,7 @@ def _make_profile(**overrides):
 # Constructor / capability routing
 # ---------------------------------------------------------------------------
 
+
 def test_stock_engine_no_native_caps():
     engine = StockEngine()
     se = StealthEngine(engine, _make_profile(), headless=False, has_proxy=False)
@@ -60,6 +61,7 @@ def test_patched_engine_has_native_caps():
 # ---------------------------------------------------------------------------
 # build_extension
 # ---------------------------------------------------------------------------
+
 
 def test_build_extension_stock_returns_path():
     engine = StockEngine()
@@ -103,6 +105,7 @@ def test_build_extension_proxy_includes_webrtc():
 # _build_scripts
 # ---------------------------------------------------------------------------
 
+
 def test_build_scripts_stock_includes_core():
     """T7.5: stock backend builds 4 core JS overrides
     (webdriver, chrome_runtime, plugins, keyboard_layout). webgl/tostring_mask/
@@ -144,17 +147,21 @@ def test_build_scripts_stock_excludes_dropped_scripts():
     engine = StockEngine()
     se = StealthEngine(engine, _make_profile(), headless=True, has_proxy=True)
     bundle = "\n".join(se._build_scripts())
-    assert "WebGLRenderingContext.prototype.getParameter" not in bundle, \
+    assert "WebGLRenderingContext.prototype.getParameter" not in bundle, (
         "webgl.js override has reappeared in the bundle"
-    assert "new Proxy(nativeToString" not in bundle, \
+    )
+    assert "new Proxy(nativeToString" not in bundle, (
         "tostring_mask.js Proxy override has reappeared in the bundle"
-    assert "hardwareConcurrency" not in bundle, \
+    )
+    assert "hardwareConcurrency" not in bundle, (
         "navigator_proto.js override has reappeared in the bundle"
+    )
 
 
 # ---------------------------------------------------------------------------
 # apply_to_session (async)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_apply_to_session_stock_calls_ua_override():
@@ -240,8 +247,10 @@ async def test_apply_to_session_no_headless_fixes_when_headed():
 async def test_apply_headless_device_metrics():
     engine = StockEngine()
     profile = _make_profile(
-        screen_width=1920, screen_height=1080,
-        screen_avail_height=1050, device_pixel_ratio=2.0,
+        screen_width=1920,
+        screen_height=1080,
+        screen_avail_height=1050,
+        device_pixel_ratio=2.0,
     )
     se = StealthEngine(engine, profile, headless=True, has_proxy=False)
 
@@ -262,6 +271,7 @@ async def test_apply_headless_device_metrics():
 # setup_auto_attach
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_setup_auto_attach_stock_waits_for_debugger():
     engine = StockEngine()
@@ -270,12 +280,15 @@ async def test_setup_auto_attach_stock_waits_for_debugger():
     session = AsyncMock()
     await se.setup_auto_attach(session)
 
-    session.send.assert_called_once_with("Target.setAutoAttach", {
-        "autoAttach": True,
-        "waitForDebuggerOnStart": True,
-        "flatten": True,
-        "filter": _STEALTH_TARGET_FILTER,
-    })
+    session.send.assert_called_once_with(
+        "Target.setAutoAttach",
+        {
+            "autoAttach": True,
+            "waitForDebuggerOnStart": True,
+            "flatten": True,
+            "filter": _STEALTH_TARGET_FILTER,
+        },
+    )
     # setup_auto_attach only arms the flag; wire_session() registers the
     # Target.attachedToTarget callback.
     session.on.assert_not_called()
@@ -291,7 +304,8 @@ async def test_wire_session_registers_listener_before_arming():
     await se.wire_session(session)
 
     session.on.assert_called_once_with(
-        "Target.attachedToTarget", se._on_target_attached,
+        "Target.attachedToTarget",
+        se._on_target_attached,
     )
     session.send.assert_called_once()
     assert session.send.call_args[0][0] == "Target.setAutoAttach"
@@ -305,12 +319,15 @@ async def test_setup_auto_attach_patched_no_wait():
     session = AsyncMock()
     await se.setup_auto_attach(session)
 
-    session.send.assert_called_once_with("Target.setAutoAttach", {
-        "autoAttach": True,
-        "waitForDebuggerOnStart": True,
-        "flatten": True,
-        "filter": _STEALTH_TARGET_FILTER,
-    })
+    session.send.assert_called_once_with(
+        "Target.setAutoAttach",
+        {
+            "autoAttach": True,
+            "waitForDebuggerOnStart": True,
+            "flatten": True,
+            "filter": _STEALTH_TARGET_FILTER,
+        },
+    )
     # No event handler registered for patched
     session.on.assert_not_called()
 
@@ -318,6 +335,7 @@ async def test_setup_auto_attach_patched_no_wait():
 # ---------------------------------------------------------------------------
 # set_router / _get_session
 # ---------------------------------------------------------------------------
+
 
 def test_set_router_and_get_session():
     engine = StockEngine()
@@ -337,6 +355,7 @@ def test_set_router_and_get_session():
 # ---------------------------------------------------------------------------
 # UA override parameters
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_ua_override_params():

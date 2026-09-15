@@ -1,8 +1,11 @@
 """POSIX pipe transport for CDP (Linux/macOS)."""
+
 from __future__ import annotations
+
 import asyncio
 import json
 import os
+
 from tellurium.cdp.transport._base import CDPTransport
 
 
@@ -11,6 +14,7 @@ class PipePosixTransport(CDPTransport):
     Reads from read_fd, writes to write_fd.
     Messages are null-terminated JSON (ASCIIZ mode).
     """
+
     def __init__(self, read_fd: int, write_fd: int):
         self._read_fd = read_fd
         self._write_fd = write_fd
@@ -42,7 +46,7 @@ class PipePosixTransport(CDPTransport):
             null_pos = self._buffer.find(b"\0")
             if null_pos != -1:
                 raw = bytes(self._buffer[:null_pos])
-                del self._buffer[:null_pos + 1]
+                del self._buffer[: null_pos + 1]
                 return json.loads(raw)
             chunk = await self._reader.read(65536)
             if not chunk:

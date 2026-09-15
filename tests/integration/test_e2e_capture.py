@@ -1,5 +1,5 @@
 """End-to-end tests for network capture functionality."""
-import pytest
+
 from tellurium import Browser
 
 
@@ -32,7 +32,7 @@ async def test_capture_with_logging(local_server, capsys):
         await tab.capture_stop()
 
     # Log output goes to stderr
-    captured = capsys.readouterr()
+    capsys.readouterr()
     # Note: Testing stderr capture in pytest is complex because the logging
     # output depends on timing and may be buffered. The primary purpose of
     # this test is to verify that log=True doesn't cause errors, not to

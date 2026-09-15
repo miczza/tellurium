@@ -1,6 +1,7 @@
 """Tests for WebRTC IP resolution pipeline (review 2026-04-15 #9)."""
+
 import pytest
-from unittest.mock import patch
+
 from tellurium.stealth._webrtc import resolve_webrtc_ip
 
 
@@ -19,7 +20,9 @@ def test_resolve_webrtc_ip_auto_uses_proxy_ip(monkeypatch):
     """'auto' with a proxy URL must resolve the proxy host to an IP."""
     monkeypatch.setattr(
         "socket.gethostbyname",
-        lambda host: "198.51.100.7" if host == "proxy.example.com" else (_ for _ in ()).throw(OSError),
+        lambda host: (
+            "198.51.100.7" if host == "proxy.example.com" else (_ for _ in ()).throw(OSError)
+        ),
     )
     ip = resolve_webrtc_ip("auto", proxy="http://proxy.example.com:8080")
     assert ip == "198.51.100.7"
@@ -69,7 +72,10 @@ def test_webrtc_js_anchored_to_candidate_lines():
     """Regression: regex must anchor to a=candidate lines, not match random IPs
     embedded elsewhere in SDP."""
     from pathlib import Path
-    js_path = Path(__file__).parent.parent.parent / "tellurium" / "stealth" / "scripts" / "webrtc.js"
+
+    js_path = (
+        Path(__file__).parent.parent.parent / "tellurium" / "stealth" / "scripts" / "webrtc.js"
+    )
     content = js_path.read_text()
     assert "^(a=candidate:" in content, (
         "webrtc.js regex must anchor on a=candidate line start to prevent "

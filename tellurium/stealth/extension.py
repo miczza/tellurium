@@ -1,5 +1,7 @@
 """Generate a Chrome extension for stealth script injection."""
+
 from __future__ import annotations
+
 import json
 import os
 import tempfile
@@ -28,13 +30,15 @@ def create_stealth_extension(scripts: list[str], matches: list[str] | None = Non
         "manifest_version": 3,
         "name": "Tellurium",
         "version": "1.0",
-        "content_scripts": [{
-            "matches": matches,
-            "js": ["content.js"],
-            "run_at": "document_start",
-            "all_frames": True,
-            "world": "MAIN",
-        }],
+        "content_scripts": [
+            {
+                "matches": matches,
+                "js": ["content.js"],
+                "run_at": "document_start",
+                "all_frames": True,
+                "world": "MAIN",
+            }
+        ],
     }
 
     with open(os.path.join(ext_dir, "manifest.json"), "w") as f:

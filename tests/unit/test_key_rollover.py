@@ -1,4 +1,5 @@
 """Tests for apply_key_rollover — fast-typist flight-time overlap."""
+
 from tellurium.stealth.human import apply_key_rollover
 
 
@@ -17,8 +18,12 @@ def test_rollover_no_overlap_for_slow_typing():
     events = _make_events([("a", 200.0, 116.0), ("b", 200.0, 116.0)])
     rolled = apply_key_rollover(events, threshold_ms=80.0)
     assert [e["type"] for e in rolled] == [
-        "rawKeyDown", "char", "keyUp",
-        "rawKeyDown", "char", "keyUp",
+        "rawKeyDown",
+        "char",
+        "keyUp",
+        "rawKeyDown",
+        "char",
+        "keyUp",
     ]
     assert [e["key"] for e in rolled] == ["a", "a", "a", "b", "b", "b"]
 
@@ -38,9 +43,7 @@ def test_rollover_overlap_for_fast_typing():
     # B's rawKeyDown comes before A's keyUp
     b_down_idx = seq.index(("rawKeyDown", "b"))
     a_up_idx = seq.index(("keyUp", "a"))
-    assert b_down_idx < a_up_idx, (
-        f"Expected B_down before A_up under rollover; got {seq}"
-    )
+    assert b_down_idx < a_up_idx, f"Expected B_down before A_up under rollover; got {seq}"
 
 
 def test_rollover_preserves_per_char_triple_order():

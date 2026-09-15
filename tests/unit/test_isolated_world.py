@@ -1,11 +1,11 @@
 """Tests for the per-frame isolated-world helper used by human-sim DOM queries."""
+
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from tellurium.stealth._isolated import get_hsim_world
-from tellurium.cdp.transport._session import Session, SessionRouter
 from tellurium.browser.tab import Tab
+from tellurium.cdp.transport._session import Session, SessionRouter
+from tellurium.stealth._isolated import get_hsim_world
 
 
 def test_get_hsim_world_creates_once_per_frame():
@@ -27,10 +27,12 @@ def test_get_hsim_world_per_frame_isolation():
     tab = MagicMock()
     tab._hsim_worlds = {}
     tab._session = MagicMock()
-    tab._session.send = AsyncMock(side_effect=[
-        {"executionContextId": 10},
-        {"executionContextId": 20},
-    ])
+    tab._session.send = AsyncMock(
+        side_effect=[
+            {"executionContextId": 10},
+            {"executionContextId": 20},
+        ]
+    )
 
     ctx_a = asyncio.run(get_hsim_world(tab, frame_id="FRAME_A"))
     ctx_b = asyncio.run(get_hsim_world(tab, frame_id="FRAME_B"))
@@ -75,6 +77,7 @@ def test_get_hsim_world_falls_back_to_main_world_on_failure():
 # I1: empty frame_id short-circuit
 # ---------------------------------------------------------------------------
 
+
 def test_get_hsim_world_empty_frame_id_returns_none():
     """Empty frame_id short-circuits without a CDP call."""
     tab = MagicMock()
@@ -90,6 +93,7 @@ def test_get_hsim_world_empty_frame_id_returns_none():
 # ---------------------------------------------------------------------------
 # C1: Page.frameNavigated dispatched through real Session (not MagicMock)
 # ---------------------------------------------------------------------------
+
 
 def _make_session() -> Session:
     """Create a Session with a fake router (no real transport needed)."""
@@ -113,6 +117,7 @@ def test_frame_navigated_main_frame_updates_frame_id():
     Tab.__init__ must be a plain function (not async def) so the synchronous
     dispatcher actually executes it.
     """
+
     async def _run():
         session = _make_session()
         tab = _make_tab(session)
@@ -136,6 +141,7 @@ def test_frame_navigated_subframe_pops_hsim_worlds():
 
     C1: verifies that the handler runs synchronously via the dispatcher.
     """
+
     async def _run():
         session = _make_session()
         tab = _make_tab(session)

@@ -5,11 +5,18 @@ userAgentData.brands to prevent servers from hard-coding a closed brand list.
 The exact token is randomized across Chrome versions (e.g. 'Not_A Brand',
 'Not?A_Brand', 'Not;A=Brand', '(Not;Browser)').
 """
+
 from __future__ import annotations
 
-_KNOWN_PRODUCT_BRANDS: frozenset[str] = frozenset({
-    "Chromium", "Google Chrome", "Microsoft Edge", "Opera", "Brave",
-})
+_KNOWN_PRODUCT_BRANDS: frozenset[str] = frozenset(
+    {
+        "Chromium",
+        "Google Chrome",
+        "Microsoft Edge",
+        "Opera",
+        "Brave",
+    }
+)
 
 _FALLBACK_BRAND = "Not_A Brand"
 _FALLBACK_VERSION = "24"

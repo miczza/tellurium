@@ -1,6 +1,5 @@
 import pytest
 
-from tellurium import Browser
 from tellurium.session import Session, SessionInvalidError, SessionLoginFailedError
 
 
@@ -18,9 +17,10 @@ async def test_start_launches_and_closes(tmp_path):
 
 async def test_start_uses_session_user_data_dir(tmp_path):
     import os
+
     s = Session("t2", path=str(tmp_path / "s"))
 
-    async with s.start(headless=True) as browser:
+    async with s.start(headless=True):
         expected = os.path.join(s.path, "chrome")
         assert os.path.isdir(expected)
 
@@ -82,7 +82,9 @@ async def test_first_run_triggers_login_then_persists(tmp_path, local_server):
         s.save()
 
     # session.json must exist and contain our metadata
-    import os, json as J
+    import json as J
+    import os
+
     assert os.path.exists(os.path.join(s.path, "session.json"))
     data = J.loads(open(os.path.join(s.path, "session.json")).read())
     assert data["metadata"]["username"] == "mario"
@@ -163,7 +165,9 @@ async def test_portability_new_session_loads_metadata(tmp_path, local_server):
     # Step 2: script B constructs a Session with just the name/path, no
     # hardcoded credentials. Simulate cookie invalidation by deleting cookies
     # dir from user_data_dir so the validator will fail.
-    import shutil, os
+    import os
+    import shutil
+
     default_dir = os.path.join(s_a.path, "chrome", "Default")
     for entry in os.listdir(default_dir):
         if entry.startswith("Cookies"):

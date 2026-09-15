@@ -1,6 +1,5 @@
 """End-to-end tests for Session persistence."""
-import pytest
-from pathlib import Path
+
 from tellurium.session import Session
 
 
@@ -81,7 +80,7 @@ async def test_session_login_flow(tmp_path, local_server):
         # Navigate to simulate login
         await tab.get(f"{local_server}/basic.html")
 
-    async with session.start(headless=True) as browser:
+    async with session.start(headless=True):
         pass
 
     assert login_called

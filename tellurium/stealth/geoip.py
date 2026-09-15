@@ -1,7 +1,9 @@
 """GeoIP resolution for proxy-based locale detection."""
+
 from __future__ import annotations
-from dataclasses import dataclass
+
 import logging
+from dataclasses import dataclass
 
 logger = logging.getLogger("tellurium")
 
@@ -14,43 +16,102 @@ class GeoResult:
 
 
 COUNTRY_TIMEZONES = {
-    "US": "America/New_York", "GB": "Europe/London", "DE": "Europe/Berlin",
-    "FR": "Europe/Paris", "IT": "Europe/Rome", "ES": "Europe/Madrid",
-    "NL": "Europe/Amsterdam", "BE": "Europe/Brussels", "AT": "Europe/Vienna",
-    "CH": "Europe/Zurich", "SE": "Europe/Stockholm", "NO": "Europe/Oslo",
-    "DK": "Europe/Copenhagen", "FI": "Europe/Helsinki", "PL": "Europe/Warsaw",
-    "CZ": "Europe/Prague", "PT": "Europe/Lisbon", "IE": "Europe/Dublin",
-    "RO": "Europe/Bucharest", "HU": "Europe/Budapest", "GR": "Europe/Athens",
-    "JP": "Asia/Tokyo", "KR": "Asia/Seoul", "CN": "Asia/Shanghai",
-    "IN": "Asia/Kolkata", "AU": "Australia/Sydney", "NZ": "Pacific/Auckland",
-    "BR": "America/Sao_Paulo", "MX": "America/Mexico_City",
-    "CA": "America/Toronto", "RU": "Europe/Moscow", "UA": "Europe/Kiev",
-    "TR": "Europe/Istanbul", "IL": "Asia/Jerusalem", "AE": "Asia/Dubai",
-    "SG": "Asia/Singapore", "HK": "Asia/Hong_Kong", "TW": "Asia/Taipei",
-    "TH": "Asia/Bangkok", "VN": "Asia/Ho_Chi_Minh", "PH": "Asia/Manila",
-    "ID": "Asia/Jakarta", "MY": "Asia/Kuala_Lumpur",
-    "AR": "America/Argentina/Buenos_Aires", "CL": "America/Santiago",
-    "CO": "America/Bogota", "ZA": "Africa/Johannesburg",
+    "US": "America/New_York",
+    "GB": "Europe/London",
+    "DE": "Europe/Berlin",
+    "FR": "Europe/Paris",
+    "IT": "Europe/Rome",
+    "ES": "Europe/Madrid",
+    "NL": "Europe/Amsterdam",
+    "BE": "Europe/Brussels",
+    "AT": "Europe/Vienna",
+    "CH": "Europe/Zurich",
+    "SE": "Europe/Stockholm",
+    "NO": "Europe/Oslo",
+    "DK": "Europe/Copenhagen",
+    "FI": "Europe/Helsinki",
+    "PL": "Europe/Warsaw",
+    "CZ": "Europe/Prague",
+    "PT": "Europe/Lisbon",
+    "IE": "Europe/Dublin",
+    "RO": "Europe/Bucharest",
+    "HU": "Europe/Budapest",
+    "GR": "Europe/Athens",
+    "JP": "Asia/Tokyo",
+    "KR": "Asia/Seoul",
+    "CN": "Asia/Shanghai",
+    "IN": "Asia/Kolkata",
+    "AU": "Australia/Sydney",
+    "NZ": "Pacific/Auckland",
+    "BR": "America/Sao_Paulo",
+    "MX": "America/Mexico_City",
+    "CA": "America/Toronto",
+    "RU": "Europe/Moscow",
+    "UA": "Europe/Kiev",
+    "TR": "Europe/Istanbul",
+    "IL": "Asia/Jerusalem",
+    "AE": "Asia/Dubai",
+    "SG": "Asia/Singapore",
+    "HK": "Asia/Hong_Kong",
+    "TW": "Asia/Taipei",
+    "TH": "Asia/Bangkok",
+    "VN": "Asia/Ho_Chi_Minh",
+    "PH": "Asia/Manila",
+    "ID": "Asia/Jakarta",
+    "MY": "Asia/Kuala_Lumpur",
+    "AR": "America/Argentina/Buenos_Aires",
+    "CL": "America/Santiago",
+    "CO": "America/Bogota",
+    "ZA": "Africa/Johannesburg",
 }
 
 COUNTRY_LANGUAGES = {
-    "US": ["en-US", "en"], "GB": ["en-GB", "en"], "DE": ["de-DE", "en"],
-    "FR": ["fr-FR", "en"], "IT": ["it-IT", "en"], "ES": ["es-ES", "en"],
-    "NL": ["nl-NL", "en"], "BE": ["nl-BE", "fr-BE", "en"],
-    "AT": ["de-AT", "en"], "CH": ["de-CH", "fr-CH", "en"],
-    "SE": ["sv-SE", "en"], "NO": ["nb-NO", "en"], "DK": ["da-DK", "en"],
-    "FI": ["fi-FI", "en"], "PL": ["pl-PL", "en"], "CZ": ["cs-CZ", "en"],
-    "PT": ["pt-PT", "en"], "IE": ["en-IE", "en"], "RO": ["ro-RO", "en"],
-    "HU": ["hu-HU", "en"], "GR": ["el-GR", "en"],
-    "JP": ["ja-JP", "en"], "KR": ["ko-KR", "en"], "CN": ["zh-CN", "en"],
-    "IN": ["hi-IN", "en-IN", "en"], "AU": ["en-AU", "en"],
-    "NZ": ["en-NZ", "en"], "BR": ["pt-BR", "en"], "MX": ["es-MX", "en"],
-    "CA": ["en-CA", "fr-CA", "en"], "RU": ["ru-RU", "en"],
-    "UA": ["uk-UA", "en"], "TR": ["tr-TR", "en"], "IL": ["he-IL", "en"],
-    "AE": ["ar-AE", "en"], "SG": ["en-SG", "en"], "HK": ["zh-HK", "en"],
-    "TW": ["zh-TW", "en"], "TH": ["th-TH", "en"], "VN": ["vi-VN", "en"],
-    "PH": ["en-PH", "en"], "ID": ["id-ID", "en"], "MY": ["ms-MY", "en"],
-    "AR": ["es-AR", "en"], "CL": ["es-CL", "en"], "CO": ["es-CO", "en"],
+    "US": ["en-US", "en"],
+    "GB": ["en-GB", "en"],
+    "DE": ["de-DE", "en"],
+    "FR": ["fr-FR", "en"],
+    "IT": ["it-IT", "en"],
+    "ES": ["es-ES", "en"],
+    "NL": ["nl-NL", "en"],
+    "BE": ["nl-BE", "fr-BE", "en"],
+    "AT": ["de-AT", "en"],
+    "CH": ["de-CH", "fr-CH", "en"],
+    "SE": ["sv-SE", "en"],
+    "NO": ["nb-NO", "en"],
+    "DK": ["da-DK", "en"],
+    "FI": ["fi-FI", "en"],
+    "PL": ["pl-PL", "en"],
+    "CZ": ["cs-CZ", "en"],
+    "PT": ["pt-PT", "en"],
+    "IE": ["en-IE", "en"],
+    "RO": ["ro-RO", "en"],
+    "HU": ["hu-HU", "en"],
+    "GR": ["el-GR", "en"],
+    "JP": ["ja-JP", "en"],
+    "KR": ["ko-KR", "en"],
+    "CN": ["zh-CN", "en"],
+    "IN": ["hi-IN", "en-IN", "en"],
+    "AU": ["en-AU", "en"],
+    "NZ": ["en-NZ", "en"],
+    "BR": ["pt-BR", "en"],
+    "MX": ["es-MX", "en"],
+    "CA": ["en-CA", "fr-CA", "en"],
+    "RU": ["ru-RU", "en"],
+    "UA": ["uk-UA", "en"],
+    "TR": ["tr-TR", "en"],
+    "IL": ["he-IL", "en"],
+    "AE": ["ar-AE", "en"],
+    "SG": ["en-SG", "en"],
+    "HK": ["zh-HK", "en"],
+    "TW": ["zh-TW", "en"],
+    "TH": ["th-TH", "en"],
+    "VN": ["vi-VN", "en"],
+    "PH": ["en-PH", "en"],
+    "ID": ["id-ID", "en"],
+    "MY": ["ms-MY", "en"],
+    "AR": ["es-AR", "en"],
+    "CL": ["es-CL", "en"],
+    "CO": ["es-CO", "en"],
     "ZA": ["en-ZA", "en"],
 }
 
@@ -78,18 +139,23 @@ def resolve_exit_ip(proxy_url: str, forwarder_port: int | None = None) -> str:
 
     # Build the opener with the right proxy
     if forwarder_port is not None:
-        handler = urllib.request.ProxyHandler({
-            "http": f"http://localhost:{forwarder_port}",
-            "https": f"http://localhost:{forwarder_port}",
-        })
+        handler = urllib.request.ProxyHandler(
+            {
+                "http": f"http://localhost:{forwarder_port}",
+                "https": f"http://localhost:{forwarder_port}",
+            }
+        )
     else:
         from urllib.parse import urlparse
+
         parsed = urlparse(proxy_url)
         if parsed.scheme in ("http", "https"):
-            handler = urllib.request.ProxyHandler({
-                "http": proxy_url,
-                "https": proxy_url,
-            })
+            handler = urllib.request.ProxyHandler(
+                {
+                    "http": proxy_url,
+                    "https": proxy_url,
+                }
+            )
         else:
             # SOCKS5 without auth: urllib doesn't support SOCKS natively.
             # Fallback: resolve proxy hostname via DNS.
@@ -108,12 +174,11 @@ def resolve_exit_ip(proxy_url: str, forwarder_port: int | None = None) -> str:
                 ip = resp.read().decode().strip()
                 if ip and all(c.isdigit() or c == "." for c in ip):
                     return ip
-        except Exception:
+        except Exception:  # noqa: BLE001 - try next service
             continue
 
     raise RuntimeError(
-        "Could not determine exit IP through proxy. "
-        "Tried: " + ", ".join(_EXIT_IP_SERVICES)
+        "Could not determine exit IP through proxy. Tried: " + ", ".join(_EXIT_IP_SERVICES)
     )
 
 
@@ -187,14 +252,14 @@ def resolve_geoip(ip: str, *, online_fallback: bool = True) -> GeoResult:
         if code:
             logger.warning(
                 "GeoIP: no local database, resolved %s -> %s online. "
-                "Run `tellurium download-geoip` for offline lookups.", ip, code,
+                "Run `tellurium download-geoip` for offline lookups.",
+                ip,
+                code,
             )
             return _geo_from_country(code)
 
     if maxminddb is None:
-        raise ImportError(
-            "GeoIP requires maxminddb. Install with: pip install tellurium[geoip]"
-        )
+        raise ImportError("GeoIP requires maxminddb. Install with: pip install tellurium[geoip]")
     _ensure_geolite2_db()  # raises FileNotFoundError with instructions
     raise ValueError(f"Could not resolve IP: {ip}")
 
@@ -204,8 +269,9 @@ _DB_CANDIDATES = ("GeoLite2-Country.mmdb", "dbip-country-lite.mmdb", "GeoLite2-C
 
 
 def _geoip_dir():
-    from pathlib import Path
+
     from tellurium.browser._cache import tellurium_home
+
     return tellurium_home() / _DB_DIR_NAME
 
 
@@ -253,8 +319,10 @@ def download_geoip_db(*, maxmind_license_key: str | None = None, dest_dir=None) 
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     if maxmind_license_key:
-        url = ("https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country"
-               f"&license_key={maxmind_license_key}&suffix=tar.gz")
+        url = (
+            "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country"
+            f"&license_key={maxmind_license_key}&suffix=tar.gz"
+        )
         with urllib.request.urlopen(url, timeout=60) as resp:  # noqa: S310
             data = resp.read()
         with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:

@@ -1,4 +1,5 @@
 """BrowserContext — isolated browser context (incognito-like) backed by CDP."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -35,15 +36,22 @@ class BrowserContext:
         from tellurium.browser.tab import Tab
 
         root = self._browser._router.root
-        result = await root.send("Target.createTarget", {
-            "url": url,
-            "browserContextId": self._context_id,
-        })
+        result = await root.send(
+            "Target.createTarget",
+            {
+                "url": url,
+                "browserContextId": self._context_id,
+            },
+        )
         target_id = result["targetId"]
         session = await self._browser._router.attach(target_id)
-        tab = Tab(session, self._browser, target_id,
-                  stealth_idle=getattr(self._browser, "_stealth_idle", False),
-                  mouse_profile=getattr(self._browser, "_mouse_profile", "normal"))
+        tab = Tab(
+            session,
+            self._browser,
+            target_id,
+            stealth_idle=getattr(self._browser, "_stealth_idle", False),
+            mouse_profile=getattr(self._browser, "_mouse_profile", "normal"),
+        )
         tab._url = url
         self._tabs.append(tab)
         self._browser._tabs.append(tab)
@@ -52,9 +60,12 @@ class BrowserContext:
     async def get_cookies(self, domain: str | None = None) -> list[Cookie]:
         """Get cookies scoped to this context via ``Storage.getCookies``."""
         root = self._browser._router.root
-        result = await root.send("Storage.getCookies", {
-            "browserContextId": self._context_id,
-        })
+        result = await root.send(
+            "Storage.getCookies",
+            {
+                "browserContextId": self._context_id,
+            },
+        )
         cookies = [Cookie.from_json(c) for c in result.get("cookies", [])]
         if domain:
             cookies = [c for c in cookies if domain in c.domain]
@@ -63,22 +74,28 @@ class BrowserContext:
     async def set_cookies(self, cookies: list[Cookie]) -> None:
         """Set cookies in this context."""
         root = self._browser._router.root
-        await root.send("Storage.setCookies", {
-            "cookies": [c.to_json() for c in cookies],
-            "browserContextId": self._context_id,
-        })
+        await root.send(
+            "Storage.setCookies",
+            {
+                "cookies": [c.to_json() for c in cookies],
+                "browserContextId": self._context_id,
+            },
+        )
 
     async def close(self) -> None:
         """Dispose of this browser context and detach all its tabs."""
         for tab in list(self._tabs):
             try:
                 await self._browser._router.detach(tab._session)
-            except Exception:
+            except Exception:  # noqa: BLE001 - close must not raise
                 pass
             if tab in self._browser._tabs:
                 self._browser._tabs.remove(tab)
         self._tabs.clear()
         root = self._browser._router.root
-        await root.send("Target.disposeBrowserContext", {
-            "browserContextId": self._context_id,
-        })
+        await root.send(
+            "Target.disposeBrowserContext",
+            {
+                "browserContextId": self._context_id,
+            },
+        )

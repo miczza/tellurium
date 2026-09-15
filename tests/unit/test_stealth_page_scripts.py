@@ -1,5 +1,7 @@
 """Unit tests for StealthEngine.apply_page_scripts (T7)."""
+
 from __future__ import annotations
+
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -33,6 +35,7 @@ async def test_apply_page_scripts_sends_addScriptToEvaluateOnNewDocument_for_eac
 @pytest.mark.asyncio
 async def test_apply_page_scripts_noop_when_native_navigator():
     """When the engine advertises native_navigator, runtime injection skips."""
+
     class _FakeEngine:
         def capabilities(self):
             return {"native_fingerprint", "native_navigator"}

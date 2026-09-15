@@ -1,5 +1,6 @@
 """Verify T7 auto-attach wiring: root session receives Target.setAutoAttach
 and a listener is registered for Target.attachedToTarget."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -35,8 +36,9 @@ async def test_launch_registers_target_attached_listener():
     try:
         for session in (browser._router.root, browser.main_tab._session):
             handlers = session._event_handlers.get("Target.attachedToTarget", [])
-            assert len(handlers) >= 1, \
+            assert len(handlers) >= 1, (
                 f"No listener registered for Target.attachedToTarget on {session}"
+            )
     finally:
         await browser.close()
 
@@ -63,8 +65,9 @@ async def test_patch_and_resume_injects_page_scripts_for_iframe():
     sent = [c.args[0] for c in child.send.await_args_list]
     # T7.5: stock + headed + non-proxy = 4 core scripts
     # (webdriver, chrome_runtime, plugins, keyboard_layout). Was >=7 pre-T7.5.
-    assert sent.count("Page.addScriptToEvaluateOnNewDocument") == 4, \
+    assert sent.count("Page.addScriptToEvaluateOnNewDocument") == 4, (
         f"Expected 4 script injections on iframe, got calls: {sent}"
+    )
     # Runtime resume must still happen last
     assert sent[-1] == "Runtime.runIfWaitingForDebugger"
 
@@ -76,8 +79,10 @@ def _stock_engine_with_mock_router():
     from tellurium.stealth.profile import StealthProfile
 
     se = StealthEngine(
-        StockEngine(), StealthProfile.from_seed(42069),
-        headless=False, has_proxy=False,
+        StockEngine(),
+        StealthProfile.from_seed(42069),
+        headless=False,
+        has_proxy=False,
     )
     child = MagicMock()
     child.send = AsyncMock()
@@ -89,7 +94,8 @@ def _stock_engine_with_mock_router():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "target_type", ["worker", "service_worker", "shared_worker"],
+    "target_type",
+    ["worker", "service_worker", "shared_worker"],
 )
 async def test_patch_and_resume_injects_worker_scripts(target_type):
     """T7.7 §P1.2: worker targets get Runtime.evaluate injection + resume.
@@ -112,10 +118,7 @@ async def test_patch_and_resume_injects_worker_scripts(target_type):
     # Never define navigator.webdriver in worker scope — WorkerNavigator has
     # no such property in real Chrome. (Comments mentioning it are fine;
     # what must be absent is a defineProperty for it.)
-    code = "\n".join(
-        line for line in source.splitlines()
-        if not line.lstrip().startswith("//")
-    )
+    code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("//"))
     assert "webdriver" not in code
 
 
@@ -124,7 +127,9 @@ async def test_patch_and_resume_skips_extension_workers():
     se, child = _stock_engine_with_mock_router()
 
     await se._patch_and_resume(
-        "sess-x", "service_worker", "chrome-extension://abc/sw.js",
+        "sess-x",
+        "service_worker",
+        "chrome-extension://abc/sw.js",
     )
 
     sent = [c.args[0] for c in child.send.await_args_list]
@@ -156,12 +161,15 @@ async def test_on_target_attached_uses_running_loop():
     se, child = _stock_engine_with_mock_router()
     se._router._sessions = {}
 
-    se._on_target_attached({
-        "sessionId": "s1",
-        "targetInfo": {"type": "worker", "url": "blob:http://x/1"},
-    })
+    se._on_target_attached(
+        {
+            "sessionId": "s1",
+            "targetInfo": {"type": "worker", "url": "blob:http://x/1"},
+        }
+    )
     # Let the created task run to completion
     import asyncio as _asyncio
+
     await _asyncio.sleep(0)
     await _asyncio.sleep(0)
 

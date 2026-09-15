@@ -1,14 +1,14 @@
 import asyncio
 import json
-import pytest
 from unittest.mock import AsyncMock, MagicMock
-from tellurium.capture.request import CapturedRequest
-from tellurium.capture.manager import CaptureManager
-from tellurium.capture.log import CaptureLogger
-from tellurium.capture.recorder import RecordingSession
 
+from tellurium.capture.log import CaptureLogger
+from tellurium.capture.manager import CaptureManager
+from tellurium.capture.recorder import RecordingSession
+from tellurium.capture.request import CapturedRequest
 
 # --- CapturedRequest tests ---
+
 
 def test_request_match_url():
     req = CapturedRequest(url="https://example.com/api/feed?page=1", method="GET")
@@ -26,6 +26,7 @@ def test_request_defaults():
 
 
 # --- CaptureManager search tests ---
+
 
 def test_search_by_url():
     mgr = CaptureManager(None)
@@ -73,7 +74,9 @@ def test_search_by_content_type():
 def test_search_by_header():
     mgr = CaptureManager(None)
     mgr._requests = [
-        CapturedRequest(url="https://a.com", method="GET", request_headers={"Authorization": "Bearer x"}),
+        CapturedRequest(
+            url="https://a.com", method="GET", request_headers={"Authorization": "Bearer x"}
+        ),
         CapturedRequest(url="https://b.com", method="GET", request_headers={"Accept": "text/html"}),
     ]
     results = mgr.search(header="Authorization")
@@ -83,15 +86,22 @@ def test_search_by_header():
 def test_search_combined_filters():
     mgr = CaptureManager(None)
     mgr._requests = [
-        CapturedRequest(url="https://a.com/api/data", method="GET", status=200, content_type="application/json"),
-        CapturedRequest(url="https://a.com/api/data", method="POST", status=200, content_type="application/json"),
-        CapturedRequest(url="https://a.com/page", method="GET", status=200, content_type="text/html"),
+        CapturedRequest(
+            url="https://a.com/api/data", method="GET", status=200, content_type="application/json"
+        ),
+        CapturedRequest(
+            url="https://a.com/api/data", method="POST", status=200, content_type="application/json"
+        ),
+        CapturedRequest(
+            url="https://a.com/page", method="GET", status=200, content_type="text/html"
+        ),
     ]
     results = mgr.search(url="*/api/*", method="GET", content_type="json")
     assert len(results) == 1
 
 
 # --- CaptureLogger tests ---
+
 
 def test_logger_format_size():
     assert CaptureLogger._format_size(500) == "500B"
@@ -123,6 +133,7 @@ def test_logger_should_log_url_filter():
 
 # --- RecordingSession tests ---
 
+
 def test_recording_session_save(tmp_path):
     session = RecordingSession(
         created_at="2026-04-14T14:00:00Z",
@@ -143,12 +154,19 @@ def test_recording_session_save(tmp_path):
 
 # --- CaptureManager event handlers ---
 
+
 def test_on_request_creates_captured_request():
     mgr = CaptureManager(None)
-    mgr._on_request({
-        "requestId": "r1",
-        "request": {"url": "https://a.com/api", "method": "POST", "headers": {"Content-Type": "application/json"}},
-    })
+    mgr._on_request(
+        {
+            "requestId": "r1",
+            "request": {
+                "url": "https://a.com/api",
+                "method": "POST",
+                "headers": {"Content-Type": "application/json"},
+            },
+        }
+    )
     assert len(mgr._requests) == 1
     assert mgr._requests[0].url == "https://a.com/api"
     assert mgr._requests[0].method == "POST"
@@ -157,8 +175,20 @@ def test_on_request_creates_captured_request():
 
 def test_on_response_updates_request():
     mgr = CaptureManager(None)
-    mgr._on_request({"requestId": "r1", "request": {"url": "https://a.com", "method": "GET", "headers": {}}})
-    mgr._on_response({"requestId": "r1", "response": {"status": 200, "headers": {"X-Custom": "val"}, "mimeType": "application/json", "encodedDataLength": 1024}})
+    mgr._on_request(
+        {"requestId": "r1", "request": {"url": "https://a.com", "method": "GET", "headers": {}}}
+    )
+    mgr._on_response(
+        {
+            "requestId": "r1",
+            "response": {
+                "status": 200,
+                "headers": {"X-Custom": "val"},
+                "mimeType": "application/json",
+                "encodedDataLength": 1024,
+            },
+        }
+    )
     req = mgr._by_id["r1"]
     assert req.status == 200
     assert req.content_type == "application/json"
@@ -167,25 +197,35 @@ def test_on_response_updates_request():
 
 def test_on_finished_marks_complete():
     mgr = CaptureManager(None)
-    mgr._on_request({"requestId": "r1", "request": {"url": "https://a.com", "method": "GET", "headers": {}}})
-    mgr._on_response({"requestId": "r1", "response": {"status": 200, "headers": {}, "mimeType": "", "encodedDataLength": 0}})
+    mgr._on_request(
+        {"requestId": "r1", "request": {"url": "https://a.com", "method": "GET", "headers": {}}}
+    )
+    mgr._on_response(
+        {
+            "requestId": "r1",
+            "response": {"status": 200, "headers": {}, "mimeType": "", "encodedDataLength": 0},
+        }
+    )
     mgr._on_finished({"requestId": "r1"})
     assert mgr._by_id["r1"]._complete is True
 
 
 # --- Cookies export tests ---
 
+
 def test_recording_session_includes_cookies():
     """Recorder.export() should fetch and include cookies."""
     from tellurium.capture.recorder import Recorder
 
     session_mock = MagicMock()
-    session_mock.send = AsyncMock(return_value={
-        "cookies": [
-            {"name": "session_id", "value": "abc123", "domain": ".example.com"},
-            {"name": "token", "value": "xyz", "domain": "api.example.com"},
-        ]
-    })
+    session_mock.send = AsyncMock(
+        return_value={
+            "cookies": [
+                {"name": "session_id", "value": "abc123", "domain": ".example.com"},
+                {"name": "token", "value": "xyz", "domain": "api.example.com"},
+            ]
+        }
+    )
 
     mgr = CaptureManager(session_mock)
     mgr._requests = [

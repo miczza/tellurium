@@ -9,18 +9,16 @@ Usage:
     python quick_fingerprint_test.py [--seed SEED] [--compare SEED2]
 """
 
-import asyncio
 import argparse
+import asyncio
 import json
-import hashlib
+import sys
 from datetime import datetime
 from pathlib import Path
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from tellurium import Browser
-
 
 CHROMIUM_TELLURIDE_PATH = "/home/miczza/PycharmProjects/chromium-telluride/src/out/Release/chrome"
 
@@ -233,7 +231,7 @@ def compare_fingerprints(fp1: dict, fp2: dict) -> dict:
             "seed2": c2[:16] + "...",
             "differs": differs,
             "expected": True,
-            "status": "PASS" if differs else "FAIL"
+            "status": "PASS" if differs else "FAIL",
         }
         if not differs:
             report["pass"] = False
@@ -248,7 +246,7 @@ def compare_fingerprints(fp1: dict, fp2: dict) -> dict:
             "seed2": a2,
             "differs": differs,
             "expected": True,
-            "status": "PASS" if differs else "FAIL"
+            "status": "PASS" if differs else "FAIL",
         }
         if not differs:
             report["pass"] = False
@@ -263,7 +261,7 @@ def compare_fingerprints(fp1: dict, fp2: dict) -> dict:
             "seed2": t2,
             "differs": differs,
             "expected": True,
-            "status": "PASS" if differs else "FAIL"
+            "status": "PASS" if differs else "FAIL",
         }
         if not differs:
             report["pass"] = False
@@ -278,7 +276,7 @@ def compare_fingerprints(fp1: dict, fp2: dict) -> dict:
             "seed2": r2,
             "differs": differs,
             "expected": True,
-            "status": "PASS" if differs else "FAIL"
+            "status": "PASS" if differs else "FAIL",
         }
 
     return report
@@ -286,11 +284,7 @@ def compare_fingerprints(fp1: dict, fp2: dict) -> dict:
 
 def check_stability(fp1: dict, fp2: dict) -> dict:
     """Check that same seed produces identical results."""
-    report = {
-        "seed": fp1["seed"],
-        "stable": True,
-        "differences": []
-    }
+    report = {"seed": fp1["seed"], "stable": True, "differences": []}
 
     # Canvas should be identical
     c1 = fp1.get("canvas", {}).get("hash")
@@ -332,9 +326,9 @@ async def main():
         json.dump(fp1, f, indent=2)
     print(f"\nFingerprint saved to fingerprint_{args.seed}.json")
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print(f"FINGERPRINT SUMMARY (seed={args.seed})")
-    print("="*50)
+    print("=" * 50)
     print(f"Canvas Hash: {fp1.get('canvas', {}).get('hash', 'N/A')[:32]}...")
     print(f"Audio: {fp1.get('audio', {}).get('fingerprint', 'N/A')}")
     print(f"Text Width: {fp1.get('textMetrics', {}).get('width', 'N/A')}")
@@ -349,9 +343,9 @@ async def main():
             json.dump(fp2, f, indent=2)
 
         report = compare_fingerprints(fp1, fp2)
-        print("\n" + "="*50)
+        print("\n" + "=" * 50)
         print("COMPARISON REPORT")
-        print("="*50)
+        print("=" * 50)
         for key, diff in report["differences"].items():
             print(f"{key}: {diff['status']}")
             print(f"  Seed {fp1['seed']}: {diff['seed1']}")
@@ -366,9 +360,9 @@ async def main():
         fp2 = await collect_fingerprint(args.seed, args.chrome)
 
         stability = check_stability(fp1, fp2)
-        print("\n" + "="*50)
+        print("\n" + "=" * 50)
         print("STABILITY REPORT")
-        print("="*50)
+        print("=" * 50)
         status = "PASS" if stability["stable"] else "FAIL"
         print(f"Stability: {status}")
         if stability["differences"]:

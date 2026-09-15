@@ -1,6 +1,4 @@
 import pytest
-from pathlib import Path
-from tellurium import Browser
 
 
 def test_launch_extensions_requires_unpacked_dir(tmp_path):
@@ -9,6 +7,7 @@ def test_launch_extensions_requires_unpacked_dir(tmp_path):
     crx.write_bytes(b"fake-crx")
     with pytest.raises(ValueError, match="unpacked directory"):
         from tellurium.browser.launcher import validate_extension_paths
+
         validate_extension_paths([str(crx)])
 
 
@@ -17,6 +16,7 @@ def test_launch_extensions_requires_manifest_json(tmp_path):
     ext_dir = tmp_path / "ext"
     ext_dir.mkdir()
     from tellurium.browser.launcher import validate_extension_paths
+
     with pytest.raises(ValueError, match="manifest.json"):
         validate_extension_paths([str(ext_dir)])
 
@@ -27,6 +27,7 @@ def test_launch_extensions_accepts_valid_dir(tmp_path):
     ext_dir.mkdir()
     (ext_dir / "manifest.json").write_text('{"name":"x","version":"1","manifest_version":3}')
     from tellurium.browser.launcher import validate_extension_paths
+
     validate_extension_paths([str(ext_dir)])
 
 
@@ -37,6 +38,7 @@ def test_launch_chrome_branded_137_with_extensions_raises(tmp_path):
     (ext_dir / "manifest.json").write_text('{"name":"x","version":"1"}')
 
     from tellurium.browser.launcher import LaunchError, check_chrome_version_for_extensions
+
     with pytest.raises(LaunchError, match="does not support --load-extension") as exc:
         check_chrome_version_for_extensions(
             executable="/usr/bin/google-chrome",
@@ -54,6 +56,7 @@ def test_extensions_flag_merged_with_tellurium_stealth_ext(tmp_path):
     (ext_dir / "manifest.json").write_text('{"name":"ubo","version":"1"}')
 
     from tellurium.browser.launcher import build_load_extension_flag
+
     flag = build_load_extension_flag(
         tellurium_stealth_path=str(tmp_path / "tellurium-stealth"),
         user_extensions=[str(ext_dir)],
@@ -69,5 +72,6 @@ def test_extensions_flag_merged_with_tellurium_stealth_ext(tmp_path):
 def test_build_load_extension_flag_empty_raises():
     """build_load_extension_flag must refuse to produce an empty flag."""
     from tellurium.browser.launcher import build_load_extension_flag
+
     with pytest.raises(ValueError, match="at least one path"):
         build_load_extension_flag(tellurium_stealth_path=None, user_extensions=[])

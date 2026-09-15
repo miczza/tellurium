@@ -1,9 +1,12 @@
 """Capture manager — start/stop network monitoring, search, wait for requests."""
+
 from __future__ import annotations
+
 import asyncio
 import fnmatch
-from tellurium.capture.request import CapturedRequest
+
 from tellurium.capture.log import CaptureLogger
+from tellurium.capture.request import CapturedRequest
 
 
 class CaptureManager:

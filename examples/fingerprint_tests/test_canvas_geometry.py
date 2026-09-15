@@ -4,6 +4,7 @@
 Verifies that the Skia AA perturbation (C4.6) produces different canvas
 hashes across seeds even when no fillText/strokeText is used.
 """
+
 import asyncio
 import sys
 from pathlib import Path
@@ -11,7 +12,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from tellurium import Browser
-
 
 CHROMIUM_TELLURIDE_PATH = "/home/miczza/PycharmProjects/chromium-telluride/src/out/Release/chrome"
 

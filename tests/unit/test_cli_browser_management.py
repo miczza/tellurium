@@ -1,4 +1,5 @@
 """Tests for browser management CLI commands (shared cache layout in _cache)."""
+
 import hashlib
 import json
 from unittest.mock import patch
@@ -10,14 +11,18 @@ from tellurium.browser._manifest import current_platform
 from tellurium.cli import main
 
 
-def _install(tmp_path, version, binary=b"fake chrome binary", sha=None, manifest=True,
-             current=False):
+def _install(
+    tmp_path, version, binary=b"fake chrome binary", sha=None, manifest=True, current=False
+):
     d = tmp_path / version
     d.mkdir(parents=True)
     (d / "chrome").write_bytes(binary)
     if manifest:
-        data = {"version": "0.1.0", "chromium_upstream": version,
-                "binary_sha256": {current_platform(): sha or hashlib.sha256(binary).hexdigest()}}
+        data = {
+            "version": "0.1.0",
+            "chromium_upstream": version,
+            "binary_sha256": {current_platform(): sha or hashlib.sha256(binary).hexdigest()},
+        }
         (d / "MANIFEST.json").write_text(json.dumps(data))
     if current:
         _cache.set_current(version, tmp_path)
@@ -56,8 +61,12 @@ def test_cli_info_sees_cache_layout(capsys, tmp_path):
 
 def test_cli_update_browser_check_dry_run(capsys, tmp_path):
     from tellurium.browser._update_check import UpdateInfo
-    info = UpdateInfo(installed="146.0.7680.188", latest="147.0.7700.100",
-                      manifest={"chromium_upstream": "147.0.7700.100"})
+
+    info = UpdateInfo(
+        installed="146.0.7680.188",
+        latest="147.0.7700.100",
+        manifest={"chromium_upstream": "147.0.7700.100"},
+    )
     with patch("tellurium.cli._cache_dir", return_value=tmp_path):
         with patch("tellurium.cli._get_installed_version", return_value="146.0.7680.188"):
             with patch("tellurium.browser._update_check.check_for_update", return_value=info):
@@ -70,8 +79,12 @@ def test_cli_update_browser_check_dry_run(capsys, tmp_path):
 
 def test_cli_update_browser_installs(capsys, tmp_path):
     from tellurium.browser._update_check import UpdateInfo
-    info = UpdateInfo(installed="146.0.7680.188", latest="147.0.7700.100",
-                      manifest={"chromium_upstream": "147.0.7700.100"})
+
+    info = UpdateInfo(
+        installed="146.0.7680.188",
+        latest="147.0.7700.100",
+        manifest={"chromium_upstream": "147.0.7700.100"},
+    )
     with patch("tellurium.cli._cache_dir", return_value=tmp_path):
         with patch("tellurium.cli._get_installed_version", return_value="146.0.7680.188"):
             with patch("tellurium.browser._update_check.check_for_update", return_value=info):
@@ -83,8 +96,12 @@ def test_cli_update_browser_installs(capsys, tmp_path):
 
 def test_cli_update_browser_security_only_skips_non_security(capsys, tmp_path):
     from tellurium.browser._update_check import UpdateInfo
-    info = UpdateInfo(installed="146.0.7680.188", latest="147.0.7700.100",
-                      manifest={"chromium_upstream": "147.0.7700.100", "security": False})
+
+    info = UpdateInfo(
+        installed="146.0.7680.188",
+        latest="147.0.7700.100",
+        manifest={"chromium_upstream": "147.0.7700.100", "security": False},
+    )
     with patch("tellurium.cli._cache_dir", return_value=tmp_path):
         with patch("tellurium.cli._get_installed_version", return_value="146.0.7680.188"):
             with patch("tellurium.browser._update_check.check_for_update", return_value=info):
@@ -138,7 +155,16 @@ def test_cli_verify_browser_reinstall_calls_download(capsys, tmp_path):
 
 def test_cli_download_browser_patched_calls_installer(tmp_path):
     with patch("tellurium.cli._install_patched", return_value=True) as inst:
-        with patch("sys.argv", ["tellurium", "download-browser", "--browser", "patched",
-                                "--version", "146.0.7680.188"]):
+        with patch(
+            "sys.argv",
+            [
+                "tellurium",
+                "download-browser",
+                "--browser",
+                "patched",
+                "--version",
+                "146.0.7680.188",
+            ],
+        ):
             main()
     inst.assert_called_once_with("146.0.7680.188")

@@ -1,7 +1,10 @@
 """Tests for Session and SessionRouter."""
+
 import asyncio
 import json
+
 import pytest
+
 from tellurium.cdp.transport._base import CDPTransport
 from tellurium.cdp.transport._session import Session, SessionRouter
 from tellurium.cdp.types import CDPError
@@ -37,7 +40,9 @@ class MockPipeTransport(CDPTransport):
         self._inbox.append(msg)
         self._inbox_event.set()
 
-    def queue_error(self, msg_id: int, message: str, code: int = -32600, session_id: str | None = None) -> None:
+    def queue_error(
+        self, msg_id: int, message: str, code: int = -32600, session_id: str | None = None
+    ) -> None:
         msg: dict = {"id": msg_id, "error": {"message": message, "code": code}}
         if session_id is not None:
             msg["sessionId"] = session_id
@@ -71,7 +76,9 @@ async def router(transport):
 
 # 1. test_root_session_send_receive
 async def test_root_session_send_receive(transport, router):
-    send_task = asyncio.create_task(router.root.send("Page.navigate", {"url": "https://example.com"}))
+    send_task = asyncio.create_task(
+        router.root.send("Page.navigate", {"url": "https://example.com"})
+    )
     await asyncio.sleep(0)  # let send_task progress and enqueue the message
     transport.queue_response(1, {"frameId": "frame-1"})
     result = await send_task
@@ -213,7 +220,9 @@ async def test_detach_removes_session(transport, router):
 
 # 10. test_pipe_close_rejects_pending
 async def test_pipe_close_rejects_pending(transport, router):
-    send_task = asyncio.create_task(router.root.send("Page.navigate", {"url": "https://example.com"}))
+    send_task = asyncio.create_task(
+        router.root.send("Page.navigate", {"url": "https://example.com"})
+    )
     await asyncio.sleep(0)  # let send proceed, future is now pending
     await transport.close()
     await asyncio.sleep(0)

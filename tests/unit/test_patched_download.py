@@ -1,4 +1,5 @@
 """Tests for chromium-telluride release download/install (no network)."""
+
 import hashlib
 import io
 import json
@@ -8,7 +9,8 @@ from unittest.mock import patch
 
 import pytest
 
-from tellurium.browser import _cache, _patched_download as dl
+from tellurium.browser import _cache
+from tellurium.browser import _patched_download as dl
 from tellurium.browser._manifest import current_platform
 
 VERSION = "146.0.7680.188"
@@ -17,19 +19,29 @@ BINARY = b"\x7fELF fake chromium-telluride binary"
 
 def _manifest(binary=BINARY, version=VERSION):
     return {
-        "data_version": "1.0", "version": "0.1.0", "previous": "",
-        "chromium_upstream": version, "released_at": "2026-04-28T11:37:33Z",
-        "security": False, "cve": [], "severity": "none",
+        "data_version": "1.0",
+        "version": "0.1.0",
+        "previous": "",
+        "chromium_upstream": version,
+        "released_at": "2026-04-28T11:37:33Z",
+        "security": False,
+        "cve": [],
+        "severity": "none",
         "binary_sha256": {current_platform(): hashlib.sha256(binary).hexdigest()},
         "supported_flags": ["--fingerprint", "--fingerprint-platform", "--fingerprint-webrtc-ip"],
     }
 
 
-def _make_tarball(path: Path, manifest: dict | None = None, binary=BINARY,
-                  extra: dict[str, bytes] | None = None) -> Path:
+def _make_tarball(
+    path: Path, manifest: dict | None = None, binary=BINARY, extra: dict[str, bytes] | None = None
+) -> Path:
     manifest = manifest if manifest is not None else _manifest(binary)
-    files = {"chrome": binary, "MANIFEST.json": json.dumps(manifest).encode(),
-             "icudtl.dat": b"icu", "locales/en-US.pak": b"pak"}
+    files = {
+        "chrome": binary,
+        "MANIFEST.json": json.dumps(manifest).encode(),
+        "icudtl.dat": b"icu",
+        "locales/en-US.pak": b"pak",
+    }
     files.update(extra or {})
     with tarfile.open(path, "w:gz") as tf:
         for name, data in files.items():
@@ -43,6 +55,7 @@ def _make_tarball(path: Path, manifest: dict | None = None, binary=BINARY,
 # --------------------------------------------------------------------------- #
 # install_from_tarball
 # --------------------------------------------------------------------------- #
+
 
 def test_install_from_tarball_layout(tmp_path):
     tar = _make_tarball(tmp_path / "rel.tar.gz")
@@ -63,6 +76,7 @@ def test_install_from_tarball_layout(tmp_path):
 def test_install_from_tarball_matches_engine_resolution(tmp_path):
     """The directory produced by the installer must be what PatchedEngine reads."""
     from tellurium.browser.engine import PatchedEngine
+
     tar = _make_tarball(tmp_path / "rel.tar.gz")
     root = tmp_path / "cache"
     dl.install_from_tarball(tar, cache_root=root)
@@ -77,6 +91,7 @@ def test_install_from_tarball_matches_engine_resolution(tmp_path):
 
 def test_install_rejects_binary_hash_mismatch(tmp_path):
     from tellurium.browser.engine import BinaryCorruptedError
+
     tar = _make_tarball(tmp_path / "rel.tar.gz", manifest=_manifest(binary=b"other"))
     with pytest.raises(BinaryCorruptedError):
         dl.install_from_tarball(tar, cache_root=tmp_path / "cache")
@@ -86,8 +101,9 @@ def test_install_rejects_binary_hash_mismatch(tmp_path):
 def test_install_rejects_tarball_hash_mismatch(tmp_path):
     tar = _make_tarball(tmp_path / "rel.tar.gz")
     with pytest.raises(dl.DownloadError, match="Tarball SHA256"):
-        dl.install_from_tarball(tar, cache_root=tmp_path / "cache",
-                                expected_tarball_sha256="00" * 32)
+        dl.install_from_tarball(
+            tar, cache_root=tmp_path / "cache", expected_tarball_sha256="00" * 32
+        )
 
 
 def test_install_rejects_path_traversal(tmp_path):
@@ -125,6 +141,7 @@ def test_install_without_manifest_refused(tmp_path):
 # GitHub release resolution + download (urlopen mocked)
 # --------------------------------------------------------------------------- #
 
+
 class _Resp:
     def __init__(self, body: bytes, headers: dict | None = None):
         self._buf = io.BytesIO(body)
@@ -144,8 +161,10 @@ def _fake_github(tmp_path, tarball: Path, *, with_sums=True, tag=f"v0.1.0-{VERSI
     plat = current_platform()
     name = f"chromium-telluride-{VERSION}-{plat}.tar.gz"
     base = "https://example.invalid/dl"
-    assets = [{"name": name, "browser_download_url": f"{base}/{name}"},
-              {"name": "MANIFEST.json", "browser_download_url": f"{base}/MANIFEST.json"}]
+    assets = [
+        {"name": name, "browser_download_url": f"{base}/{name}"},
+        {"name": "MANIFEST.json", "browser_download_url": f"{base}/MANIFEST.json"},
+    ]
     if with_sums:
         assets.append({"name": "SHA256SUMS", "browser_download_url": f"{base}/SHA256SUMS"})
     release = {"tag_name": tag, "assets": assets}
@@ -159,7 +178,9 @@ def _fake_github(tmp_path, tarball: Path, *, with_sums=True, tag=f"v0.1.0-{VERSI
         if url.endswith("/releases/latest"):
             return _Resp(json.dumps(release).encode())
         if "/releases?" in url:
-            return _Resp(json.dumps([{"tag_name": "v0.2.0-999.0.0.0", "assets": []}, release]).encode())
+            return _Resp(
+                json.dumps([{"tag_name": "v0.2.0-999.0.0.0", "assets": []}, release]).encode()
+            )
         if url.endswith(name):
             return _Resp(tar_bytes)
         if url.endswith("SHA256SUMS"):

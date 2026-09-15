@@ -1,7 +1,10 @@
 """Tests for Session.send() optional timeout."""
+
 import asyncio
 import json
+
 import pytest
+
 from tellurium.cdp.transport._base import CDPTransport
 from tellurium.cdp.transport._session import SessionRouter
 

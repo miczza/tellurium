@@ -1,4 +1,5 @@
 """Tests for Tab.click_in_iframe — viewport-space coordinate translation."""
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
@@ -35,7 +36,8 @@ def test_click_in_iframe_translates_to_viewport_coords():
 
     # Inspect the mousePressed call
     press_calls = [
-        c for c in tab._session.send.call_args_list
+        c
+        for c in tab._session.send.call_args_list
         if c[0][0] == "Input.dispatchMouseEvent" and c[0][1].get("type") == "mousePressed"
     ]
     assert len(press_calls) == 1

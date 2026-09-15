@@ -27,8 +27,8 @@ Usage:
 
 import asyncio
 import json
-import time
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -156,10 +156,12 @@ SITES = {
 # Tellurium
 # ═══════════════════════════════════════════════════════════════════════
 
+
 async def run_tellurium(chrome_path: str) -> dict:
+    import os as _os
+
     from tellurium import Browser
 
-    import os as _os
     fp_seed = _os.environ.get("TELLURIUM_FP_SEED")
     extra_args = []
     if fp_seed and "chromium-telluride" in chrome_path:
@@ -207,10 +209,11 @@ async def run_tellurium(chrome_path: str) -> dict:
 # Selenium
 # ═══════════════════════════════════════════════════════════════════════
 
+
 async def run_selenium(chrome_path: str) -> dict:
+    import chromedriver_autoinstaller
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
-    import chromedriver_autoinstaller
 
     print(f"\n[SELENIUM] chrome={chrome_path}")
     results = {"framework": "selenium", "chrome": chrome_path}
@@ -250,6 +253,7 @@ async def run_selenium(chrome_path: str) -> dict:
 # Playwright
 # ═══════════════════════════════════════════════════════════════════════
 
+
 async def run_playwright(chrome_path: str) -> dict:
     from playwright.async_api import async_playwright
 
@@ -259,7 +263,8 @@ async def run_playwright(chrome_path: str) -> dict:
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
-            executable_path=chrome_path, headless=False,
+            executable_path=chrome_path,
+            headless=False,
             args=["--no-sandbox", "--window-size=1920,1080"],
         )
         context = await browser.new_context(viewport={"width": 1920, "height": 1080})
@@ -274,7 +279,9 @@ async def run_playwright(chrome_path: str) -> dict:
                 await asyncio.sleep(site["wait"])
                 data = await page.evaluate(site["js"])
                 results[name] = data if data else {"status": "error", "error": "eval None"}
-                await page.screenshot(path=str(SCREENSHOTS_DIR / f"playwright_{name}.png"), full_page=True)
+                await page.screenshot(
+                    path=str(SCREENSHOTS_DIR / f"playwright_{name}.png"), full_page=True
+                )
                 print("OK")
             except Exception as e:
                 results[name] = {"status": "error", "error": str(e)}
@@ -289,6 +296,7 @@ async def run_playwright(chrome_path: str) -> dict:
 # Playwright + Stealth
 # ═══════════════════════════════════════════════════════════════════════
 
+
 async def run_playwright_stealth(chrome_path: str) -> dict:
     from playwright.async_api import async_playwright
     from playwright_stealth import Stealth
@@ -300,7 +308,8 @@ async def run_playwright_stealth(chrome_path: str) -> dict:
     stealth = Stealth()
     async with stealth.use_async(async_playwright()) as p:
         browser = await p.chromium.launch(
-            executable_path=chrome_path, headless=False,
+            executable_path=chrome_path,
+            headless=False,
             args=["--no-sandbox", "--window-size=1920,1080"],
         )
         context = await browser.new_context(viewport={"width": 1920, "height": 1080})
@@ -315,7 +324,9 @@ async def run_playwright_stealth(chrome_path: str) -> dict:
                 await asyncio.sleep(site["wait"])
                 data = await page.evaluate(site["js"])
                 results[name] = data if data else {"status": "error", "error": "eval None"}
-                await page.screenshot(path=str(SCREENSHOTS_DIR / f"stealth_{name}.png"), full_page=True)
+                await page.screenshot(
+                    path=str(SCREENSHOTS_DIR / f"stealth_{name}.png"), full_page=True
+                )
                 print("OK")
             except Exception as e:
                 results[name] = {"status": "error", "error": str(e)}
@@ -329,6 +340,7 @@ async def run_playwright_stealth(chrome_path: str) -> dict:
 # ═══════════════════════════════════════════════════════════════════════
 # Nodriver
 # ═══════════════════════════════════════════════════════════════════════
+
 
 async def run_nodriver(chrome_path: str) -> dict:
     import nodriver
@@ -373,7 +385,9 @@ async def run_nodriver(chrome_path: str) -> dict:
                 data = await evaluate_json(tab, site["js"])
                 results[name] = data if data else {"status": "error", "error": "eval None"}
                 try:
-                    await tab.save_screenshot(str(SCREENSHOTS_DIR / f"nodriver_{name}.png"), full_page=True)
+                    await tab.save_screenshot(
+                        str(SCREENSHOTS_DIR / f"nodriver_{name}.png"), full_page=True
+                    )
                 except Exception:
                     pass
                 print("OK")
@@ -394,6 +408,7 @@ async def run_nodriver(chrome_path: str) -> dict:
 # undetected-chromedriver
 # ═══════════════════════════════════════════════════════════════════════
 
+
 async def run_undetected_chromedriver(chrome_path: str) -> dict:
     import undetected_chromedriver as uc
 
@@ -407,7 +422,9 @@ async def run_undetected_chromedriver(chrome_path: str) -> dict:
     opts.add_argument("--window-size=1920,1080")
 
     # Detect Chrome major version to match chromedriver
-    import subprocess, re
+    import re
+    import subprocess
+
     version_main = None
     try:
         v = subprocess.check_output([chrome_path, "--version"], text=True, timeout=5)
@@ -451,8 +468,9 @@ async def run_undetected_chromedriver(chrome_path: str) -> dict:
 # DrissionPage
 # ═══════════════════════════════════════════════════════════════════════
 
+
 async def run_drissionpage(chrome_path: str) -> dict:
-    from DrissionPage import ChromiumPage, ChromiumOptions
+    from DrissionPage import ChromiumOptions, ChromiumPage
 
     print(f"\n[DRISSIONPAGE] chrome={chrome_path}")
     results = {"framework": "drissionpage", "chrome": chrome_path}
@@ -477,7 +495,9 @@ async def run_drissionpage(chrome_path: str) -> dict:
                 time.sleep(site["wait"])
                 data = page.run_js("return " + site["js"].strip())
                 results[name] = data if data else {"status": "error", "error": "eval None"}
-                page.get_screenshot(path=str(SCREENSHOTS_DIR / f"drissionpage_{name}.png"), full_page=True)
+                page.get_screenshot(
+                    path=str(SCREENSHOTS_DIR / f"drissionpage_{name}.png"), full_page=True
+                )
                 print("OK")
             except Exception as e:
                 results[name] = {"status": "error", "error": str(e)}
@@ -495,6 +515,7 @@ async def run_drissionpage(chrome_path: str) -> dict:
 # ═══════════════════════════════════════════════════════════════════════
 # pydoll
 # ═══════════════════════════════════════════════════════════════════════
+
 
 async def run_pydoll(chrome_path: str) -> dict:
     from pydoll.browser.chromium import Chrome
@@ -552,6 +573,7 @@ async def run_pydoll(chrome_path: str) -> dict:
 # Report
 # ═══════════════════════════════════════════════════════════════════════
 
+
 def print_report(all_results: dict, chrome_path: str) -> None:
     frameworks = list(all_results.keys())
     print("\n" + "=" * 120)
@@ -581,7 +603,9 @@ def print_report(all_results: dict, chrome_path: str) -> None:
             continue
         p, f, w = r.get("passed", 0), r.get("failed", 0), r.get("warnings", 0)
         details = r.get("details", {})
-        failed_tests = [n for n, d in details.items() if isinstance(d, dict) and d.get("status") == "failed"]
+        failed_tests = [
+            n for n, d in details.items() if isinstance(d, dict) and d.get("status") == "failed"
+        ]
         status = "PASS" if f == 0 else "FAIL"
         print(f"  {fw:<26} passed={p} failed={f} warn={w} [{status}]")
         for ft in failed_tests:
@@ -598,7 +622,9 @@ def print_report(all_results: dict, chrome_path: str) -> None:
         like_headless = r.get("like_headless_pct", "?")
         stealth = r.get("stealth_pct", "?")
         lies = r.get("lies_detected", "?")
-        print(f"  {fw:<26} headless={headless}% like_headless={like_headless}% stealth={stealth}% lies={lies}")
+        print(
+            f"  {fw:<26} headless={headless}% like_headless={like_headless}% stealth={stealth}% lies={lies}"
+        )
 
     # Canvas
     print("\n--- BrowserLeaks Canvas ---")
@@ -630,7 +656,9 @@ def print_report(all_results: dict, chrome_path: str) -> None:
         if r.get("status") == "error":
             print(f"  {fw:<26} ERROR: {r.get('error', '')[:60]}")
             continue
-        print(f"  {fw:<26} bot_detected={r.get('bot_detected', 'N/A')} webdriver={r.get('webdriver', 'N/A')}")
+        print(
+            f"  {fw:<26} bot_detected={r.get('bot_detected', 'N/A')} webdriver={r.get('webdriver', 'N/A')}"
+        )
 
     # Summary matrix
     print("\n" + "=" * 120)
@@ -640,12 +668,15 @@ def print_report(all_results: dict, chrome_path: str) -> None:
     col_w = 18
     header = f"{'Test':<22}"
     for fw in frameworks:
-        header += f"{fw[:col_w-1]:<{col_w}}"
+        header += f"{fw[: col_w - 1]:<{col_w}}"
     print(header)
     print("-" * (22 + col_w * len(frameworks)))
 
     checks = [
-        ("webdriver=false", lambda r: (r.get("webdriver_check", {}) or {}).get("webdriver") is False),
+        (
+            "webdriver=false",
+            lambda r: (r.get("webdriver_check", {}) or {}).get("webdriver") is False,
+        ),
         ("sannysoft 0 fails", lambda r: r.get("sannysoft", {}).get("failed", -1) == 0),
         ("creepjs headless=0%", lambda r: r.get("creepjs", {}).get("headless_pct", -1) == 0),
         ("creepjs stealth=0%", lambda r: r.get("creepjs", {}).get("stealth_pct", -1) == 0),
@@ -671,7 +702,7 @@ def print_report(all_results: dict, chrome_path: str) -> None:
     print("-" * (22 + col_w * len(frameworks)))
     row = f"{'SCORE':<22}"
     for fw in frameworks:
-        row += f"{score[fw]}/{len(checks):<{col_w-3}}"
+        row += f"{score[fw]}/{len(checks):<{col_w - 3}}"
     print(row)
 
     print(f"{'ELAPSED (s)':<22}", end="")
@@ -696,13 +727,15 @@ RUNNERS = {
 
 async def main():
     import argparse
+
     parser = argparse.ArgumentParser(description="Comparative browser detection tests")
-    parser.add_argument("--frameworks", type=str, default="all",
-                        help="Comma-separated list or 'all'")
-    parser.add_argument("--chrome-path", type=str, default=DEFAULT_CHROME,
-                        help="Chrome binary path")
-    parser.add_argument("--output", type=str, default=str(RESULTS_FILE),
-                        help="Output JSON file")
+    parser.add_argument(
+        "--frameworks", type=str, default="all", help="Comma-separated list or 'all'"
+    )
+    parser.add_argument(
+        "--chrome-path", type=str, default=DEFAULT_CHROME, help="Chrome binary path"
+    )
+    parser.add_argument("--output", type=str, default=str(RESULTS_FILE), help="Output JSON file")
     args = parser.parse_args()
 
     SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -723,6 +756,7 @@ async def main():
         except Exception as e:
             print(f"\n[{fw_name}] FATAL ERROR: {e}")
             import traceback
+
             traceback.print_exc()
             all_results[fw_name] = {"framework": fw_name, "status": "fatal_error", "error": str(e)}
 

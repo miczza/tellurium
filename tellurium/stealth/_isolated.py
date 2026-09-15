@@ -9,6 +9,7 @@ reach, while still seeing the live DOM tree.
 Event dispatch (Input.dispatch*) does not need the isolated world — it
 bypasses JS entirely and produces isTrusted=true native events.
 """
+
 from __future__ import annotations
 
 _HSIM_WORLD_NAME = "__tellurium_hsim__"
@@ -33,12 +34,15 @@ async def get_hsim_world(tab, *, frame_id: str) -> int | None:
         return cached
 
     try:
-        resp = await tab._session.send("Page.createIsolatedWorld", {
-            "frameId": frame_id,
-            "worldName": _HSIM_WORLD_NAME,
-            "grantUniversalAccess": False,
-        })
-    except Exception:
+        resp = await tab._session.send(
+            "Page.createIsolatedWorld",
+            {
+                "frameId": frame_id,
+                "worldName": _HSIM_WORLD_NAME,
+                "grantUniversalAccess": False,
+            },
+        )
+    except Exception:  # noqa: BLE001 - fall back to main world
         return None
 
     ctx_id = resp.get("executionContextId")

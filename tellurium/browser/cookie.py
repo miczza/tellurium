@@ -1,5 +1,7 @@
 """Cookie dataclass with JSON and Netscape format support."""
+
 from __future__ import annotations
+
 import json
 from dataclasses import dataclass
 
@@ -17,18 +19,26 @@ class Cookie:
 
     def to_json(self) -> dict:
         return {
-            "name": self.name, "value": self.value, "domain": self.domain,
-            "path": self.path, "expires": self.expires,
-            "httpOnly": self.http_only, "secure": self.secure,
+            "name": self.name,
+            "value": self.value,
+            "domain": self.domain,
+            "path": self.path,
+            "expires": self.expires,
+            "httpOnly": self.http_only,
+            "secure": self.secure,
             "sameSite": self.same_site,
         }
 
     @classmethod
     def from_json(cls, data: dict) -> Cookie:
         return cls(
-            name=data["name"], value=data["value"], domain=data["domain"],
-            path=data.get("path", "/"), expires=data.get("expires", -1),
-            http_only=data.get("httpOnly", False), secure=data.get("secure", False),
+            name=data["name"],
+            value=data["value"],
+            domain=data["domain"],
+            path=data.get("path", "/"),
+            expires=data.get("expires", -1),
+            http_only=data.get("httpOnly", False),
+            secure=data.get("secure", False),
             same_site=data.get("sameSite", "Lax"),
         )
 
@@ -42,9 +52,12 @@ class Cookie:
     def from_netscape(cls, line: str) -> Cookie:
         parts = line.strip().split("\t")
         return cls(
-            domain=parts[0], path=parts[2], secure=parts[3] == "TRUE",
+            domain=parts[0],
+            path=parts[2],
+            secure=parts[3] == "TRUE",
             expires=float(parts[4]) if parts[4] != "0" else -1,
-            name=parts[5], value=parts[6] if len(parts) > 6 else "",
+            name=parts[5],
+            value=parts[6] if len(parts) > 6 else "",
         )
 
     @classmethod

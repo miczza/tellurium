@@ -1,5 +1,7 @@
 """Local proxy forwarder for authenticated proxy connections."""
+
 from __future__ import annotations
+
 import asyncio
 import base64
 import logging
@@ -22,8 +24,7 @@ def parse_proxy_url(url: str) -> dict:
 class ProxyForwarder:
     """HTTP proxy forwarder that adds Proxy-Authorization to upstream."""
 
-    def __init__(self, upstream_host: str, upstream_port: int,
-                 username: str, password: str):
+    def __init__(self, upstream_host: str, upstream_port: int, username: str, password: str):
         self._upstream_host = upstream_host
         self._upstream_port = upstream_port
         self._username = username
@@ -37,9 +38,7 @@ class ProxyForwarder:
         return self._server.sockets[0].getsockname()[1]
 
     async def start(self) -> None:
-        self._server = await asyncio.start_server(
-            self._handle_client, "127.0.0.1", 0
-        )
+        self._server = await asyncio.start_server(self._handle_client, "127.0.0.1", 0)
 
     async def stop(self) -> None:
         if self._server:
@@ -51,8 +50,9 @@ class ProxyForwarder:
         creds = base64.b64encode(f"{self._username}:{self._password}".encode()).decode()
         return f"Proxy-Authorization: Basic {creds}\r\n"
 
-    async def _handle_client(self, reader: asyncio.StreamReader,
-                              writer: asyncio.StreamWriter) -> None:
+    async def _handle_client(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
         try:
             first_line = await reader.readline()
             if not first_line:
@@ -67,7 +67,7 @@ class ProxyForwarder:
         finally:
             try:
                 writer.close()
-            except Exception:
+            except Exception:  # noqa: BLE001 - socket cleanup
                 pass
 
     async def _handle_connect(self, first_line, reader, writer):
@@ -78,7 +78,8 @@ class ProxyForwarder:
                 break
         # Connect to upstream
         up_reader, up_writer = await asyncio.open_connection(
-            self._upstream_host, self._upstream_port)
+            self._upstream_host, self._upstream_port
+        )
         # Send CONNECT with auth
         up_writer.write(first_line)
         up_writer.write(self._auth_header().encode())
@@ -98,7 +99,8 @@ class ProxyForwarder:
 
     async def _handle_forward(self, first_line, reader, writer):
         up_reader, up_writer = await asyncio.open_connection(
-            self._upstream_host, self._upstream_port)
+            self._upstream_host, self._upstream_port
+        )
         up_writer.write(first_line)
         up_writer.write(self._auth_header().encode())
         while True:
@@ -129,4 +131,5 @@ class ProxyForwarder:
                     await dst.drain()
             except (ConnectionError, asyncio.CancelledError):
                 pass
+
         await asyncio.gather(_pipe(r1, w2), _pipe(r2, w1), return_exceptions=True)

@@ -1,4 +1,5 @@
 """Tab API additions against real Chrome: waits, xpath_all, pdf, window control."""
+
 from __future__ import annotations
 
 import pytest
@@ -83,7 +84,7 @@ async def test_wait_for_url_still_matches_a_substring(browser, local_server):
 
 
 async def test_wait_for_url_glob_is_anchored(browser, local_server):
-    """"basic.html" as a glob must not match the full URL by accident."""
+    """ "basic.html" as a glob must not match the full URL by accident."""
     tab = await browser.new_tab(f"{local_server}/basic.html")
     with pytest.raises(TimeoutError):
         await tab.wait_for_url("basic.htm?", timeout=1)
@@ -168,9 +169,7 @@ async def test_manual_timezone_override_without_stealth(local_server):
     async with browser:
         tab = browser.main_tab
         await tab.get(f"{local_server}/basic.html")
-        zone = await tab.eval(
-            "Intl.DateTimeFormat().resolvedOptions().timeZone"
-        )
+        zone = await tab.eval("Intl.DateTimeFormat().resolvedOptions().timeZone")
         assert zone == "Asia/Tokyo"
 
 
@@ -187,12 +186,13 @@ async def test_manual_overrides_win_over_the_stealth_profile(local_server):
     from tellurium import Browser
 
     browser = await Browser.launch(
-        headless=True, stealth=True, seed=1,
-        timezone="Europe/Rome", languages=["it-IT", "it"],
+        headless=True,
+        stealth=True,
+        seed=1,
+        timezone="Europe/Rome",
+        languages=["it-IT", "it"],
     )
     async with browser:
         tab = await browser.new_tab(f"{local_server}/basic.html")
-        assert await tab.eval(
-            "Intl.DateTimeFormat().resolvedOptions().timeZone"
-        ) == "Europe/Rome"
+        assert await tab.eval("Intl.DateTimeFormat().resolvedOptions().timeZone") == "Europe/Rome"
         assert await tab.eval("Array.from(navigator.languages)") == ["it-IT", "it"]

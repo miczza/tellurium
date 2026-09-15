@@ -7,6 +7,7 @@ height. These tests pin the *observable* contract (parity with a real user's
 event) rather than any particular implementation of it, so they keep working
 whichever side computes the offset.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -121,7 +122,9 @@ async def test_parity_nudges_window_pinned_at_screen_origin():
     from tellurium import Browser
 
     browser = await Browser.launch(
-        headless=True, stealth=True, args=["--window-position=0,0"],
+        headless=True,
+        stealth=True,
+        args=["--window-position=0,0"],
     )
     try:
         tab = browser.main_tab

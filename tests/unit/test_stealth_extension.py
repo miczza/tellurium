@@ -1,7 +1,8 @@
 import json
 import os
 import shutil
-from tellurium.stealth.extension import load_script, create_stealth_extension
+
+from tellurium.stealth.extension import create_stealth_extension, load_script
 
 
 def test_load_script_no_params():

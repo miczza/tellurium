@@ -1,4 +1,5 @@
 """Element API surface promised by design doc 03: text split, tree walk, relative queries."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
@@ -21,10 +22,13 @@ def _fake_element(*, call_result=None, array_items=(), node_ids=None):
         if method == "Runtime.callFunctionOn":
             return {"result": call_result or {"type": "undefined"}}
         if method == "Runtime.getProperties":
-            return {"result": [
-                {"name": str(i), "value": {"objectId": oid}}
-                for i, oid in enumerate(array_items)
-            ] + [{"name": "length", "value": {"value": len(array_items)}}]}
+            return {
+                "result": [
+                    {"name": str(i), "value": {"objectId": oid}}
+                    for i, oid in enumerate(array_items)
+                ]
+                + [{"name": "length", "value": {"value": len(array_items)}}]
+            }
         if method == "DOM.requestNode":
             return {"nodeId": node_ids.pop(0) if node_ids else 0}
         return {}
@@ -76,7 +80,8 @@ async def test_text_of_an_empty_element_is_an_empty_string():
 async def test_children_maps_the_array_to_elements():
     element = _fake_element(
         call_result={"type": "object", "subtype": "array", "objectId": "ARR"},
-        array_items=("A", "B"), node_ids=[7, 8],
+        array_items=("A", "B"),
+        node_ids=[7, 8],
     )
     children = await element.children()
     assert [c._node_id for c in children] == [7, 8]
@@ -106,7 +111,8 @@ async def test_parent_of_the_root_is_none():
 async def test_find_all_scopes_the_tree_walker_to_this_element():
     element = _fake_element(
         call_result={"type": "object", "subtype": "array", "objectId": "ARR"},
-        array_items=("A",), node_ids=[5],
+        array_items=("A",),
+        node_ids=[5],
     )
     found = await element.find_all("Buy")
     assert [e._node_id for e in found] == [5]
@@ -116,8 +122,7 @@ async def test_find_all_scopes_the_tree_walker_to_this_element():
 
 
 async def test_find_raises_when_nothing_matches():
-    element = _fake_element(call_result={"type": "object", "subtype": "array",
-                                        "objectId": "ARR"})
+    element = _fake_element(call_result={"type": "object", "subtype": "array", "objectId": "ARR"})
     with pytest.raises(LookupError):
         await element.find("Buy")
 
@@ -125,7 +130,8 @@ async def test_find_raises_when_nothing_matches():
 async def test_xpath_is_evaluated_with_this_element_as_context():
     element = _fake_element(
         call_result={"type": "object", "subtype": "array", "objectId": "ARR"},
-        array_items=("A", "B"), node_ids=[11, 12],
+        array_items=("A", "B"),
+        node_ids=[11, 12],
     )
     matches = await element.xpath_all(".//a")
     assert [m._node_id for m in matches] == [11, 12]
@@ -136,8 +142,7 @@ async def test_xpath_is_evaluated_with_this_element_as_context():
 
 
 async def test_relative_xpath_returns_none_when_empty():
-    element = _fake_element(call_result={"type": "object", "subtype": "array",
-                                        "objectId": "ARR"})
+    element = _fake_element(call_result={"type": "object", "subtype": "array", "objectId": "ARR"})
     assert await element.xpath("./nope") is None
 
 
@@ -150,9 +155,7 @@ async def test_type_forwards_typos_to_the_tab():
     element = _fake_element(call_result={"type": "undefined"})
     element._tab.keyboard_type = AsyncMock()
     await element.type("hello", human=True, typos=True, wpm=70)
-    element._tab.keyboard_type.assert_awaited_once_with(
-        "hello", human=True, wpm=70, typos=True
-    )
+    element._tab.keyboard_type.assert_awaited_once_with("hello", human=True, wpm=70, typos=True)
 
 
 async def test_type_defaults_to_no_typos():

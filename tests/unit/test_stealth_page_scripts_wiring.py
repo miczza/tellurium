@@ -1,5 +1,7 @@
 """Verify Browser.launch invokes apply_page_scripts on the main tab (T7)."""
+
 from __future__ import annotations
+
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -11,8 +13,9 @@ async def test_launch_calls_apply_page_scripts_when_stock_and_stealth():
     apply_page_scripts being awaited at least once on a real session."""
     from tellurium import Browser
 
-    original = __import__("tellurium.stealth.engine", fromlist=["StealthEngine"])\
-        .StealthEngine.apply_page_scripts
+    original = __import__(
+        "tellurium.stealth.engine", fromlist=["StealthEngine"]
+    ).StealthEngine.apply_page_scripts
     calls: list = []
 
     async def spy(self, session):

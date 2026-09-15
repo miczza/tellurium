@@ -11,7 +11,6 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +35,7 @@ BASE_FLAGS = [
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)\.(\d+)")
 
 
-def _detect_chrome_version(executable: str) -> Optional[tuple[int, ...]]:
+def _detect_chrome_version(executable: str) -> tuple[int, ...] | None:
     """Run *executable* --version and return a 4-tuple of ints, or None on failure."""
     try:
         output = subprocess.check_output(
@@ -48,7 +47,7 @@ def _detect_chrome_version(executable: str) -> Optional[tuple[int, ...]]:
         m = _VERSION_RE.search(text)
         if m:
             return tuple(int(x) for x in m.groups())
-    except Exception:
+    except Exception:  # noqa: BLE001 - version probe is best-effort
         pass
     return None
 
@@ -90,10 +89,18 @@ def _find_cft_managed() -> list[tuple[str, str]]:
         for candidate in (
             entry / "chrome",
             entry / "chrome-linux64" / "chrome",
-            entry / "chrome-mac-x64" / "Google Chrome for Testing.app"
-            / "Contents" / "MacOS" / "Google Chrome for Testing",
-            entry / "chrome-mac-arm64" / "Google Chrome for Testing.app"
-            / "Contents" / "MacOS" / "Google Chrome for Testing",
+            entry
+            / "chrome-mac-x64"
+            / "Google Chrome for Testing.app"
+            / "Contents"
+            / "MacOS"
+            / "Google Chrome for Testing",
+            entry
+            / "chrome-mac-arm64"
+            / "Google Chrome for Testing.app"
+            / "Contents"
+            / "MacOS"
+            / "Google Chrome for Testing",
             entry / "chrome-win64" / "chrome.exe",
             entry / "chrome-win32" / "chrome.exe",
         ):
@@ -284,8 +291,8 @@ async def download_cft(version: str = "latest") -> str:
         Absolute path to the extracted Chrome executable.
     """
     try:
-        import urllib.request
         import json as _json
+        import urllib.request
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("stdlib urllib is unavailable") from exc
 
@@ -294,9 +301,7 @@ async def download_cft(version: str = "latest") -> str:
 
     # Resolve "latest" via the CfT JSON endpoint
     if version == "latest":
-        api_url = (
-            "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
-        )
+        api_url = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
         with urllib.request.urlopen(api_url, timeout=30) as resp:  # noqa: S310
             data = _json.loads(resp.read())
         version = data["channels"]["Stable"]["version"]
@@ -332,8 +337,12 @@ async def download_cft(version: str = "latest") -> str:
     for candidate in (
         dest_dir / "chrome",
         dest_dir / f"chrome-{plat}" / "chrome",
-        dest_dir / f"chrome-{plat}" / "Google Chrome for Testing.app"
-        / "Contents" / "MacOS" / "Google Chrome for Testing",
+        dest_dir
+        / f"chrome-{plat}"
+        / "Google Chrome for Testing.app"
+        / "Contents"
+        / "MacOS"
+        / "Google Chrome for Testing",
         dest_dir / f"chrome-{plat}" / "chrome.exe",
     ):
         if candidate.is_file():
@@ -350,8 +359,8 @@ def build_chrome_flags(
     *,
     headless: bool,
     user_data_dir: str,
-    proxy: Optional[str],
-    extra_args: Optional[list[str]],
+    proxy: str | None,
+    extra_args: list[str] | None,
     engine_args: list[str],
 ) -> list[str]:
     """Assemble the full Chrome CLI flag list.
@@ -418,8 +427,8 @@ def launch_chrome_posix(
         * **parent_read_fd** — the parent's read end of the pipe (receive CDP messages here)
     """
     # pipe(): (read_end, write_end)
-    chrome_read_fd, parent_write_fd = os.pipe()   # parent writes -> chrome reads on fd 3
-    parent_read_fd, chrome_write_fd = os.pipe()   # chrome writes on fd 4 -> parent reads
+    chrome_read_fd, parent_write_fd = os.pipe()  # parent writes -> chrome reads on fd 3
+    parent_read_fd, chrome_write_fd = os.pipe()  # chrome writes on fd 4 -> parent reads
 
     def _remap_fds() -> None:
         """Called in the child process before exec."""
@@ -462,8 +471,7 @@ _CRT_FPIPE = 0x08
 _INVALID_HANDLE_VALUE = -1
 
 
-def build_crt_inherit_block(handles: list[int | None],
-                            handle_size: int = 8) -> bytes:
+def build_crt_inherit_block(handles: list[int | None], handle_size: int = 8) -> bytes:
     """Encode the MSVC CRT ``STARTUPINFO.lpReserved2`` inheritance block.
 
     Windows' ``CreateProcess`` can only pass three handles explicitly
@@ -526,13 +534,11 @@ def launch_chrome_windows(
     ``terminate``/``kill``.
     """
     if sys.platform != "win32":  # pragma: no cover - guarded by the dispatcher
-        raise RuntimeError(
-            "launch_chrome_windows() is Windows-only; use launch_chrome()."
-        )
+        raise RuntimeError("launch_chrome_windows() is Windows-only; use launch_chrome().")
+    import _winapi
     import ctypes
     import ctypes.wintypes as wintypes
     import msvcrt
-    import _winapi
 
     class _STARTUPINFOW(ctypes.Structure):
         _fields_ = [
@@ -591,21 +597,19 @@ def launch_chrome_windows(
     created = ctypes.windll.kernel32.CreateProcessW(
         ctypes.c_wchar_p(chrome_path),
         ctypes.c_wchar_p(command_line),
-        None,            # process security attributes
-        None,            # thread security attributes
-        True,            # bInheritHandles — required for the two pipe ends
-        0,               # dwCreationFlags
-        None,            # environment (inherit)
-        None,            # current directory (inherit)
+        None,  # process security attributes
+        None,  # thread security attributes
+        True,  # bInheritHandles — required for the two pipe ends
+        0,  # dwCreationFlags
+        None,  # environment (inherit)
+        None,  # current directory (inherit)
         ctypes.byref(startup),
         ctypes.byref(info),
     )
     if not created:
         for handle in (chrome_read_h, chrome_write_h, parent_read_h, parent_write_h):
             _winapi.CloseHandle(handle)
-        raise OSError(
-            ctypes.GetLastError(), f"CreateProcessW failed for {chrome_path}"
-        )
+        raise OSError(ctypes.GetLastError(), f"CreateProcessW failed for {chrome_path}")
 
     _winapi.CloseHandle(info.hThread)
     # The child owns its ends now.
@@ -634,6 +638,7 @@ class _WindowsProcess:
 
     def poll(self) -> int | None:
         import _winapi
+
         if self.returncode is None:
             if _winapi.WaitForSingleObject(self._handle, 0) == 0:  # WAIT_OBJECT_0
                 self.returncode = _winapi.GetExitCodeProcess(self._handle)
@@ -641,6 +646,7 @@ class _WindowsProcess:
 
     def wait(self, timeout: float | None = None) -> int:
         import _winapi
+
         if self.returncode is None:
             ms = 0xFFFFFFFF if timeout is None else int(timeout * 1000)
             if _winapi.WaitForSingleObject(self._handle, ms) != 0:
@@ -650,6 +656,7 @@ class _WindowsProcess:
 
     def terminate(self) -> None:
         import ctypes
+
         if self.returncode is None:
             ctypes.windll.kernel32.TerminateProcess(self._handle, 1)
 

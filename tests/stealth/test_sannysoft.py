@@ -1,4 +1,5 @@
 import pytest
+
 from tellurium import Browser
 
 pytestmark = pytest.mark.stealth

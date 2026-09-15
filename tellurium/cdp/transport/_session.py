@@ -1,7 +1,10 @@
 """CDP session multiplexer over a single transport."""
+
 from __future__ import annotations
+
 import asyncio
 import json
+
 from tellurium.cdp.transport._base import CDPTransport
 from tellurium.cdp.types import CDPError
 
@@ -109,9 +112,7 @@ class SessionRouter:
 
     async def detach(self, session: Session) -> None:
         if session._session_id:
-            await self._root.send(
-                "Target.detachFromTarget", {"sessionId": session._session_id}
-            )
+            await self._root.send("Target.detachFromTarget", {"sessionId": session._session_id})
             self._sessions.pop(session._session_id, None)
 
     async def run(self) -> None:

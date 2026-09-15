@@ -1,4 +1,5 @@
 """Tellurium CLI."""
+
 from __future__ import annotations
 
 import argparse
@@ -22,6 +23,7 @@ def _get_installed_version(cache: Path) -> str | None:
 def _check_latest_patched() -> str | None:
     """Return the chromium version of the latest chromium-telluride release."""
     from tellurium.browser._patched_download import latest_version
+
     return latest_version()
 
 
@@ -38,22 +40,29 @@ def main():
 
     # download-browser
     dl_parser = sub.add_parser("download-browser", help="Download browser binary")
-    dl_parser.add_argument("--browser", default="stock", choices=["stock", "patched"],
-                           help="Browser type to download")
-    dl_parser.add_argument("--version", default=None,
-                           help="Chromium version to download (default: latest release)")
+    dl_parser.add_argument(
+        "--browser", default="stock", choices=["stock", "patched"], help="Browser type to download"
+    )
+    dl_parser.add_argument(
+        "--version", default=None, help="Chromium version to download (default: latest release)"
+    )
 
     # download-geoip
-    geo_parser = sub.add_parser("download-geoip",
-                                help="Download a GeoIP country database for proxy locale detection")
-    geo_parser.add_argument("--maxmind-license-key", default=None,
-                            help="Use MaxMind GeoLite2-Country instead of DB-IP Lite")
+    geo_parser = sub.add_parser(
+        "download-geoip", help="Download a GeoIP country database for proxy locale detection"
+    )
+    geo_parser.add_argument(
+        "--maxmind-license-key",
+        default=None,
+        help="Use MaxMind GeoLite2-Country instead of DB-IP Lite",
+    )
 
     # stealth-test
     st_parser = sub.add_parser("stealth-test", help="Test stealth against detection sites")
     st_parser.add_argument("--browser", default="stock", choices=["stock", "patched"])
-    st_parser.add_argument("--full", action="store_true",
-                           help="Also visit live detection sites (needs network)")
+    st_parser.add_argument(
+        "--full", action="store_true", help="Also visit live detection sites (needs network)"
+    )
     st_parser.add_argument("--headed", action="store_true", help="Run with a visible window")
 
     # info
@@ -171,6 +180,7 @@ def _update_cdp(chrome_version: str | None) -> None:
 # Patched browser management
 # --------------------------------------------------------------------------- #
 
+
 def _progress_printer():
     last = [-1]
 
@@ -185,12 +195,15 @@ def _progress_printer():
             if mb != last[0]:
                 last[0] = mb
                 print(f"\r  downloading... {mb} MB", end="", flush=True)
+
     return cb
 
 
 def _install_patched(version: str | None, *, reinstall: bool = False) -> bool:
     """Download (or re-download) a patched release; print outcome; return success."""
-    from tellurium.browser._patched_download import DownloadError, download_patched, reinstall as _re
+    from tellurium.browser._patched_download import DownloadError, download_patched
+    from tellurium.browser._patched_download import reinstall as _re
+
     try:
         if reinstall and version:
             entry = _re(version, cache_root=_cache_dir(), progress=_progress_printer())
@@ -212,6 +225,7 @@ async def _download_browser(browser_type: str, version: str | None = None) -> No
     """Download a browser binary."""
     if browser_type == "stock":
         from tellurium.browser.launcher import download_cft
+
         path = await download_cft(version or "latest")
         print(f"Chrome for Testing downloaded: {path}")
     elif browser_type == "patched":
@@ -221,6 +235,7 @@ async def _download_browser(browser_type: str, version: str | None = None) -> No
 
 def _download_geoip(license_key: str | None) -> None:
     from tellurium.stealth.geoip import download_geoip_db
+
     try:
         path = download_geoip_db(maxmind_license_key=license_key)
     except Exception as e:  # noqa: BLE001 - CLI boundary
@@ -239,13 +254,17 @@ async def _stealth_test(browser_type: str, full: bool, headed: bool = False) -> 
         ("navigator.webdriver", "navigator.webdriver", lambda r: r is False or r is None),
         ("window.chrome", "typeof window.chrome === 'object'", bool),
         ("navigator.plugins", "navigator.plugins.length > 0", bool),
-        ("webdriver getter shape",
-         "Function.prototype.toString.call(Object.getOwnPropertyDescriptor("
-         "Object.getPrototypeOf(navigator),'webdriver').get)",
-         lambda r: r == "function get webdriver() { [native code] }"),
-        ("Function.prototype.toString shape",
-         "Function.prototype.toString.call(Function.prototype.toString)",
-         lambda r: r == "function toString() { [native code] }"),
+        (
+            "webdriver getter shape",
+            "Function.prototype.toString.call(Object.getOwnPropertyDescriptor("
+            "Object.getPrototypeOf(navigator),'webdriver').get)",
+            lambda r: r == "function get webdriver() { [native code] }",
+        ),
+        (
+            "Function.prototype.toString shape",
+            "Function.prototype.toString.call(Function.prototype.toString)",
+            lambda r: r == "function toString() { [native code] }",
+        ),
     ]
 
     failures = 0
@@ -264,11 +283,18 @@ async def _stealth_test(browser_type: str, full: bool, headed: bool = False) -> 
         if full:
             print("\nLive detection sites:")
             sites = [
-                ("bot.sannysoft.com", "https://bot.sannysoft.com/",
-                 "document.querySelectorAll('.failed').length", lambda r: r == 0),
-                ("browserscan.net/bot-detection", "https://www.browserscan.net/bot-detection",
-                 "!/robot|bot detected/i.test(document.body.innerText) ? 0 : 1",
-                 lambda r: r == 0),
+                (
+                    "bot.sannysoft.com",
+                    "https://bot.sannysoft.com/",
+                    "document.querySelectorAll('.failed').length",
+                    lambda r: r == 0,
+                ),
+                (
+                    "browserscan.net/bot-detection",
+                    "https://www.browserscan.net/bot-detection",
+                    "!/robot|bot detected/i.test(document.body.innerText) ? 0 : 1",
+                    lambda r: r == 0,
+                ),
             ]
             for name, url, expr, ok in sites:
                 try:
@@ -280,8 +306,10 @@ async def _stealth_test(browser_type: str, full: bool, headed: bool = False) -> 
                     result, passed = f"ERROR {e}", False
                 failures += not passed
                 print(f"  {name:<36} {'PASS' if passed else 'FAIL'}  ({result})")
-            print("\nFor CreepJS parity run: pytest examples/fingerprint_tests/"
-                  "test_stock_runtime_parity.py")
+            print(
+                "\nFor CreepJS parity run: pytest examples/fingerprint_tests/"
+                "test_stock_runtime_parity.py"
+            )
 
     print(f"\nDone. {failures} failure(s).")
     if failures:
@@ -305,8 +333,10 @@ def _show_info() -> None:
     browsers = _cache.installed_browsers(_cache_dir())
     if browsers:
         default = next((b for b in browsers if b.is_current), browsers[0])
-        print(f"  Browser patched: {default.binary} ({default.version}"
-              f"{', current' if default.is_current else ''})")
+        print(
+            f"  Browser patched: {default.binary} ({default.version}"
+            f"{', current' if default.is_current else ''})"
+        )
         if len(browsers) > 1:
             print(f"                   +{len(browsers) - 1} more (tellurium list-browsers)")
     else:
@@ -317,12 +347,13 @@ def _show_info() -> None:
 
     try:
         import maxminddb  # noqa: F401
+
         from tellurium.stealth.geoip import _ensure_geolite2_db
+
         try:
             print(f"  GeoIP:           {_ensure_geolite2_db()}")
         except FileNotFoundError:
-            print("  GeoIP:           maxminddb installed, no database "
-                  "(tellurium download-geoip)")
+            print("  GeoIP:           maxminddb installed, no database (tellurium download-geoip)")
     except ImportError:
         print("  GeoIP:           not installed (pip install tellurium[geoip])")
 

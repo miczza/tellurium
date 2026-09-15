@@ -82,6 +82,10 @@ ignore = [
     "E501",
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["BLE001", "B904"]
+"examples/*" = ["BLE001"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["tellurium"]
 

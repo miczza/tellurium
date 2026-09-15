@@ -1,4 +1,5 @@
 """Typo simulation (design doc 05 §"Typo Simulation"): opt-in, ~2%/char."""
+
 from __future__ import annotations
 
 import random
@@ -74,7 +75,7 @@ def test_typo_rate_is_about_two_percent():
     typer = HumanTyping(typos=True, rng=random.Random(7))
     text = "the quick brown fox jumps over the lazy dog" * 40
     events = typer.get_events(text)
-    extra = len(_keys(events)) - len(text)      # 2 extra keys per typo
+    extra = len(_keys(events)) - len(text)  # 2 extra keys per typo
     rate = (extra / 2) / len(text)
     assert TYPO_RATE == 0.02
     assert 0.005 < rate < 0.045

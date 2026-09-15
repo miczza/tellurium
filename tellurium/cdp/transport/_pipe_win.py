@@ -1,5 +1,7 @@
 """Windows pipe transport for CDP."""
+
 from __future__ import annotations
+
 import asyncio
 import json
 import os
@@ -43,7 +45,7 @@ class PipeWindowsTransport(CDPTransport):
             null_pos = self._buffer.find(b"\0")
             if null_pos != -1:
                 raw = bytes(self._buffer[:null_pos])
-                del self._buffer[:null_pos + 1]
+                del self._buffer[: null_pos + 1]
                 return json.loads(raw)
             chunk = await loop.run_in_executor(None, self._read_sync)
             if not chunk:

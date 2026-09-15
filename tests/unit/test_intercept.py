@@ -1,4 +1,5 @@
 """Tests for Fetch-based request interception."""
+
 import asyncio
 import base64
 from unittest.mock import AsyncMock, MagicMock
@@ -84,7 +85,9 @@ def test_intercepted_request_respond():
         session=session,
     )
 
-    asyncio.run(req.respond(status=200, body='{"mock": true}', headers={"Content-Type": "application/json"}))
+    asyncio.run(
+        req.respond(status=200, body='{"mock": true}', headers={"Content-Type": "application/json"})
+    )
 
     method, params = session.send.call_args[0]
     assert method == "Fetch.fulfillRequest"
@@ -139,14 +142,16 @@ def test_intercept_stream_yields_paused_requests():
         await stream.start()
 
         # Simulate Fetch.requestPaused event
-        stream._on_paused({
-            "requestId": "paused_1",
-            "request": {
-                "url": "https://example.com/api",
-                "method": "POST",
-                "headers": {"Content-Type": "application/json"},
-            },
-        })
+        stream._on_paused(
+            {
+                "requestId": "paused_1",
+                "request": {
+                    "url": "https://example.com/api",
+                    "method": "POST",
+                    "headers": {"Content-Type": "application/json"},
+                },
+            }
+        )
 
         # Should be able to get the request from the queue
         req = await asyncio.wait_for(stream._queue.get(), timeout=1.0)

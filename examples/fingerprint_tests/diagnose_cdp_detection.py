@@ -11,14 +11,13 @@ Usage:
 
 import asyncio
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from tellurium import Browser
-
 
 CHROMIUM_TELLURIDE_PATH = "/home/miczza/PycharmProjects/chromium-telluride/src/out/Release/chrome"
 SEED = 42069
@@ -56,7 +55,9 @@ async def main():
         print("\n[1/2] CDP DETECTION VECTOR TESTS")
         print("-" * 40)
 
-        await tab.get("data:text/html,<!DOCTYPE html><html><body><h1>CDP Diagnostic</h1></body></html>")
+        await tab.get(
+            "data:text/html,<!DOCTYPE html><html><body><h1>CDP Diagnostic</h1></body></html>"
+        )
         await asyncio.sleep(1)
 
         vectors = await tab.eval("""
@@ -179,7 +180,7 @@ async def main():
         if active_vectors:
             print(f"\n  ACTIVE VECTORS: {', '.join(active_vectors)}")
         else:
-            print(f"\n  No CDP detection vectors active!")
+            print("\n  No CDP detection vectors active!")
 
         # ── Phase 2: fingerprint.com/demo Smart Signals ──────────
         print("\n[2/2] FINGERPRINT.COM/DEMO SMART SIGNALS")
@@ -211,9 +212,12 @@ async def main():
         })()
         """)
         print(f"  Found {len(tab_labels or [])} clickable elements. Tab-like labels:")
-        for item in (tab_labels or []):
+        for item in tab_labels or []:
             text = item.get("text", "")
-            if any(kw in text.lower() for kw in ["smart", "signal", "browser", "geoloc", "identif", "visitor", "finger"]):
+            if any(
+                kw in text.lower()
+                for kw in ["smart", "signal", "browser", "geoloc", "identif", "visitor", "finger"]
+            ):
                 print(f"    -> '{text}' ({item.get('tag')} class={item.get('className', '')[:40]})")
 
         # Try multiple text variations to find the Smart Signals tab
@@ -351,13 +355,25 @@ async def main():
 
         if signals:
             print(f"\n  Suspect Score:     {signals.get('suspect_score', 'N/A')}")
-            print(f"  Developer Tools:   {'DETECTED' if signals.get('developer_tools') else 'Not detected' if signals.get('developer_tools') is False else 'N/A'}")
+            print(
+                f"  Developer Tools:   {'DETECTED' if signals.get('developer_tools') else 'Not detected' if signals.get('developer_tools') is False else 'N/A'}"
+            )
             print(f"  Bot Detection:     {signals.get('bot_detected', 'N/A')}")
-            print(f"  Browser Tampering: {'DETECTED' if signals.get('browser_tampering') else 'Not detected' if signals.get('browser_tampering') is False else 'N/A'}")
-            print(f"  VM Detection:      {'DETECTED' if signals.get('vm_detected') else 'Not detected' if signals.get('vm_detected') is False else 'N/A'}")
-            print(f"  Incognito:         {'DETECTED' if signals.get('incognito') else 'Not detected' if signals.get('incognito') is False else 'N/A'}")
-            print(f"  VPN:               {'DETECTED' if signals.get('vpn') else 'Not detected' if signals.get('vpn') is False else 'N/A'}")
-            print(f"  Privacy Settings:  {'DETECTED' if signals.get('privacy_settings') else 'Not detected' if signals.get('privacy_settings') is False else 'N/A'}")
+            print(
+                f"  Browser Tampering: {'DETECTED' if signals.get('browser_tampering') else 'Not detected' if signals.get('browser_tampering') is False else 'N/A'}"
+            )
+            print(
+                f"  VM Detection:      {'DETECTED' if signals.get('vm_detected') else 'Not detected' if signals.get('vm_detected') is False else 'N/A'}"
+            )
+            print(
+                f"  Incognito:         {'DETECTED' if signals.get('incognito') else 'Not detected' if signals.get('incognito') is False else 'N/A'}"
+            )
+            print(
+                f"  VPN:               {'DETECTED' if signals.get('vpn') else 'Not detected' if signals.get('vpn') is False else 'N/A'}"
+            )
+            print(
+                f"  Privacy Settings:  {'DETECTED' if signals.get('privacy_settings') else 'Not detected' if signals.get('privacy_settings') is False else 'N/A'}"
+            )
 
             if signals.get("raw_signals"):
                 print(f"\n  Raw signals ({len(signals['raw_signals'])} entries):")
@@ -395,20 +411,20 @@ async def main():
 
     score = fd.get("suspect_score")
     devtools = fd.get("developer_tools")
-    print(f"\nFingerprint.com results:")
+    print("\nFingerprint.com results:")
     print(f"  Suspect Score: {score}")
     print(f"  Developer Tools Detected: {devtools}")
 
     if score is not None and score > 0:
-        print(f"\n  Score breakdown hypothesis (weight table):")
+        print("\n  Score breakdown hypothesis (weight table):")
         if devtools:
-            print(f"    Developer Tools Detection: +8")
+            print("    Developer Tools Detection: +8")
         if fd.get("browser_tampering"):
-            print(f"    Browser Tampering: +8")
+            print("    Browser Tampering: +8")
         if fd.get("incognito"):
-            print(f"    Incognito: +4")
+            print("    Incognito: +4")
         if fd.get("privacy_settings"):
-            print(f"    Privacy Settings: +6")
+            print("    Privacy Settings: +6")
         remaining = score
         if devtools:
             remaining -= 8
@@ -420,7 +436,7 @@ async def main():
     with open(output, "w") as f:
         json.dump(results, f, indent=2, default=str)
     print(f"\nFull results saved to {output}")
-    print(f"Screenshot saved to screenshots/diagnose_smart_signals.png")
+    print("Screenshot saved to screenshots/diagnose_smart_signals.png")
 
 
 if __name__ == "__main__":

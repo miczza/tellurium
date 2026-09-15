@@ -1,19 +1,20 @@
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 from tellurium.stealth.geoip import (
-    GeoResult,
-    COUNTRY_TIMEZONES,
     COUNTRY_LANGUAGES,
-    resolve_geoip,
-    resolve_exit_ip,
+    COUNTRY_TIMEZONES,
+    GeoResult,
     _ensure_geolite2_db,
+    resolve_exit_ip,
+    resolve_geoip,
 )
-
 
 # ---------------------------------------------------------------------------
 # GeoResult dataclass
 # ---------------------------------------------------------------------------
+
 
 def test_geo_result_fields():
     r = GeoResult(country="US", timezone="America/New_York", languages=["en-US", "en"])
@@ -31,6 +32,7 @@ def test_geo_result_equality():
 # ---------------------------------------------------------------------------
 # Country lookup tables
 # ---------------------------------------------------------------------------
+
 
 def test_country_timezones_coverage():
     # Spot-check important countries
@@ -64,6 +66,7 @@ def test_all_languages_lists_end_with_en():
 # resolve_geoip
 # ---------------------------------------------------------------------------
 
+
 def test_resolve_geoip_missing_maxminddb():
     """Without maxminddb and with the online fallback disabled -> ImportError."""
     with patch.dict("sys.modules", {"maxminddb": None}):
@@ -81,13 +84,21 @@ def test_resolve_geoip_online_fallback_without_db(monkeypatch):
 
 def test_online_country_parses_text_and_json(monkeypatch):
     from tellurium.stealth import geoip
+
     bodies = iter([b"  it\n"])
 
     class R:
-        def __init__(self, b): self.b = b
-        def read(self): return self.b
-        def __enter__(self): return self
-        def __exit__(self, *a): return None
+        def __init__(self, b):
+            self.b = b
+
+        def read(self):
+            return self.b
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return None
 
     monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=5: R(next(bodies)))
     assert geoip._online_country("1.1.1.1") == "IT"
@@ -107,8 +118,10 @@ def test_resolve_geoip_success():
     mock_maxminddb = MagicMock()
     mock_maxminddb.open_database.return_value = mock_reader
 
-    with patch.dict("sys.modules", {"maxminddb": mock_maxminddb}), \
-         patch("tellurium.stealth.geoip._ensure_geolite2_db", return_value="/fake/path.mmdb"):
+    with (
+        patch.dict("sys.modules", {"maxminddb": mock_maxminddb}),
+        patch("tellurium.stealth.geoip._ensure_geolite2_db", return_value="/fake/path.mmdb"),
+    ):
         result = resolve_geoip("1.2.3.4")
 
     assert result.country == "DE"
@@ -128,8 +141,10 @@ def test_resolve_geoip_unknown_country_defaults():
     mock_maxminddb = MagicMock()
     mock_maxminddb.open_database.return_value = mock_reader
 
-    with patch.dict("sys.modules", {"maxminddb": mock_maxminddb}), \
-         patch("tellurium.stealth.geoip._ensure_geolite2_db", return_value="/fake/path.mmdb"):
+    with (
+        patch.dict("sys.modules", {"maxminddb": mock_maxminddb}),
+        patch("tellurium.stealth.geoip._ensure_geolite2_db", return_value="/fake/path.mmdb"),
+    ):
         result = resolve_geoip("1.2.3.4")
 
     assert result.country == "XX"
@@ -147,8 +162,10 @@ def test_resolve_geoip_no_country_in_result():
     mock_maxminddb = MagicMock()
     mock_maxminddb.open_database.return_value = mock_reader
 
-    with patch.dict("sys.modules", {"maxminddb": mock_maxminddb}), \
-         patch("tellurium.stealth.geoip._ensure_geolite2_db", return_value="/fake/path.mmdb"):
+    with (
+        patch.dict("sys.modules", {"maxminddb": mock_maxminddb}),
+        patch("tellurium.stealth.geoip._ensure_geolite2_db", return_value="/fake/path.mmdb"),
+    ):
         with pytest.raises(ValueError, match="Could not resolve IP"):
             resolve_geoip("1.2.3.4")
 
@@ -163,8 +180,10 @@ def test_resolve_geoip_none_result():
     mock_maxminddb = MagicMock()
     mock_maxminddb.open_database.return_value = mock_reader
 
-    with patch.dict("sys.modules", {"maxminddb": mock_maxminddb}), \
-         patch("tellurium.stealth.geoip._ensure_geolite2_db", return_value="/fake/path.mmdb"):
+    with (
+        patch.dict("sys.modules", {"maxminddb": mock_maxminddb}),
+        patch("tellurium.stealth.geoip._ensure_geolite2_db", return_value="/fake/path.mmdb"),
+    ):
         with pytest.raises(ValueError, match="Could not resolve IP"):
             resolve_geoip("1.2.3.4")
 
@@ -172,6 +191,7 @@ def test_resolve_geoip_none_result():
 # ---------------------------------------------------------------------------
 # resolve_exit_ip
 # ---------------------------------------------------------------------------
+
 
 def test_resolve_exit_ip_with_forwarder():
     """When a forwarder port is given, it should use localhost as HTTP proxy."""
@@ -235,8 +255,8 @@ def test_resolve_exit_ip_tries_next_service_on_failure():
 
     mock_opener = MagicMock()
     mock_opener.open.side_effect = [
-        Exception("timeout"),      # first service fails
-        mock_response,             # second service succeeds
+        Exception("timeout"),  # first service fails
+        mock_response,  # second service succeeds
     ]
 
     with patch("urllib.request.build_opener", return_value=mock_opener):
@@ -249,6 +269,7 @@ def test_resolve_exit_ip_tries_next_service_on_failure():
 # ---------------------------------------------------------------------------
 # _ensure_geolite2_db
 # ---------------------------------------------------------------------------
+
 
 def test_ensure_geolite2_db_not_found(tmp_path, monkeypatch):
     monkeypatch.delenv("TELLURIUM_GEOIP_DB", raising=False)
@@ -276,13 +297,20 @@ def test_ensure_geolite2_db_env_override(tmp_path, monkeypatch):
 def test_download_geoip_db_dbip(tmp_path, monkeypatch):
     import gzip
     import urllib.error
+
     from tellurium.stealth.geoip import download_geoip_db
+
     seen = []
 
     class R:
-        def read(self): return gzip.compress(b"MMDB")
-        def __enter__(self): return self
-        def __exit__(self, *a): return None
+        def read(self):
+            return gzip.compress(b"MMDB")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return None
 
     def urlopen(url, timeout=60):
         seen.append(url)

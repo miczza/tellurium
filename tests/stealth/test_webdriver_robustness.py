@@ -5,7 +5,9 @@ implementation (commit c4932ec) already satisfies. Their value is
 regression coverage for refactors and for plausible upstream evolution
 of the CreepJS classifiers (see lies/index.ts in the CreepJS repo).
 """
+
 from __future__ import annotations
+
 import os
 import shutil
 
@@ -193,7 +195,9 @@ async def test_oopif_webdriver_native_shape():
     """
     async with await Browser.launch(headless=True, stealth=True) as browser:
         # Navigate to a page that already has an iframe in its initial HTML.
-        tab = await browser.new_tab("data:text/html,<html><body><iframe id=t></iframe></body></html>")
+        tab = await browser.new_tab(
+            "data:text/html,<html><body><iframe id=t></iframe></body></html>"
+        )
         result = await tab.eval("""
             (async () => {
               const iframe = document.getElementById('t');

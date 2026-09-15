@@ -1,4 +1,5 @@
 """Tests for GREASE brand extraction from Browser.getVersion output."""
+
 import asyncio
 import dataclasses
 from unittest.mock import AsyncMock, MagicMock
@@ -97,6 +98,7 @@ def test_get_version_exception_leaves_profile_untouched():
     router.root.send raises, version_info becomes {}, raw_brands is [],
     and the profile-replacement branch is skipped entirely.
     """
+
     # Simulate the try/except block from Browser.launch()
     class _FakeRouter:
         class root:

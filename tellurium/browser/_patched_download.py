@@ -11,6 +11,7 @@ Release contract (``chromium-telluride/docs/manifest-schema.md``):
 Installation target: ``<cache_root>/<chromium_upstream>/`` (see ``_cache``).
 Zero third-party dependencies: ``urllib`` + ``tarfile`` only.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,9 +21,10 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from tellurium.browser import _cache
 from tellurium.browser._manifest import (
@@ -59,10 +61,15 @@ class ReleaseAssets:
 # GitHub API
 # --------------------------------------------------------------------------- #
 
+
 def _http_json(url: str, timeout: float = 15) -> Any:
-    req = urllib.request.Request(url, headers={
-        "User-Agent": _USER_AGENT, "Accept": "application/vnd.github+json",
-    })
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": _USER_AGENT,
+            "Accept": "application/vnd.github+json",
+        },
+    )
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
         return json.loads(resp.read())
 
@@ -89,13 +96,17 @@ def _assets_from_release(rel: dict[str, Any], platform: str) -> ReleaseAssets | 
     if not tarball:
         return None
     return ReleaseAssets(
-        tag=rel.get("tag_name", ""), tarball_url=tarball, tarball_name=tarball_name,
-        manifest_url=manifest, sha256sums_url=sums,
+        tag=rel.get("tag_name", ""),
+        tarball_url=tarball,
+        tarball_name=tarball_name,
+        manifest_url=manifest,
+        sha256sums_url=sums,
     )
 
 
-def find_release(version: str | None = None, *, platform: str | None = None,
-                 api_url: str = RELEASES_API) -> ReleaseAssets:
+def find_release(
+    version: str | None = None, *, platform: str | None = None, api_url: str = RELEASES_API
+) -> ReleaseAssets:
     """Locate release assets for *version* (chromium upstream) or the latest."""
     platform = platform or current_platform()
     if version is None:
@@ -136,6 +147,7 @@ def latest_version(*, api_url: str = RELEASES_API) -> str | None:
 # Download + verify + extract
 # --------------------------------------------------------------------------- #
 
+
 def _download(url: str, dest: Path, progress: ProgressCallback | None = None) -> None:
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(req, timeout=60) as resp, open(dest, "wb") as out:  # noqa: S310
@@ -168,7 +180,7 @@ def _safe_extract(tar_path: Path, dest: Path) -> None:
         for m in tf.getmembers():
             name = m.name
             if name.startswith(f"{_TOP_DIR}/"):
-                name = name[len(_TOP_DIR) + 1:]
+                name = name[len(_TOP_DIR) + 1 :]
             elif name == _TOP_DIR:
                 continue
             if not name:
@@ -188,9 +200,13 @@ def _safe_extract(tar_path: Path, dest: Path) -> None:
             tf.extractall(dest, members=members)  # noqa: S202
 
 
-def install_from_tarball(tar_path: Path, *, cache_root: Path | None = None,
-                         expected_tarball_sha256: str | None = None,
-                         set_current: bool = True) -> _cache.InstalledBrowser:
+def install_from_tarball(
+    tar_path: Path,
+    *,
+    cache_root: Path | None = None,
+    expected_tarball_sha256: str | None = None,
+    set_current: bool = True,
+) -> _cache.InstalledBrowser:
     """Install a local release tarball into the cache and return the entry."""
     root = cache_root if cache_root is not None else _cache.cache_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -234,10 +250,14 @@ def install_from_tarball(tar_path: Path, *, cache_root: Path | None = None,
     return entries[version]
 
 
-def download_patched(version: str | None = None, *, cache_root: Path | None = None,
-                     progress: ProgressCallback | None = None,
-                     api_url: str = RELEASES_API,
-                     set_current: bool = True) -> _cache.InstalledBrowser:
+def download_patched(
+    version: str | None = None,
+    *,
+    cache_root: Path | None = None,
+    progress: ProgressCallback | None = None,
+    api_url: str = RELEASES_API,
+    set_current: bool = True,
+) -> _cache.InstalledBrowser:
     """Download and install a chromium-telluride release (latest by default)."""
     assets = find_release(version, api_url=api_url)
     expected = None
@@ -253,19 +273,26 @@ def download_patched(version: str | None = None, *, cache_root: Path | None = No
         log.info("Downloading %s (%s)", assets.tarball_name, assets.tag)
         _download(assets.tarball_url, tar_path, progress)
         return install_from_tarball(
-            tar_path, cache_root=root, expected_tarball_sha256=expected,
+            tar_path,
+            cache_root=root,
+            expected_tarball_sha256=expected,
             set_current=set_current,
         )
 
 
-def reinstall(version: str, *, cache_root: Path | None = None,
-              progress: ProgressCallback | None = None,
-              api_url: str = RELEASES_API) -> _cache.InstalledBrowser:
+def reinstall(
+    version: str,
+    *,
+    cache_root: Path | None = None,
+    progress: ProgressCallback | None = None,
+    api_url: str = RELEASES_API,
+) -> _cache.InstalledBrowser:
     """Remove *version* from the cache and download it again."""
     root = cache_root if cache_root is not None else _cache.cache_root()
     target = root / version
     was_current = _cache.current_version(root) == version
     if target.exists():
         shutil.rmtree(target)
-    return download_patched(version, cache_root=root, progress=progress,
-                            api_url=api_url, set_current=was_current)
+    return download_patched(
+        version, cache_root=root, progress=progress, api_url=api_url, set_current=was_current
+    )

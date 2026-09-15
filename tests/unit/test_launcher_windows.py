@@ -5,6 +5,7 @@ only — so the tests pin the *construction* of the handle block, the command
 line and the platform dispatch, which is what a Windows regression would break
 first.  See launch_chrome_windows()'s "untested on real Windows" note.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -23,7 +24,6 @@ from tellurium.browser.launcher import (
     launch_chrome,
 )
 
-
 # ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
@@ -32,10 +32,14 @@ from tellurium.browser.launcher import (
 def test_launch_chrome_uses_the_posix_launcher_on_linux(monkeypatch):
     calls = []
     monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(launcher, "launch_chrome_posix",
-                        lambda p, a: calls.append(("posix", p, a)) or ("P", 3, 4))
-    monkeypatch.setattr(launcher, "launch_chrome_windows",
-                        lambda p, a: pytest.fail("windows launcher used on linux"))
+    monkeypatch.setattr(
+        launcher, "launch_chrome_posix", lambda p, a: calls.append(("posix", p, a)) or ("P", 3, 4)
+    )
+    monkeypatch.setattr(
+        launcher,
+        "launch_chrome_windows",
+        lambda p, a: pytest.fail("windows launcher used on linux"),
+    )
     assert launch_chrome("/usr/bin/chrome", ["--x"]) == ("P", 3, 4)
     assert calls == [("posix", "/usr/bin/chrome", ["--x"])]
 
@@ -43,10 +47,12 @@ def test_launch_chrome_uses_the_posix_launcher_on_linux(monkeypatch):
 def test_launch_chrome_uses_the_windows_launcher_on_win32(monkeypatch):
     calls = []
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(launcher, "launch_chrome_windows",
-                        lambda p, a: calls.append(("win", p, a)) or ("W", 5, 6))
-    monkeypatch.setattr(launcher, "launch_chrome_posix",
-                        lambda p, a: pytest.fail("posix launcher used on win32"))
+    monkeypatch.setattr(
+        launcher, "launch_chrome_windows", lambda p, a: calls.append(("win", p, a)) or ("W", 5, 6)
+    )
+    monkeypatch.setattr(
+        launcher, "launch_chrome_posix", lambda p, a: pytest.fail("posix launcher used on win32")
+    )
     assert launch_chrome(r"C:\chrome.exe", ["--y"]) == ("W", 5, 6)
     assert calls == [("win", r"C:\chrome.exe", ["--y"])]
 
@@ -77,8 +83,8 @@ def test_crt_block_layout_count_flags_handles():
     assert list(flags) == [0, 0, 0, _CRT_FOPEN | _CRT_FPIPE, _CRT_FOPEN | _CRT_FPIPE]
     handles = block[9:]
     assert len(handles) == 5 * 8
-    assert int.from_bytes(handles[3 * 8:4 * 8], "little") == 0x11
-    assert int.from_bytes(handles[4 * 8:5 * 8], "little") == 0x22
+    assert int.from_bytes(handles[3 * 8 : 4 * 8], "little") == 0x11
+    assert int.from_bytes(handles[4 * 8 : 5 * 8], "little") == 0x22
 
 
 def test_crt_block_marks_unused_slots_invalid():
@@ -97,9 +103,9 @@ def test_crt_block_supports_32_bit_handles():
 def test_chrome_reads_fd3_and_writes_fd4():
     """The pipe protocol is positional: fd 3 in, fd 4 out — order matters."""
     block = build_crt_inherit_block([None, None, None, 0xAA, 0xBB], handle_size=8)
-    handles = block[4 + 5:]
-    assert int.from_bytes(handles[3 * 8:4 * 8], "little") == 0xAA  # chrome reads
-    assert int.from_bytes(handles[4 * 8:5 * 8], "little") == 0xBB  # chrome writes
+    handles = block[4 + 5 :]
+    assert int.from_bytes(handles[3 * 8 : 4 * 8], "little") == 0xAA  # chrome reads
+    assert int.from_bytes(handles[4 * 8 : 5 * 8], "little") == 0xBB  # chrome writes
 
 
 def test_remote_debugging_pipe_flag_is_in_the_base_flags():
@@ -107,10 +113,12 @@ def test_remote_debugging_pipe_flag_is_in_the_base_flags():
 
 
 def test_windows_command_line_quotes_paths_with_spaces():
-    cmd = subprocess.list2cmdline([
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        "--remote-debugging-pipe",
-    ])
+    cmd = subprocess.list2cmdline(
+        [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            "--remote-debugging-pipe",
+        ]
+    )
     assert cmd.startswith('"C:\\Program Files\\')
     assert cmd.endswith("--remote-debugging-pipe")
 
@@ -192,7 +200,7 @@ def test_create_transport_picks_the_posix_pipe_elsewhere():
 
 def test_windows_transport_exposes_start():
     """browser.py awaits transport.start() on every platform."""
-    source = Path(
-        launcher.__file__
-    ).parent.parent.joinpath("cdp/transport/_pipe_win.py").read_text()
+    source = (
+        Path(launcher.__file__).parent.parent.joinpath("cdp/transport/_pipe_win.py").read_text()
+    )
     assert "async def start(self)" in source

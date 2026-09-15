@@ -1,10 +1,11 @@
 """Tellurium automates browsers. Quietly."""
+
 from tellurium.browser.browser import Browser
 from tellurium.browser.cookie import Cookie
-from tellurium.browser.tab import Tab
 from tellurium.browser.element import Element
-from tellurium.capture.request import CapturedRequest
+from tellurium.browser.tab import Tab
 from tellurium.capture.intercept import InterceptedRequest
+from tellurium.capture.request import CapturedRequest
 
 __version__ = "0.1.0"
 

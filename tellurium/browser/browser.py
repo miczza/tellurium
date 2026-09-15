@@ -1,4 +1,5 @@
 """Browser — launch and manage a Chromium process via CDP pipes."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,16 +7,12 @@ import dataclasses
 import logging
 import os
 import shutil
-import signal
 import tempfile
-from pathlib import Path
 from typing import Any
 
-from tellurium.browser.cookie import Cookie
 from tellurium.browser.context import BrowserContext
-from tellurium.browser.engine import StockEngine, PatchedEngine
-from tellurium.stealth._grease import parse_grease_brands
-from tellurium.stealth._webrtc import resolve_webrtc_ip
+from tellurium.browser.cookie import Cookie
+from tellurium.browser.engine import PatchedEngine, StockEngine
 from tellurium.browser.launcher import (
     _detect_chrome_version,
     build_chrome_flags,
@@ -28,6 +25,8 @@ from tellurium.browser.proxy import ProxyForwarder, parse_proxy_url
 from tellurium.browser.tab import Tab
 from tellurium.cdp.transport import create_transport
 from tellurium.cdp.transport._session import SessionRouter
+from tellurium.stealth._grease import parse_grease_brands
+from tellurium.stealth._webrtc import resolve_webrtc_ip
 
 logger = logging.getLogger("tellurium")
 
@@ -146,12 +145,9 @@ class Browser:
 
         if mouse_profile not in MOUSE_PROFILES:
             raise ValueError(
-                f"Unknown mouse_profile {mouse_profile!r}; "
-                f"expected one of {sorted(MOUSE_PROFILES)}"
+                f"Unknown mouse_profile {mouse_profile!r}; expected one of {sorted(MOUSE_PROFILES)}"
             )
-        if languages is not None and (
-            not isinstance(languages, (list, tuple)) or not languages
-        ):
+        if languages is not None and (not isinstance(languages, (list, tuple)) or not languages):
             raise ValueError("languages must be a non-empty list, e.g. ['it-IT', 'it']")
         if viewport is not None:
             if len(tuple(viewport)) != 2:
@@ -180,7 +176,8 @@ class Browser:
             if chromium_version or chromium_sha256 or auto_security_update:
                 logger.warning(
                     "chromium_version/chromium_sha256/auto_security_update are only "
-                    "meaningful with browser='patched'; ignoring for browser=%r.", browser
+                    "meaningful with browser='patched'; ignoring for browser=%r.",
+                    browser,
                 )
             engine = StockEngine(executable=executable)
         self._engine = engine
@@ -193,10 +190,10 @@ class Browser:
             version = _detect_chrome_version(chrome_path)
             p = chrome_path.lower()
             is_branded_chrome = (
-                "google-chrome" in p                        # linux binary name
-                or p.endswith("google chrome")              # macOS .app bundle
-                or "\\google\\chrome\\" in p               # Windows install path
-                or "/google/chrome/" in p                  # normalized Windows path
+                "google-chrome" in p  # linux binary name
+                or p.endswith("google chrome")  # macOS .app bundle
+                or "\\google\\chrome\\" in p  # Windows install path
+                or "/google/chrome/" in p  # normalized Windows path
             )
             check_chrome_version_for_extensions(
                 executable=chrome_path,
@@ -221,7 +218,10 @@ class Browser:
             info = parse_proxy_url(proxy)
             if info["username"] and info["password"]:
                 self._forwarder = ProxyForwarder(
-                    info["host"], info["port"], info["username"], info["password"],
+                    info["host"],
+                    info["port"],
+                    info["username"],
+                    info["password"],
                 )
                 await self._forwarder.start()
                 proxy_flag = f"localhost:{self._forwarder.port}"
@@ -246,8 +246,8 @@ class Browser:
         stealth_profile = None
 
         if stealth:
-            from tellurium.stealth.profile import StealthProfile
             from tellurium.stealth.engine import StealthEngine
+            from tellurium.stealth.profile import StealthProfile
 
             # Build profile
             if seed is not None:
@@ -270,11 +270,11 @@ class Browser:
                         timezone=geo.timezone,
                         locale=geo.languages[0],
                         accept_language=", ".join(
-                            f"{l};q={1.0 - i * 0.1:.1f}" if i > 0 else l
-                            for i, l in enumerate(geo.languages)
+                            f"{lang};q={1.0 - i * 0.1:.1f}" if i > 0 else lang
+                            for i, lang in enumerate(geo.languages)
                         ),
                     )
-                except (ImportError, Exception) as e:
+                except Exception as e:  # noqa: BLE001 - GeoIP is best-effort
                     logger.warning("GeoIP not available: %s. Using default locale.", e)
 
             # Manual overrides win over both GeoIP and the seeded defaults
@@ -284,6 +284,7 @@ class Browser:
                 manual["timezone"] = timezone
             if languages is not None:
                 from tellurium.stealth.profile import build_accept_language
+
                 manual["languages"] = languages
                 manual["locale"] = languages[0]
                 manual["accept_language"] = build_accept_language(languages)
@@ -291,7 +292,10 @@ class Browser:
                 stealth_profile = dataclasses.replace(stealth_profile, **manual)
 
             stealth_engine = StealthEngine(
-                engine, stealth_profile, headless, proxy is not None,
+                engine,
+                stealth_profile,
+                headless,
+                proxy is not None,
             )
             self._stealth_engine = stealth_engine
             self._stealth_profile = stealth_profile
@@ -302,8 +306,10 @@ class Browser:
         else:
             profile_obj = None
             if seed is not None:
+
                 class _P:
                     pass
+
                 profile_obj = _P()
                 profile_obj.seed = seed  # type: ignore[attr-defined]
             engine_args = engine.build_args(profile_obj)
@@ -326,9 +332,7 @@ class Browser:
             stealth_flags.append("--accept-lang=" + ",".join(effective_languages))
 
         if viewport is not None:
-            stealth_flags.append(
-                f"--window-size={int(viewport[0])},{int(viewport[1])}"
-            )
+            stealth_flags.append(f"--window-size={int(viewport[0])},{int(viewport[1])}")
 
         if stealth and stealth_engine is not None:
             ext_path = stealth_engine.build_extension()
@@ -346,9 +350,7 @@ class Browser:
             # webdriver.js overrides navigator.webdriver via JS injection
             # because --remote-debugging-pipe makes the native value true.
             if proxy:
-                stealth_flags.append(
-                    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
-                )
+                stealth_flags.append("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
         elif user_exts:
             # stealth=False but user extensions still need to be loaded
             stealth_flags.append(
@@ -386,7 +388,7 @@ class Browser:
         if stealth and stealth_engine is not None and stealth_profile is not None:
             try:
                 version_info = await self._router.root.send("Browser.getVersion", {}, timeout=5.0)
-            except Exception:
+            except Exception:  # noqa: BLE001 - best-effort version probe
                 version_info = {}
             raw_brands = version_info.get("userAgentData", {}).get("brands") or []
             # Build a single replace() call for both GREASE and webrtc fields
@@ -415,8 +417,13 @@ class Browser:
 
         if page_target:
             session = await self._router.attach(page_target["targetId"])
-            tab = Tab(session, self, page_target["targetId"],
-                      stealth_idle=stealth_idle, mouse_profile=mouse_profile)
+            tab = Tab(
+                session,
+                self,
+                page_target["targetId"],
+                stealth_idle=stealth_idle,
+                mouse_profile=mouse_profile,
+            )
             tab._url = page_target.get("url", "")
             self._tabs.append(tab)
             self._main_tab = tab
@@ -465,13 +472,17 @@ class Browser:
         if self._timezone_override is None:
             return
         try:
-            await session.send("Emulation.setTimezoneOverride", {
-                "timezoneId": self._timezone_override,
-            })
+            await session.send(
+                "Emulation.setTimezoneOverride",
+                {
+                    "timezoneId": self._timezone_override,
+                },
+            )
         except Exception as exc:  # noqa: BLE001 — a bad IANA id must not kill launch
             logger.warning(
                 "Timezone override %r rejected by Chrome: %s",
-                self._timezone_override, exc,
+                self._timezone_override,
+                exc,
             )
 
     # ------------------------------------------------------------------
@@ -493,8 +504,13 @@ class Browser:
         else:
             await self._apply_manual_overrides(session)
 
-        tab = Tab(session, self, target_id, stealth_idle=self._stealth_idle,
-                  mouse_profile=self._mouse_profile)
+        tab = Tab(
+            session,
+            self,
+            target_id,
+            stealth_idle=self._stealth_idle,
+            mouse_profile=self._mouse_profile,
+        )
         self._tabs.append(tab)
         if url and url != "about:blank":
             await tab.get(url)
@@ -541,14 +557,20 @@ class Browser:
         if domain:
             cookies = await self.get_cookies(domain)
             for c in cookies:
-                await self._router.root.send("Network.deleteCookies", {
-                    "name": c.name, "domain": c.domain, "path": c.path,
-                })
+                await self._router.root.send(
+                    "Network.deleteCookies",
+                    {
+                        "name": c.name,
+                        "domain": c.domain,
+                        "path": c.path,
+                    },
+                )
         else:
             await self._router.root.send("Network.clearBrowserCookies", {})
 
-    async def save_cookies(self, path: str, format: str = "json",
-                           domain: str | None = None) -> None:
+    async def save_cookies(
+        self, path: str, format: str = "json", domain: str | None = None
+    ) -> None:
         """Save cookies to *path* in the given format."""
         cookies = await self.get_cookies(domain)
         Cookie.save_list(cookies, path, format=format)
@@ -581,14 +603,14 @@ class Browser:
             self._dispatch_task.cancel()
             try:
                 await self._dispatch_task
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - shutdown must not raise
                 pass
 
         # Close transport
         if self._router:
             try:
                 await self._router._transport.close()
-            except Exception:
+            except Exception:  # noqa: BLE001 - shutdown must not raise
                 pass
 
         # Terminate Chrome
@@ -596,11 +618,11 @@ class Browser:
             try:
                 self._process.terminate()
                 self._process.wait(timeout=5)
-            except Exception:
+            except Exception:  # noqa: BLE001 - shutdown must not raise
                 try:
                     self._process.kill()
                     self._process.wait(timeout=3)
-                except Exception:
+                except Exception:  # noqa: BLE001 - shutdown must not raise
                     pass
 
         # Stop proxy forwarder

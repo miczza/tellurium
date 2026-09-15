@@ -1,7 +1,8 @@
 """Tests for `tellurium update-cdp` CLI command."""
+
 import json
 from unittest.mock import MagicMock, patch
-import pytest
+
 from tellurium import cli
 
 
@@ -12,8 +13,19 @@ def _minimal_protocol() -> dict:
         "version": {"major": "1", "minor": "3"},
         "domains": [
             {"domain": d, "types": [], "commands": [], "events": []}
-            for d in ["Target", "Browser", "Page", "Network", "DOM",
-                      "Runtime", "Input", "Fetch", "Storage", "Emulation", "Log"]
+            for d in [
+                "Target",
+                "Browser",
+                "Page",
+                "Network",
+                "DOM",
+                "Runtime",
+                "Input",
+                "Fetch",
+                "Storage",
+                "Emulation",
+                "Log",
+            ]
         ],
     }
 

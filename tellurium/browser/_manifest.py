@@ -3,6 +3,7 @@
 Schema contract: ``chromium-telluride/docs/manifest-schema.md``.  Only the
 fields in :class:`ReleaseManifest` are required; everything else is ignored.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -86,6 +87,7 @@ class ReleaseManifest:
 def verify_binary(binary_path: Path, manifest: ReleaseManifest, platform: str) -> None:
     """Raise BinaryCorruptedError if SHA256 of binary does not match manifest."""
     from tellurium.browser.engine import BinaryCorruptedError
+
     expected = manifest.binary_sha256.get(platform)
     if not expected:
         raise BinaryCorruptedError(

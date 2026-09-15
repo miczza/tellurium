@@ -1,4 +1,5 @@
 """Browser engine abstraction — stock Chrome vs patched Chromium."""
+
 from __future__ import annotations
 
 import logging
@@ -31,6 +32,7 @@ class StockEngine(BrowserEngine):
 
     async def get_executable(self) -> str:
         from tellurium.browser.launcher import find_chrome
+
         if self._executable:
             return self._executable
         return await find_chrome()
@@ -96,9 +98,11 @@ class PatchedEngine(BrowserEngine):
         if info is None or not info.security or not self._auto_security_update:
             return
         from tellurium.browser._patched_download import DownloadError, download_patched
+
         logger.warning(
             "auto_security_update: installing security release %s (CVE: %s)",
-            info.latest, ", ".join(info.manifest.get("cve", [])) or "n/a",
+            info.latest,
+            ", ".join(info.manifest.get("cve", [])) or "n/a",
         )
         try:
             download_patched(info.latest, cache_root=self._cache_root)
@@ -134,6 +138,7 @@ class PatchedEngine(BrowserEngine):
         manifest_path = version_dir / _cache.MANIFEST_NAME
         if manifest_path.exists():
             from tellurium.browser._manifest import ReleaseManifest, current_platform, verify_binary
+
             manifest = ReleaseManifest.from_path(manifest_path)
             verify_binary(binary, manifest, current_platform())
         else:
@@ -172,5 +177,10 @@ class PatchedEngine(BrowserEngine):
         return args
 
     def capabilities(self) -> set[str]:
-        return {"native_fingerprint", "native_client_hints", "native_cdp_fix",
-                "native_network_timing", "native_navigator"}
+        return {
+            "native_fingerprint",
+            "native_client_hints",
+            "native_cdp_fix",
+            "native_network_timing",
+            "native_navigator",
+        }

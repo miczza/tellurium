@@ -5,6 +5,7 @@ Emits WARNING logs if the installed version is behind the latest release or
 if a security release is available. Never auto-installs by itself: the
 caller (``PatchedEngine``) decides based on ``auto_security_update``.
 """
+
 from __future__ import annotations
 
 import json
@@ -29,7 +30,7 @@ _STALE_THRESHOLD = timedelta(weeks=12)
 @dataclass(frozen=True)
 class UpdateInfo:
     installed: str | None
-    latest: str            # install-dir name (chromium upstream version)
+    latest: str  # install-dir name (chromium upstream version)
     manifest: dict[str, Any]
 
     @property
@@ -68,7 +69,7 @@ def check_for_update(
             if now - last < _CHECK_INTERVAL:
                 return None
         except (json.JSONDecodeError, KeyError, ValueError):
-            pass   # re-check
+            pass  # re-check
 
     try:
         with urllib.request.urlopen(url, timeout=5) as resp:
@@ -80,10 +81,14 @@ def check_for_update(
     check_file.parent.mkdir(parents=True, exist_ok=True)
     # Not locked: concurrent launches may both fetch; worst case is one extra HTTP
     # request per race window + a torn write that triggers a re-check next run.
-    check_file.write_text(json.dumps({
-        "last_check": now.isoformat(),
-        "latest_version": _latest_dir_name(manifest),
-    }))
+    check_file.write_text(
+        json.dumps(
+            {
+                "last_check": now.isoformat(),
+                "latest_version": _latest_dir_name(manifest),
+            }
+        )
+    )
 
     installed = _cache.installed_version(cache_root)
     info = UpdateInfo(installed=installed, latest=_latest_dir_name(manifest), manifest=manifest)
@@ -102,7 +107,10 @@ def check_for_update(
         log.warning(
             "chromium-telluride %s installed — SECURITY release %s available "
             "(severity: %s, CVE: %s). Run `tellurium update-browser --security-only`.",
-            installed, info.latest, severity, cve,
+            installed,
+            info.latest,
+            severity,
+            cve,
         )
     else:
         # age = how long the newer version has been available — lower bound
@@ -112,7 +120,10 @@ def check_for_update(
         log.warning(
             "chromium-telluride %s is %s%d weeks old. Latest: %s. "
             "Run `tellurium update-browser` to upgrade.",
-            installed, qualifier, weeks, info.latest,
+            installed,
+            qualifier,
+            weeks,
+            info.latest,
         )
     return info
 

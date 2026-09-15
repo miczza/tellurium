@@ -1,4 +1,4 @@
-from tellurium.stealth.human import HumanTyping, FINGER_MAP
+from tellurium.stealth.human import FINGER_MAP, HumanTyping
 
 
 def test_typing_event_sequence():
@@ -25,9 +25,9 @@ def test_dwell_time_distribution():
 
 
 def test_finger_map_coverage():
-    assert 'a' in FINGER_MAP
-    assert ' ' in FINGER_MAP
-    assert 'z' in FINGER_MAP
+    assert "a" in FINGER_MAP
+    assert " " in FINGER_MAP
+    assert "z" in FINGER_MAP
 
 
 def test_typing_single_char():

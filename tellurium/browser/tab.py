@@ -1,4 +1,5 @@
 """Tab wrapper — one browser tab backed by a CDP session."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,7 +7,6 @@ import base64
 import fnmatch
 import logging
 import random
-import re
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -15,8 +15,8 @@ from tellurium.browser.element import Element
 logger = logging.getLogger("tellurium")
 
 if TYPE_CHECKING:
-    from tellurium.cdp.transport._session import Session
     from tellurium.browser.browser import Browser
+    from tellurium.cdp.transport._session import Session
 
 # JS snippet used by find() / find_all() to locate elements by visible text.
 _TEXT_WALKER_JS = """
@@ -68,14 +68,20 @@ class Tab:
     _mouse_profile: str = "normal"
     _typo_rng = None
 
-    def __init__(self, session: Session, browser: Browser, target_id: str,
-                 *, stealth_idle: bool = False, mouse_profile: str = "normal"):
+    def __init__(
+        self,
+        session: Session,
+        browser: Browser,
+        target_id: str,
+        *,
+        stealth_idle: bool = False,
+        mouse_profile: str = "normal",
+    ):
         from tellurium.stealth.human import MOUSE_PROFILES
 
         if mouse_profile not in MOUSE_PROFILES:
             raise ValueError(
-                f"Unknown mouse_profile {mouse_profile!r}; "
-                f"expected one of {sorted(MOUSE_PROFILES)}"
+                f"Unknown mouse_profile {mouse_profile!r}; expected one of {sorted(MOUSE_PROFILES)}"
             )
         self._mouse_profile = mouse_profile
         self._typo_rng = None  # lazily seeded from the stealth profile
@@ -90,6 +96,7 @@ class Tab:
         self._idle_simulator = None
         if stealth_idle:
             from tellurium.stealth.idle import IdleSimulator
+
             self._idle_simulator = IdleSimulator()
         self._capture_manager = None
         self._hsim_worlds: dict[str, int] = {}  # frame_id -> executionContextId, per-frame
@@ -143,9 +150,7 @@ class Tab:
         idx = history["currentIndex"]
         if idx > 0:
             entry = history["entries"][idx - 1]
-            await self._session.send(
-                "Page.navigateToHistoryEntry", {"entryId": entry["id"]}
-            )
+            await self._session.send("Page.navigateToHistoryEntry", {"entryId": entry["id"]})
 
     async def forward(self) -> None:
         """Go forward in history."""
@@ -153,9 +158,7 @@ class Tab:
         idx = history["currentIndex"]
         if idx < len(history["entries"]) - 1:
             entry = history["entries"][idx + 1]
-            await self._session.send(
-                "Page.navigateToHistoryEntry", {"entryId": entry["id"]}
-            )
+            await self._session.send("Page.navigateToHistoryEntry", {"entryId": entry["id"]})
 
     async def reload(self) -> None:
         await self._session.send("Page.reload", {})
@@ -201,11 +204,14 @@ class Tab:
         Uses ``Runtime.evaluate`` with ``returnByValue``/``awaitPromise``.
         Does **not** call ``Runtime.enable`` (anti-detection critical).
         """
-        result = await self._session.send("Runtime.evaluate", {
-            "expression": expression,
-            "returnByValue": True,
-            "awaitPromise": True,
-        })
+        result = await self._session.send(
+            "Runtime.evaluate",
+            {
+                "expression": expression,
+                "returnByValue": True,
+                "awaitPromise": True,
+            },
+        )
         remote = result.get("result", {})
         if remote.get("subtype") == "error":
             raise RuntimeError(remote.get("description", "eval failed"))
@@ -239,12 +245,15 @@ class Tab:
             if not body.startswith("{"):
                 body = f"{{ return {body}; }}"
             fn = f"function{params} {body}"
-        res = await self._session.send("Runtime.callFunctionOn", {
-            "functionDeclaration": fn,
-            "objectId": object_id,
-            "returnByValue": True,
-            "awaitPromise": True,
-        })
+        res = await self._session.send(
+            "Runtime.callFunctionOn",
+            {
+                "functionDeclaration": fn,
+                "objectId": object_id,
+                "returnByValue": True,
+                "awaitPromise": True,
+            },
+        )
         remote = res.get("result", {})
         if remote.get("type") == "undefined":
             return None
@@ -302,10 +311,7 @@ class Tab:
             result = await self._session.send(
                 "DOM.querySelectorAll", {"nodeId": root, "selector": selector}
             )
-            elements = [
-                Element(self._session, self, nid)
-                for nid in result.get("nodeIds", [])
-            ]
+            elements = [Element(self._session, self, nid) for nid in result.get("nodeIds", [])]
             if elements or asyncio.get_running_loop().time() >= deadline:
                 return elements
             await asyncio.sleep(0.2)
@@ -321,8 +327,9 @@ class Tab:
                 raise TimeoutError(f"Timed out waiting for text {text!r}")
             await asyncio.sleep(0.2)
 
-    async def find_all(self, text: str, *, timeout: float = 0,
-                       exact: bool = False) -> list[Element]:
+    async def find_all(
+        self, text: str, *, timeout: float = 0, exact: bool = False
+    ) -> list[Element]:
         """Return all elements containing *text*.
 
         *timeout* — seconds to keep polling until at least one match appears
@@ -346,21 +353,27 @@ class Tab:
         # DOM.requestNode can map remote object IDs to nodeIds.
         await self._session.send("DOM.getDocument", {"depth": -1})
 
-        result = await self._session.send("Runtime.evaluate", {
-            "expression": js,
-            "returnByValue": False,
-            "awaitPromise": False,
-        })
+        result = await self._session.send(
+            "Runtime.evaluate",
+            {
+                "expression": js,
+                "returnByValue": False,
+                "awaitPromise": False,
+            },
+        )
         remote = result.get("result", {})
         if remote.get("type") != "object" or remote.get("subtype") != "array":
             return []
 
         # Get the array's length
         arr_id = remote["objectId"]
-        props = await self._session.send("Runtime.getProperties", {
-            "objectId": arr_id,
-            "ownProperties": True,
-        })
+        props = await self._session.send(
+            "Runtime.getProperties",
+            {
+                "objectId": arr_id,
+                "ownProperties": True,
+            },
+        )
         elements: list[Element] = []
         for prop in props.get("result", []):
             if not prop["name"].isdigit():
@@ -370,9 +383,7 @@ class Tab:
             if not obj_id:
                 continue
             # Request the node for this object
-            node_result = await self._session.send(
-                "DOM.requestNode", {"objectId": obj_id}
-            )
+            node_result = await self._session.send("DOM.requestNode", {"objectId": obj_id})
             nid = node_result.get("nodeId", 0)
             if nid:
                 elements.append(Element(self._session, self, nid))
@@ -390,9 +401,7 @@ class Tab:
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
             await self._session.send("DOM.getDocument", {"depth": 0})
-            result = await self._session.send(
-                "DOM.performSearch", {"query": expression}
-            )
+            result = await self._session.send("DOM.performSearch", {"query": expression})
             search_id = result.get("searchId", "")
             count = result.get("resultCount", 0)
             try:
@@ -428,9 +437,7 @@ class Tab:
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
             await self._session.send("DOM.getDocument", {"depth": 0})
-            result = await self._session.send(
-                "DOM.performSearch", {"query": expression}
-            )
+            result = await self._session.send("DOM.performSearch", {"query": expression})
             search_id = result.get("searchId", "")
             count = result.get("resultCount", 0)
             elements: list[Element] = []
@@ -441,8 +448,7 @@ class Tab:
                         {"searchId": search_id, "fromIndex": 0, "toIndex": count},
                     )
                     elements = [
-                        Element(self._session, self, nid)
-                        for nid in nodes.get("nodeIds", []) if nid
+                        Element(self._session, self, nid) for nid in nodes.get("nodeIds", []) if nid
                     ]
             finally:
                 if search_id:
@@ -456,8 +462,9 @@ class Tab:
                 return elements
             await asyncio.sleep(0.2)
 
-    async def wait_for(self, selector: str, *, state: str = "visible",
-                       timeout: float = 30) -> Element | None:
+    async def wait_for(
+        self, selector: str, *, state: str = "visible", timeout: float = 30
+    ) -> Element | None:
         """Wait until *selector* reaches *state* (design doc 03 §Attesa).
 
         ``state``:
@@ -501,17 +508,21 @@ class Tab:
                     return None
 
             if asyncio.get_running_loop().time() >= deadline:
-                raise TimeoutError(
-                    f"Timed out waiting for selector {selector!r} to be {state}"
-                )
+                raise TimeoutError(f"Timed out waiting for selector {selector!r} to be {state}")
             await asyncio.sleep(0.2)
 
     # ------------------------------------------------------------------
     # Screenshots / content
     # ------------------------------------------------------------------
 
-    async def screenshot(self, path: str | None = None, *, full_page: bool = False,
-                         quality: int | None = None, format: str = "png") -> bytes:
+    async def screenshot(
+        self,
+        path: str | None = None,
+        *,
+        full_page: bool = False,
+        quality: int | None = None,
+        format: str = "png",
+    ) -> bytes:
         """Capture a screenshot of the visible viewport or full page.
 
         *quality* (0-100) only applies to lossy formats (``"jpeg"``,
@@ -523,7 +534,8 @@ class Tab:
             if format == "png":
                 logger.warning(
                     "screenshot(quality=%s) ignored: quality only applies to "
-                    "lossy formats (jpeg, webp), not png.", quality,
+                    "lossy formats (jpeg, webp), not png.",
+                    quality,
                 )
             else:
                 params["quality"] = int(quality)
@@ -531,7 +543,8 @@ class Tab:
             metrics = await self._session.send("Page.getLayoutMetrics", {})
             content_size = metrics.get("contentSize", metrics.get("cssContentSize", {}))
             params["clip"] = {
-                "x": 0, "y": 0,
+                "x": 0,
+                "y": 0,
                 "width": content_size.get("width", 1920),
                 "height": content_size.get("height", 1080),
                 "scale": 1,
@@ -540,6 +553,7 @@ class Tab:
         data = base64.b64decode(result["data"])
         if path:
             from pathlib import Path as P
+
             P(path).write_bytes(data)
         return data
 
@@ -547,9 +561,7 @@ class Tab:
         """Return the full page HTML."""
         doc = await self._session.send("DOM.getDocument", {"depth": 0})
         root_id = doc["root"]["nodeId"]
-        result = await self._session.send(
-            "DOM.getOuterHTML", {"nodeId": root_id}
-        )
+        result = await self._session.send("DOM.getOuterHTML", {"nodeId": root_id})
         return result.get("outerHTML", "")
 
     async def pdf(self, path: str | None = None, **opts: Any) -> bytes:
@@ -571,6 +583,7 @@ class Tab:
         data = base64.b64decode(result.get("data", ""))
         if path:
             from pathlib import Path as P
+
             P(path).write_bytes(data)
         return data
 
@@ -584,7 +597,8 @@ class Tab:
             return self._window_id
         try:
             resp = await self._browser._router.root.send(
-                "Browser.getWindowForTarget", {"targetId": self._target_id},
+                "Browser.getWindowForTarget",
+                {"targetId": self._target_id},
                 timeout=5.0,
             )
         except Exception:  # noqa: BLE001 — not implemented on every target type
@@ -598,9 +612,14 @@ class Tab:
         if window_id is None:
             return False
         try:
-            await self._browser._router.root.send("Browser.setWindowBounds", {
-                "windowId": window_id, "bounds": bounds,
-            }, timeout=5.0)
+            await self._browser._router.root.send(
+                "Browser.setWindowBounds",
+                {
+                    "windowId": window_id,
+                    "bounds": bounds,
+                },
+                timeout=5.0,
+            )
         except Exception:  # noqa: BLE001 — degrade, never break the caller
             return False
         # Window geometry changed → the cached screenX/screenY offset is stale.
@@ -622,20 +641,30 @@ class Tab:
         ``window.outerWidth``/``screen`` from the emulated viewport), so
         prefer ``Browser.launch(viewport=(w, h))`` when stealth matters.
         """
-        if await self._set_window_bounds({
-            "width": int(width), "height": int(height), "windowState": "normal",
-        }):
+        if await self._set_window_bounds(
+            {
+                "width": int(width),
+                "height": int(height),
+                "windowState": "normal",
+            }
+        ):
             return
         logger.warning(
             "Browser.setWindowBounds unavailable; falling back to "
             "Emulation.setDeviceMetricsOverride, which is a detectable "
             "fingerprint signal. Prefer Browser.launch(viewport=(%d, %d)).",
-            int(width), int(height),
+            int(width),
+            int(height),
         )
-        await self._session.send("Emulation.setDeviceMetricsOverride", {
-            "width": int(width), "height": int(height),
-            "deviceScaleFactor": 0, "mobile": False,
-        })
+        await self._session.send(
+            "Emulation.setDeviceMetricsOverride",
+            {
+                "width": int(width),
+                "height": int(height),
+                "deviceScaleFactor": 0,
+                "mobile": False,
+            },
+        )
 
     async def maximize(self) -> None:
         """Maximize the browser window (no-op when unavailable)."""
@@ -659,6 +688,7 @@ class Tab:
         """Lazily create this tab's :class:`ActionTimer`."""
         if self._action_timer is None:
             from tellurium.stealth.human import ActionTimer
+
             self._action_timer = ActionTimer()
         return self._action_timer
 
@@ -708,16 +738,20 @@ class Tab:
         try:
             root = self._browser._router.root
             resp = await root.send(
-                "Browser.getWindowForTarget", {"targetId": self._target_id},
+                "Browser.getWindowForTarget",
+                {"targetId": self._target_id},
                 timeout=5.0,
             )
             self._window_id = resp.get("windowId")
             bounds = resp.get("bounds") or {}
             if not bounds and self._window_id is not None:
-                bounds = (await root.send(
-                    "Browser.getWindowBounds", {"windowId": self._window_id},
-                    timeout=5.0,
-                )).get("bounds", {})
+                bounds = (
+                    await root.send(
+                        "Browser.getWindowBounds",
+                        {"windowId": self._window_id},
+                        timeout=5.0,
+                    )
+                ).get("bounds", {})
             if bounds:
                 left = float(bounds.get("left") or 0)
                 top = float(bounds.get("top") or 0)
@@ -728,8 +762,7 @@ class Tab:
         chrome_ui = 0.0
         try:
             values = await self._eval_isolated(
-                "[window.screenX, window.screenY, window.outerHeight,"
-                " window.innerHeight]"
+                "[window.screenX, window.screenY, window.outerHeight, window.innerHeight]"
             )
             if isinstance(values, list) and len(values) == 4:
                 if left is None or top is None:
@@ -794,10 +827,14 @@ class Tab:
                 return
             left = random.randint(22, 140)
             top = random.randint(18, 96)
-            await self._browser._router.root.send("Browser.setWindowBounds", {
-                "windowId": self._window_id,
-                "bounds": {"left": left, "top": top},
-            }, timeout=5.0)
+            await self._browser._router.root.send(
+                "Browser.setWindowBounds",
+                {
+                    "windowId": self._window_id,
+                    "bounds": {"left": left, "top": top},
+                },
+                timeout=5.0,
+            )
             self._screen_offset = None  # recompute against the new origin
             await self.window_offset()
         except Exception:  # noqa: BLE001 — best effort, must never break input
@@ -810,7 +847,8 @@ class Tab:
 
     async def mouse_move(self, x: float, y: float, human: bool = False) -> None:
         if human:
-            from tellurium.stealth.human import wind_mouse, apply_lognormal_velocity, MOUSE_PROFILES
+            from tellurium.stealth.human import MOUSE_PROFILES, apply_lognormal_velocity, wind_mouse
+
             params = MOUSE_PROFILES[self._mouse_profile]
             path = wind_mouse(*self._mouse_pos, x, y, **params["wind"])
             timed_path = apply_lognormal_velocity(path, mu=params["mu"], sigma=params["sigma"])
@@ -820,34 +858,59 @@ class Tab:
                 now = time.monotonic()
                 if target_time > now:
                     await asyncio.sleep(target_time - now)
-                await self._dispatch_mouse({
-                    "type": "mouseMoved", "x": px, "y": py,
-                })
+                await self._dispatch_mouse(
+                    {
+                        "type": "mouseMoved",
+                        "x": px,
+                        "y": py,
+                    }
+                )
             self._mouse_pos = (x, y)
         else:
-            await self._dispatch_mouse({
-                "type": "mouseMoved", "x": x, "y": y,
-            })
+            await self._dispatch_mouse(
+                {
+                    "type": "mouseMoved",
+                    "x": x,
+                    "y": y,
+                }
+            )
             self._mouse_pos = (x, y)
 
-    async def mouse_click(self, x: float, y: float, button: str = "left", human: bool = False) -> None:
+    async def mouse_click(
+        self, x: float, y: float, button: str = "left", human: bool = False
+    ) -> None:
         if human:
             await self._human_action("click")
             await self.mouse_move(x, y, human=True)
             await asyncio.sleep(random.uniform(0.1, 0.3))  # reaction time
-        await self._dispatch_mouse({
-            "type": "mousePressed", "x": x, "y": y,
-            "button": button, "clickCount": 1,
-        })
+        await self._dispatch_mouse(
+            {
+                "type": "mousePressed",
+                "x": x,
+                "y": y,
+                "button": button,
+                "clickCount": 1,
+            }
+        )
         await asyncio.sleep(random.uniform(0.08, 0.15) if human else 0.05)
-        await self._dispatch_mouse({
-            "type": "mouseReleased", "x": x, "y": y,
-            "button": button, "clickCount": 1,
-        })
+        await self._dispatch_mouse(
+            {
+                "type": "mouseReleased",
+                "x": x,
+                "y": y,
+                "button": button,
+                "clickCount": 1,
+            }
+        )
 
     async def click_in_iframe(
-        self, iframe_selector: str, x: float, y: float,
-        *, button: str = "left", human: bool = False,
+        self,
+        iframe_selector: str,
+        x: float,
+        y: float,
+        *,
+        button: str = "left",
+        human: bool = False,
     ) -> None:
         """Click at (x, y) inside an iframe, translating to viewport coords.
 
@@ -861,8 +924,9 @@ class Tab:
 
         Raises ValueError if iframe_selector matches no element.
         """
-        from tellurium.stealth._isolated import get_hsim_world
         import json
+
+        from tellurium.stealth._isolated import get_hsim_world
 
         ctx = await get_hsim_world(self, frame_id=self._frame_id)
         expr = (
@@ -879,9 +943,7 @@ class Tab:
         resp = await self._session.send("Runtime.evaluate", params)
         rect = resp.get("result", {}).get("value")
         if rect is None:
-            raise ValueError(
-                f"click_in_iframe: no iframe matched selector {iframe_selector!r}"
-            )
+            raise ValueError(f"click_in_iframe: no iframe matched selector {iframe_selector!r}")
 
         abs_x = rect["x"] + x
         abs_y = rect["y"] + y
@@ -903,12 +965,22 @@ class Tab:
             elif mod_lower in ("meta", "cmd", "command"):
                 modifiers |= 4
 
-        await self._session.send("Input.dispatchKeyEvent", {
-            "type": "keyDown", "key": actual_key, "modifiers": modifiers,
-        })
-        await self._session.send("Input.dispatchKeyEvent", {
-            "type": "keyUp", "key": actual_key, "modifiers": modifiers,
-        })
+        await self._session.send(
+            "Input.dispatchKeyEvent",
+            {
+                "type": "keyDown",
+                "key": actual_key,
+                "modifiers": modifiers,
+            },
+        )
+        await self._session.send(
+            "Input.dispatchKeyEvent",
+            {
+                "type": "keyUp",
+                "key": actual_key,
+                "modifiers": modifiers,
+            },
+        )
 
     #: Named keys that the human-typing path may emit, with their Windows
     #: virtual key codes (Chrome needs the code to act on the key).
@@ -918,13 +990,16 @@ class Tab:
         """Dispatch one half of a named-key press (no ``text`` payload)."""
         if event_type == "char":
             return  # named keys produce no character
-        await self._session.send("Input.dispatchKeyEvent", {
-            "type": "keyDown" if event_type == "rawKeyDown" else "keyUp",
-            "key": key,
-            "code": key,
-            "windowsVirtualKeyCode": self._NAMED_KEYS.get(key, 0),
-            "nativeVirtualKeyCode": self._NAMED_KEYS.get(key, 0),
-        })
+        await self._session.send(
+            "Input.dispatchKeyEvent",
+            {
+                "type": "keyDown" if event_type == "rawKeyDown" else "keyUp",
+                "key": key,
+                "code": key,
+                "windowsVirtualKeyCode": self._NAMED_KEYS.get(key, 0),
+                "nativeVirtualKeyCode": self._NAMED_KEYS.get(key, 0),
+            },
+        )
 
     def _get_typo_rng(self):
         """Random source for typo decisions, seeded from the stealth profile.
@@ -935,14 +1010,15 @@ class Tab:
         :mod:`random` module is used.
         """
         if self._typo_rng is None:
-            seed = getattr(
-                getattr(self._browser, "_stealth_profile", None), "seed", None
-            )
+            seed = getattr(getattr(self._browser, "_stealth_profile", None), "seed", None)
             self._typo_rng = random.Random(seed) if seed is not None else random
         return self._typo_rng
 
     async def keyboard_type(
-        self, text: str, human: bool = False, wpm: float = 52,
+        self,
+        text: str,
+        human: bool = False,
+        wpm: float = 52,
         typos: bool = False,
     ) -> None:
         """Type a string character-by-character via ``Input.dispatchKeyEvent``.
@@ -958,9 +1034,12 @@ class Tab:
             raise ValueError("keyboard_type(typos=True) requires human=True")
         if human:
             from tellurium.stealth.human import HumanTyping, apply_key_rollover
+
             await self._human_action("type")
             typer = HumanTyping(
-                wpm=wpm, typos=typos, rng=self._get_typo_rng() if typos else None,
+                wpm=wpm,
+                typos=typos,
+                rng=self._get_typo_rng() if typos else None,
             )
             events = apply_key_rollover(typer.get_events(text))
             for event in events:
@@ -977,55 +1056,99 @@ class Tab:
                 if event["type"] == "rawKeyDown":
                     if char.isalpha():
                         # Letters: rawKeyDown + char event sequence
-                        await self._session.send("Input.dispatchKeyEvent", {
-                            "type": "rawKeyDown", "key": char, "code": code,
-                            "windowsVirtualKeyCode": key_code,
-                        })
+                        await self._session.send(
+                            "Input.dispatchKeyEvent",
+                            {
+                                "type": "rawKeyDown",
+                                "key": char,
+                                "code": code,
+                                "windowsVirtualKeyCode": key_code,
+                            },
+                        )
                     else:
                         # Special chars: keyDown with text (like non-human path)
-                        await self._session.send("Input.dispatchKeyEvent", {
-                            "type": "keyDown", "key": char, "text": char,
-                        })
+                        await self._session.send(
+                            "Input.dispatchKeyEvent",
+                            {
+                                "type": "keyDown",
+                                "key": char,
+                                "text": char,
+                            },
+                        )
                 elif event["type"] == "char":
                     # Skip char event for non-alpha chars (keyDown already has text)
                     if char.isalpha():
-                        await self._session.send("Input.dispatchKeyEvent", {
-                            "type": "char", "text": char, "key": char,
-                        })
+                        await self._session.send(
+                            "Input.dispatchKeyEvent",
+                            {
+                                "type": "char",
+                                "text": char,
+                                "key": char,
+                            },
+                        )
                 elif event["type"] == "keyUp":
                     if char.isalpha():
-                        await self._session.send("Input.dispatchKeyEvent", {
-                            "type": "keyUp", "key": char, "code": code,
-                            "windowsVirtualKeyCode": key_code,
-                        })
+                        await self._session.send(
+                            "Input.dispatchKeyEvent",
+                            {
+                                "type": "keyUp",
+                                "key": char,
+                                "code": code,
+                                "windowsVirtualKeyCode": key_code,
+                            },
+                        )
                     else:
-                        await self._session.send("Input.dispatchKeyEvent", {
-                            "type": "keyUp", "key": char,
-                        })
+                        await self._session.send(
+                            "Input.dispatchKeyEvent",
+                            {
+                                "type": "keyUp",
+                                "key": char,
+                            },
+                        )
         else:
             for char in text:
-                await self._session.send("Input.dispatchKeyEvent", {
-                    "type": "keyDown", "key": char, "text": char,
-                })
-                await self._session.send("Input.dispatchKeyEvent", {
-                    "type": "keyUp", "key": char,
-                })
+                await self._session.send(
+                    "Input.dispatchKeyEvent",
+                    {
+                        "type": "keyDown",
+                        "key": char,
+                        "text": char,
+                    },
+                )
+                await self._session.send(
+                    "Input.dispatchKeyEvent",
+                    {
+                        "type": "keyUp",
+                        "key": char,
+                    },
+                )
 
-    async def scroll(self, delta_y: float = 0, delta_x: float = 0,
-                     x: float | None = None, y: float | None = None,
-                     human: bool = False) -> None:
+    async def scroll(
+        self,
+        delta_y: float = 0,
+        delta_x: float = 0,
+        x: float | None = None,
+        y: float | None = None,
+        human: bool = False,
+    ) -> None:
         """Dispatch a mouse wheel event."""
         if human and delta_y != 0:
             from tellurium.stealth.human import HumanScroll
+
             await self._human_action("scroll")
             scroller = HumanScroll()
             await self._ensure_screen_parity()
             await scroller.scroll_by(self._session, delta_y, x or 400, y or 300)
         else:
-            await self._dispatch_mouse({
-                "type": "mouseWheel", "x": x or 0, "y": y or 0,
-                "deltaX": delta_x, "deltaY": delta_y,
-            })
+            await self._dispatch_mouse(
+                {
+                    "type": "mouseWheel",
+                    "x": x or 0,
+                    "y": y or 0,
+                    "deltaX": delta_x,
+                    "deltaY": delta_y,
+                }
+            )
 
     # ------------------------------------------------------------------
     # Wait helpers
@@ -1069,6 +1192,7 @@ class Tab:
         """Start capturing network requests."""
         if self._capture_manager is None:
             from tellurium.capture.manager import CaptureManager
+
             self._capture_manager = CaptureManager(self._session)
         await self._capture_manager.start(log=log, log_filter=log_filter)
 
@@ -1090,6 +1214,7 @@ class Tab:
         """Wait for a request matching the pattern."""
         if self._capture_manager is None:
             from tellurium.capture.manager import CaptureManager
+
             self._capture_manager = CaptureManager(self._session)
             await self._capture_manager.start()
         return await self._capture_manager.wait_for(url_pattern, timeout)
@@ -1097,8 +1222,10 @@ class Tab:
     async def record(self, url_pattern: str = "*"):
         """Start recording network requests for export."""
         from tellurium.capture.recorder import Recorder
+
         if self._capture_manager is None:
             from tellurium.capture.manager import CaptureManager
+
             self._capture_manager = CaptureManager(self._session)
             await self._capture_manager.start()
         return Recorder(self._capture_manager, url_pattern)
@@ -1119,6 +1246,7 @@ class Tab:
         receive continue_(), abort(), or respond() or the page hangs.
         """
         from tellurium.capture.intercept import InterceptStream
+
         return InterceptStream(self._session, url_pattern)
 
     # ------------------------------------------------------------------
@@ -1133,4 +1261,5 @@ class Tab:
 def _json_escape(s: str) -> str:
     """Return a JS string literal for *s*, properly escaped."""
     import json
+
     return json.dumps(s)

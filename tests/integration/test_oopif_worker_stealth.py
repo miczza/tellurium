@@ -6,6 +6,7 @@ the same site and an iframe between them is cross-origin but *not* an OOPIF.
 ``--host-resolver-rules=MAP *.test 127.0.0.1`` gives us ``a.test`` /
 ``b.test``, which Chrome does isolate into separate processes.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -71,7 +72,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
 def _serve(body: bytes) -> tuple[http.server.HTTPServer, int]:
     server = http.server.HTTPServer(
-        ("127.0.0.1", 0), type("H", (_Handler,), {"body": body}),
+        ("127.0.0.1", 0),
+        type("H", (_Handler,), {"body": body}),
     )
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, server.server_address[1]
@@ -95,10 +97,13 @@ async def _iframe_probe(browser, tab) -> dict:
     for info in targets.get("targetInfos", []):
         if info["type"] == "iframe" and "b.test" in info.get("url", ""):
             session = await browser._router.attach(info["targetId"])
-            result = await session.send("Runtime.evaluate", {
-                "expression": "window.__probe",
-                "returnByValue": True,
-            })
+            result = await session.send(
+                "Runtime.evaluate",
+                {
+                    "expression": "window.__probe",
+                    "returnByValue": True,
+                },
+            )
             return json.loads(result["result"]["value"])
     raise AssertionError("no OOPIF target for b.test found")
 
@@ -108,7 +113,9 @@ async def test_oopif_and_worker_are_patched(oopif_site):
     from tellurium import Browser
 
     browser = await Browser.launch(
-        headless=True, stealth=True, args=[RESOLVER_FLAG],
+        headless=True,
+        stealth=True,
+        args=[RESOLVER_FLAG],
     )
     try:
         tab = browser.main_tab
@@ -117,9 +124,7 @@ async def test_oopif_and_worker_are_patched(oopif_site):
 
         # --- P1.1: cross-origin iframe (OOPIF) --------------------------
         iframe = await _iframe_probe(browser, tab)
-        assert iframe["webdriver"] is False, (
-            f"OOPIF navigator.webdriver not patched: {iframe}"
-        )
+        assert iframe["webdriver"] is False, f"OOPIF navigator.webdriver not patched: {iframe}"
 
         # --- P1.2: worker scope -----------------------------------------
         raw = await tab.eval("window.__worker")
@@ -132,9 +137,7 @@ async def test_oopif_and_worker_are_patched(oopif_site):
             f"(window={window_hc}, worker={worker['hc']}) — design doc 04 §P1.2"
         )
         # The spoofed getter must still look native.
-        assert worker["toStr"] == (
-            "function get hardwareConcurrency() { [native code] }"
-        )
+        assert worker["toStr"] == ("function get hardwareConcurrency() { [native code] }")
         # navigator.webdriver does not exist on WorkerNavigator in real
         # Chrome — defining it would be a new fingerprint, not a fix.
         assert worker["ctor"] == "WorkerNavigator"
@@ -160,19 +163,24 @@ async def test_freezing_targets_does_not_slow_navigation(oopif_site):
     frozen = StealthEngine.setup_auto_attach
 
     async def unfrozen(self, session):
-        await session.send("Target.setAutoAttach", {
-            "autoAttach": True,
-            "waitForDebuggerOnStart": False,
-            "flatten": True,
-            "filter": _STEALTH_TARGET_FILTER,
-        })
+        await session.send(
+            "Target.setAutoAttach",
+            {
+                "autoAttach": True,
+                "waitForDebuggerOnStart": False,
+                "flatten": True,
+                "filter": _STEALTH_TARGET_FILTER,
+            },
+        )
 
     async def _measure() -> float:
         browser = await Browser.launch(
-            headless=True, stealth=True, args=[RESOLVER_FLAG],
+            headless=True,
+            stealth=True,
+            args=[RESOLVER_FLAG],
         )
         try:
-            await browser.new_tab(oopif_site)   # warm-up
+            await browser.new_tab(oopif_site)  # warm-up
             samples = []
             for _ in range(6):
                 start = time.monotonic()
@@ -198,6 +206,5 @@ async def test_freezing_targets_does_not_slow_navigation(oopif_site):
     baseline = min(base_a, base_b)
     stealthy = min(freeze_a, freeze_b)
     assert stealthy <= baseline * 1.10, (
-        f"freeze regressed new_tab+navigate: {stealthy * 1000:.1f}ms vs "
-        f"{baseline * 1000:.1f}ms"
+        f"freeze regressed new_tab+navigate: {stealthy * 1000:.1f}ms vs {baseline * 1000:.1f}ms"
     )

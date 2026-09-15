@@ -1,4 +1,4 @@
-from tellurium.stealth.human import wind_mouse, apply_lognormal_velocity, MOUSE_PROFILES
+from tellurium.stealth.human import MOUSE_PROFILES, apply_lognormal_velocity, wind_mouse
 
 
 def test_wind_mouse_reaches_destination():

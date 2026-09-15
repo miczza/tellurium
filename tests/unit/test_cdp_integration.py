@@ -1,9 +1,12 @@
 """Integration test: Session + Router + generated domains working together."""
+
 import asyncio
 import json
+
 import pytest
+
 from tellurium.cdp.transport._base import CDPTransport
-from tellurium.cdp.transport._session import Session, SessionRouter
+from tellurium.cdp.transport._session import SessionRouter
 from tellurium.cdp.types import CDPError
 
 
@@ -66,7 +69,9 @@ async def test_full_navigation_flow(router, transport):
     assert len(events) == 1
 
     transport.queue({"id": 2, "result": {"result": {"type": "string", "value": "Example Domain"}}})
-    result = await router.root.send("Runtime.evaluate", {"expression": "document.title", "returnByValue": True})
+    result = await router.root.send(
+        "Runtime.evaluate", {"expression": "document.title", "returnByValue": True}
+    )
     assert result["result"]["value"] == "Example Domain"
 
 
@@ -108,13 +113,17 @@ async def test_event_routing_to_correct_session(router, transport):
     child1.on("Network.requestWillBeSent", lambda p: events1.append(p))
     child2.on("Network.requestWillBeSent", lambda p: events2.append(p))
 
-    transport.queue({"method": "Network.requestWillBeSent", "params": {"requestId": "r1"}, "sessionId": "s1"})
+    transport.queue(
+        {"method": "Network.requestWillBeSent", "params": {"requestId": "r1"}, "sessionId": "s1"}
+    )
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert len(events1) == 1
     assert len(events2) == 0
 
-    transport.queue({"method": "Network.requestWillBeSent", "params": {"requestId": "r2"}, "sessionId": "s2"})
+    transport.queue(
+        {"method": "Network.requestWillBeSent", "params": {"requestId": "r2"}, "sessionId": "s2"}
+    )
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert len(events1) == 1

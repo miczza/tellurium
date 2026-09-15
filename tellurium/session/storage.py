@@ -12,10 +12,18 @@ from typing import Any
 from tellurium import __version__ as _tellurium_version
 from tellurium.session.errors import SessionCorruptError
 
-_KNOWN_FIELDS = frozenset({
-    "tellurium_version", "name", "seed", "metadata", "launch",
-    "created_at", "updated_at", "chromium_version",
-})
+_KNOWN_FIELDS = frozenset(
+    {
+        "tellurium_version",
+        "name",
+        "seed",
+        "metadata",
+        "launch",
+        "created_at",
+        "updated_at",
+        "chromium_version",
+    }
+)
 
 
 def save(path: str, data: dict[str, Any], full: bool) -> None:
@@ -58,7 +66,7 @@ def load(path: str) -> dict[str, Any] | None:
     as a JSON object. Unknown top-level fields emit a warning and are dropped.
     """
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             raw = json.load(f)
     except FileNotFoundError:
         return None

@@ -4,6 +4,7 @@ Skipped unless a patched binary is available:
   * ``TELLURIUM_PATCHED_EXECUTABLE=/path/to/chrome``, or
   * a release installed in the cache (``tellurium download-browser --browser patched``).
 """
+
 from __future__ import annotations
 
 import os
@@ -12,7 +13,6 @@ from pathlib import Path
 import pytest
 
 from tellurium.browser import _cache
-
 
 
 def _patched_binary() -> Path | None:
@@ -30,8 +30,10 @@ def _patched_binary() -> Path | None:
 def patched_binary() -> Path:
     binary = _patched_binary()
     if binary is None:
-        pytest.skip("no chromium-telluride binary (set TELLURIUM_PATCHED_EXECUTABLE "
-                    "or run `tellurium download-browser --browser patched`)")
+        pytest.skip(
+            "no chromium-telluride binary (set TELLURIUM_PATCHED_EXECUTABLE "
+            "or run `tellurium download-browser --browser patched`)"
+        )
     return binary
 
 
@@ -59,9 +61,14 @@ CANVAS_DATAURL = r"""
 
 async def _canvas_hash(binary: Path, seed: int) -> str:
     import hashlib
+
     from tellurium import Browser
+
     browser = await Browser.launch(
-        browser="patched", executable=str(binary), headless=True, seed=seed,
+        browser="patched",
+        executable=str(binary),
+        headless=True,
+        seed=seed,
         args=_launch_args(binary),
     )
     async with browser:
@@ -72,8 +79,12 @@ async def _canvas_hash(binary: Path, seed: int) -> str:
 
 async def test_patched_launch_passes_fingerprint_flag(patched_binary):
     from tellurium import Browser
+
     browser = await Browser.launch(
-        browser="patched", executable=str(patched_binary), headless=True, seed=42069,
+        browser="patched",
+        executable=str(patched_binary),
+        headless=True,
+        seed=42069,
         args=_launch_args(patched_binary),
     )
     async with browser:
@@ -92,8 +103,11 @@ async def test_patched_launch_passes_fingerprint_flag(patched_binary):
 
 async def test_patched_random_seed_when_none_given(patched_binary):
     from tellurium import Browser
+
     browser = await Browser.launch(
-        browser="patched", executable=str(patched_binary), headless=True,
+        browser="patched",
+        executable=str(patched_binary),
+        headless=True,
         args=_launch_args(patched_binary),
     )
     async with browser:
@@ -112,9 +126,14 @@ async def test_patched_canvas_deterministic_per_seed(patched_binary):
 async def test_patched_stealth_true_skips_js_injection(patched_binary):
     """With native_fingerprint capability the JS stealth scripts are not built."""
     from tellurium import Browser
+
     browser = await Browser.launch(
-        browser="patched", executable=str(patched_binary), headless=True,
-        stealth=True, seed=7, args=_launch_args(patched_binary),
+        browser="patched",
+        executable=str(patched_binary),
+        headless=True,
+        stealth=True,
+        seed=7,
+        args=_launch_args(patched_binary),
     )
     async with browser:
         eng = browser._stealth_engine

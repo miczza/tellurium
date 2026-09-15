@@ -3,6 +3,7 @@
 Design doc 01 §"Override manuali (ignorano auto-detect)" — these always win
 over GeoIP and over the seeded StealthProfile defaults.
 """
+
 from __future__ import annotations
 
 import asyncio

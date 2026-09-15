@@ -1,4 +1,5 @@
 """Tab API surface promised by design doc 03: xpath_all, pdf, viewport, waits."""
+
 from __future__ import annotations
 
 import base64
@@ -81,10 +82,12 @@ async def test_mouse_move_uses_the_tabs_profile(monkeypatch):
 
 
 async def test_select_all_returns_immediately_without_timeout():
-    tab = _fake_tab(responses={
-        "DOM.getDocument": {"root": {"nodeId": 1}},
-        "DOM.querySelectorAll": {"nodeIds": []},
-    })
+    tab = _fake_tab(
+        responses={
+            "DOM.getDocument": {"root": {"nodeId": 1}},
+            "DOM.querySelectorAll": {"nodeIds": []},
+        }
+    )
     assert await tab.select_all(".missing") == []
     assert _methods(tab._sent).count("DOM.querySelectorAll") == 1
 
@@ -96,10 +99,12 @@ async def test_select_all_polls_until_a_match_appears():
         calls["n"] += 1
         return {"nodeIds": [11, 12]} if calls["n"] >= 2 else {"nodeIds": []}
 
-    tab = _fake_tab(responses={
-        "DOM.getDocument": {"root": {"nodeId": 1}},
-        "DOM.querySelectorAll": query,
-    })
+    tab = _fake_tab(
+        responses={
+            "DOM.getDocument": {"root": {"nodeId": 1}},
+            "DOM.querySelectorAll": query,
+        }
+    )
     elements = await tab.select_all("li", timeout=5)
     assert [e._node_id for e in elements] == [11, 12]
     assert calls["n"] == 2
@@ -113,11 +118,13 @@ async def test_find_all_accepts_a_timeout():
 
 
 async def test_xpath_all_returns_every_match_and_discards_results():
-    tab = _fake_tab(responses={
-        "DOM.getDocument": {"root": {"nodeId": 1}},
-        "DOM.performSearch": {"searchId": "S1", "resultCount": 3},
-        "DOM.getSearchResults": {"nodeIds": [4, 5, 6]},
-    })
+    tab = _fake_tab(
+        responses={
+            "DOM.getDocument": {"root": {"nodeId": 1}},
+            "DOM.performSearch": {"searchId": "S1", "resultCount": 3},
+            "DOM.getSearchResults": {"nodeIds": [4, 5, 6]},
+        }
+    )
     elements = await tab.xpath_all("//li")
     assert [e._node_id for e in elements] == [4, 5, 6]
     search = dict(tab._sent)["DOM.getSearchResults"]
@@ -126,10 +133,12 @@ async def test_xpath_all_returns_every_match_and_discards_results():
 
 
 async def test_xpath_all_empty_result_is_not_an_error():
-    tab = _fake_tab(responses={
-        "DOM.getDocument": {"root": {"nodeId": 1}},
-        "DOM.performSearch": {"searchId": "S1", "resultCount": 0},
-    })
+    tab = _fake_tab(
+        responses={
+            "DOM.getDocument": {"root": {"nodeId": 1}},
+            "DOM.performSearch": {"searchId": "S1", "resultCount": 0},
+        }
+    )
     assert await tab.xpath_all("//nothing") == []
     assert ("DOM.discardSearchResults", {"searchId": "S1"}) in tab._sent
 
@@ -147,12 +156,14 @@ def _wait_for_tab(node_ids, visible=True):
         nid = remaining.pop(0) if remaining else 0
         return {"nodeId": nid}
 
-    tab = _fake_tab(responses={
-        "DOM.getDocument": {"root": {"nodeId": 1}},
-        "DOM.querySelector": query,
-        "DOM.resolveNode": {"object": {"objectId": "OBJ"}},
-        "Runtime.callFunctionOn": {"result": {"type": "boolean", "value": visible}},
-    })
+    tab = _fake_tab(
+        responses={
+            "DOM.getDocument": {"root": {"nodeId": 1}},
+            "DOM.querySelector": query,
+            "DOM.resolveNode": {"object": {"objectId": "OBJ"}},
+            "Runtime.callFunctionOn": {"result": {"type": "boolean", "value": visible}},
+        }
+    )
     return tab
 
 
@@ -197,14 +208,17 @@ async def test_wait_for_rejects_an_unknown_state():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("pattern,url,expected", [
-    ("*/dashboard*", "https://x.test/app/dashboard?a=1", True),
-    ("*/dashboard*", "https://x.test/app/settings", False),
-    ("https://x.test/?", "https://x.test/a", True),
-    ("/dashboard", "https://x.test/app/dashboard", True),   # substring compat
-    ("/dashboard", "https://x.test/app/settings", False),
-    ("*", "", False),
-])
+@pytest.mark.parametrize(
+    "pattern,url,expected",
+    [
+        ("*/dashboard*", "https://x.test/app/dashboard?a=1", True),
+        ("*/dashboard*", "https://x.test/app/settings", False),
+        ("https://x.test/?", "https://x.test/a", True),
+        ("/dashboard", "https://x.test/app/dashboard", True),  # substring compat
+        ("/dashboard", "https://x.test/app/settings", False),
+        ("*", "", False),
+    ],
+)
 def test_url_matches(pattern, url, expected):
     assert url_matches(pattern, url) is expected
 
@@ -230,9 +244,11 @@ async def test_wait_for_url_glob_that_never_matches_times_out():
 
 async def test_pdf_returns_bytes_and_writes_the_file(tmp_path):
     payload = b"%PDF-1.4 fake"
-    tab = _fake_tab(responses={
-        "Page.printToPDF": {"data": base64.b64encode(payload).decode()},
-    })
+    tab = _fake_tab(
+        responses={
+            "Page.printToPDF": {"data": base64.b64encode(payload).decode()},
+        }
+    )
     out = tmp_path / "page.pdf"
     data = await tab.pdf(str(out), landscape=True, paperWidth=8.5)
     assert data == payload
@@ -249,17 +265,21 @@ async def test_pdf_without_path_only_returns_bytes():
 
 
 async def test_screenshot_quality_is_sent_for_jpeg():
-    tab = _fake_tab(responses={
-        "Page.captureScreenshot": {"data": base64.b64encode(b"jpg").decode()},
-    })
+    tab = _fake_tab(
+        responses={
+            "Page.captureScreenshot": {"data": base64.b64encode(b"jpg").decode()},
+        }
+    )
     await tab.screenshot(format="jpeg", quality=40)
     assert dict(tab._sent)["Page.captureScreenshot"] == {"format": "jpeg", "quality": 40}
 
 
 async def test_screenshot_quality_is_dropped_for_png(caplog):
-    tab = _fake_tab(responses={
-        "Page.captureScreenshot": {"data": base64.b64encode(b"png").decode()},
-    })
+    tab = _fake_tab(
+        responses={
+            "Page.captureScreenshot": {"data": base64.b64encode(b"png").decode()},
+        }
+    )
     with caplog.at_level("WARNING", logger="tellurium"):
         await tab.screenshot(quality=40)
     assert "quality" not in dict(tab._sent)["Page.captureScreenshot"]
@@ -274,10 +294,13 @@ async def test_screenshot_quality_is_dropped_for_png(caplog):
 async def test_set_viewport_prefers_set_window_bounds():
     tab = _fake_tab(responses={"Browser.getWindowForTarget": {"windowId": 3}})
     await tab.set_viewport(1024, 768)
-    assert ("Browser.setWindowBounds", {
-        "windowId": 3,
-        "bounds": {"width": 1024, "height": 768, "windowState": "normal"},
-    }) in tab._root_sent
+    assert (
+        "Browser.setWindowBounds",
+        {
+            "windowId": 3,
+            "bounds": {"width": 1024, "height": 768, "windowState": "normal"},
+        },
+    ) in tab._root_sent
     assert "Emulation.setDeviceMetricsOverride" not in _methods(tab._sent)
 
 
@@ -295,8 +318,9 @@ async def test_maximize_and_minimize_send_window_state():
     tab = _fake_tab(responses={"Browser.getWindowForTarget": {"windowId": 3}})
     await tab.maximize()
     await tab.minimize()
-    states = [p["bounds"]["windowState"] for m, p in tab._root_sent
-              if m == "Browser.setWindowBounds"]
+    states = [
+        p["bounds"]["windowState"] for m, p in tab._root_sent if m == "Browser.setWindowBounds"
+    ]
     assert states == ["maximized", "minimized"]
 
 

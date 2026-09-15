@@ -1,10 +1,13 @@
 """Stealth engine — orchestrates anti-detection measures."""
+
 from __future__ import annotations
+
 import asyncio
 import logging
+
 from tellurium.browser.engine import BrowserEngine
+from tellurium.stealth.extension import create_stealth_extension, load_script
 from tellurium.stealth.profile import StealthProfile
-from tellurium.stealth.extension import load_script, create_stealth_extension
 
 logger = logging.getLogger("tellurium")
 
@@ -21,8 +24,9 @@ _STEALTH_TARGET_FILTER: list[dict] = [
 
 
 class StealthEngine:
-    def __init__(self, engine: BrowserEngine, profile: StealthProfile,
-                 headless: bool, has_proxy: bool):
+    def __init__(
+        self, engine: BrowserEngine, profile: StealthProfile, headless: bool, has_proxy: bool
+    ):
         self._caps = engine.capabilities()
         self._profile = profile
         self._headless = headless
@@ -55,17 +59,26 @@ class StealthEngine:
         # (userAgentMetadata), so "native_client_hints" needs no branch here.
 
         # Timezone and locale (always, even for patched — CDP is the authority here)
-        await session.send("Emulation.setTimezoneOverride", {
-            "timezoneId": self._profile.timezone,
-        })
-        await session.send("Emulation.setLocaleOverride", {
-            "locale": self._profile.locale,
-        })
+        await session.send(
+            "Emulation.setTimezoneOverride",
+            {
+                "timezoneId": self._profile.timezone,
+            },
+        )
+        await session.send(
+            "Emulation.setLocaleOverride",
+            {
+                "locale": self._profile.locale,
+            },
+        )
 
         if "native_navigator" not in self._caps:
-            await session.send("Emulation.setHardwareConcurrencyOverride", {
-                "hardwareConcurrency": self._profile.hardware_concurrency,
-            })
+            await session.send(
+                "Emulation.setHardwareConcurrencyOverride",
+                {
+                    "hardwareConcurrency": self._profile.hardware_concurrency,
+                },
+            )
 
         # Headless fixes (always, both backends)
         if self._headless:
@@ -94,12 +107,15 @@ class StealthEngine:
         type including 'page' (double injection) and 'browser'
         (deadlock on Runtime.runIfWaitingForDebugger). Design doc 04 §P1.2.
         """
-        await session.send("Target.setAutoAttach", {
-            "autoAttach": True,
-            "waitForDebuggerOnStart": True,
-            "flatten": True,
-            "filter": _STEALTH_TARGET_FILTER,
-        })
+        await session.send(
+            "Target.setAutoAttach",
+            {
+                "autoAttach": True,
+                "waitForDebuggerOnStart": True,
+                "flatten": True,
+                "filter": _STEALTH_TARGET_FILTER,
+            },
+        )
 
     async def wire_session(self, session) -> None:
         """Register the auto-attach listener on *session* and enable it.
@@ -131,12 +147,13 @@ class StealthEngine:
             loop.create_task(self._resume_target(session_id))
         else:
             # Stock: patch then resume
-            loop.create_task(
-                self._patch_and_resume(session_id, target_type, target_url)
-            )
+            loop.create_task(self._patch_and_resume(session_id, target_type, target_url))
 
     async def _patch_and_resume(
-        self, session_id: str, target_type: str, target_url: str = "",
+        self,
+        session_id: str,
+        target_type: str,
+        target_url: str = "",
     ) -> None:
         """Inject stealth into a frozen OOPIF/Worker target, then resume.
 
@@ -164,7 +181,9 @@ class StealthEngine:
         finally:
             try:
                 await session.send(
-                    "Runtime.runIfWaitingForDebugger", {}, timeout=10.0,
+                    "Runtime.runIfWaitingForDebugger",
+                    {},
+                    timeout=10.0,
                 )
             except Exception:
                 logger.debug("Failed to resume target %s", session_id, exc_info=True)
@@ -172,7 +191,7 @@ class StealthEngine:
     async def _resume_target(self, session_id: str) -> None:
         try:
             await self._get_session(session_id).send("Runtime.runIfWaitingForDebugger", {})
-        except Exception:
+        except Exception:  # noqa: BLE001 - target may be gone already
             pass
 
     def update_profile(self, profile: StealthProfile) -> None:
@@ -191,6 +210,7 @@ class StealthEngine:
     def _ensure_session(self, session_id: str) -> None:
         """Register an auto-attached session in the router if not already known."""
         from tellurium.cdp.transport._session import Session
+
         if session_id and session_id not in self._router._sessions:
             session = Session(self._router, session_id=session_id)
             self._router._sessions[session_id] = session
@@ -228,27 +248,40 @@ class StealthEngine:
             load_script("webdriver.js"),
             load_script("chrome_runtime.js"),
             load_script("plugins.js"),
-            load_script("keyboard_layout.js", {
-                "LOCALE": p.locale,
-            }),
+            load_script(
+                "keyboard_layout.js",
+                {
+                    "LOCALE": p.locale,
+                },
+            ),
         ]
 
         if self._has_proxy or p.webrtc_public_ip:
-            scripts.append(load_script("webrtc.js", {
-                "WEBRTC_PUBLIC_IP": p.webrtc_public_ip or "null",
-            }))
+            scripts.append(
+                load_script(
+                    "webrtc.js",
+                    {
+                        "WEBRTC_PUBLIC_IP": p.webrtc_public_ip or "null",
+                    },
+                )
+            )
 
         if self._headless:
-            scripts.extend([
-                load_script("headless_dimensions.js", {
-                    "OUTER_WIDTH": str(p.screen_width),
-                    "OUTER_HEIGHT": str(p.screen_avail_height),
-                }),
-                load_script("headless_permissions.js"),
-                load_script("headless_connection.js"),
-                load_script("headless_voices.js", {"OS": p.target_os}),
-                load_script("headless_media.js"),
-            ])
+            scripts.extend(
+                [
+                    load_script(
+                        "headless_dimensions.js",
+                        {
+                            "OUTER_WIDTH": str(p.screen_width),
+                            "OUTER_HEIGHT": str(p.screen_avail_height),
+                        },
+                    ),
+                    load_script("headless_permissions.js"),
+                    load_script("headless_connection.js"),
+                    load_script("headless_voices.js", {"OS": p.target_os}),
+                    load_script("headless_media.js"),
+                ]
+            )
 
         return scripts
 
@@ -265,10 +298,13 @@ class StealthEngine:
 
         scripts = self._build_scripts()
         for source in scripts:
-            await session.send("Page.addScriptToEvaluateOnNewDocument", {
-                "source": source,
-                "runImmediately": True,   # apply even if a document already exists
-            })
+            await session.send(
+                "Page.addScriptToEvaluateOnNewDocument",
+                {
+                    "source": source,
+                    "runImmediately": True,  # apply even if a document already exists
+                },
+            )
 
     def _build_worker_scripts(self) -> list[str]:
         """JS overrides for worker scope (design doc 04 §P1.2).
@@ -283,9 +319,12 @@ class StealthEngine:
         if "native_navigator" in self._caps:
             return []
         return [
-            load_script("worker_navigator.js", {
-                "HARDWARE_CONCURRENCY": self._profile.hardware_concurrency,
-            }),
+            load_script(
+                "worker_navigator.js",
+                {
+                    "HARDWARE_CONCURRENCY": self._profile.hardware_concurrency,
+                },
+            ),
         ]
 
     async def apply_worker_scripts(self, session, target_url: str = "") -> None:
@@ -304,10 +343,14 @@ class StealthEngine:
             # them untouched (still resumed by the caller's finally).
             return
         for source in self._build_worker_scripts():
-            await session.send("Runtime.evaluate", {
-                "expression": source,
-                "returnByValue": True,
-            }, timeout=10.0)
+            await session.send(
+                "Runtime.evaluate",
+                {
+                    "expression": source,
+                    "returnByValue": True,
+                },
+                timeout=10.0,
+            )
 
     async def _set_ua_override(self, session) -> None:
         """Set User-Agent and Client Hints via CDP."""
@@ -316,36 +359,37 @@ class StealthEngine:
 
         grease_brand = p.grease_brand or "Not_A Brand"
         grease_version = p.grease_version or "24"
-        grease_version_full = (
-            p.grease_version + ".0.0.0" if p.grease_version else "24.0.0.0"
-        )
+        grease_version_full = p.grease_version + ".0.0.0" if p.grease_version else "24.0.0.0"
 
-        await session.send("Emulation.setUserAgentOverride", {
-            "userAgent": p.user_agent,
-            # Empty = keep Chrome's own Accept-Language (set via --accept-lang
-            # at launch). A non-empty value leaks into navigator.languages.
-            "acceptLanguage": "",
-            "platform": p.platform,
-            "userAgentMetadata": {
-                "brands": [
-                    {"brand": "Chromium", "version": major},
-                    {"brand": "Google Chrome", "version": major},
-                    {"brand": grease_brand, "version": grease_version},
-                ],
-                "fullVersionList": [
-                    {"brand": "Chromium", "version": p.browser_version},
-                    {"brand": "Google Chrome", "version": p.browser_version},
-                    {"brand": grease_brand, "version": grease_version_full},
-                ],
-                "platform": p.ch_ua_platform,
-                "platformVersion": p.platform_version,
-                "architecture": p.ch_ua_arch,
-                "bitness": p.ch_ua_bitness,
-                "mobile": p.ch_ua_mobile,
-                "model": "",
-                "wow64": False,
+        await session.send(
+            "Emulation.setUserAgentOverride",
+            {
+                "userAgent": p.user_agent,
+                # Empty = keep Chrome's own Accept-Language (set via --accept-lang
+                # at launch). A non-empty value leaks into navigator.languages.
+                "acceptLanguage": "",
+                "platform": p.platform,
+                "userAgentMetadata": {
+                    "brands": [
+                        {"brand": "Chromium", "version": major},
+                        {"brand": "Google Chrome", "version": major},
+                        {"brand": grease_brand, "version": grease_version},
+                    ],
+                    "fullVersionList": [
+                        {"brand": "Chromium", "version": p.browser_version},
+                        {"brand": "Google Chrome", "version": p.browser_version},
+                        {"brand": grease_brand, "version": grease_version_full},
+                    ],
+                    "platform": p.ch_ua_platform,
+                    "platformVersion": p.platform_version,
+                    "architecture": p.ch_ua_arch,
+                    "bitness": p.ch_ua_bitness,
+                    "mobile": p.ch_ua_mobile,
+                    "model": "",
+                    "wow64": False,
+                },
             },
-        })
+        )
 
     async def _apply_headless_fixes(self, session, is_oopif: bool = False) -> None:
         """Apply headless-specific CDP fixes.
@@ -360,17 +404,23 @@ class StealthEngine:
         p = self._profile
         await session.send("Emulation.setFocusEmulationEnabled", {"enabled": True})
         if not is_oopif:
-            await session.send("Emulation.setDeviceMetricsOverride", {
-                "width": p.screen_width,
-                "height": p.screen_avail_height,
-                "deviceScaleFactor": p.device_pixel_ratio,
-                "mobile": False,
-                "screenWidth": p.screen_width,
-                "screenHeight": p.screen_height,
-            })
-        await session.send("Emulation.setEmulatedMedia", {
-            "features": [
-                {"name": "prefers-color-scheme", "value": "light"},
-                {"name": "prefers-reduced-motion", "value": "no-preference"},
-            ],
-        })
+            await session.send(
+                "Emulation.setDeviceMetricsOverride",
+                {
+                    "width": p.screen_width,
+                    "height": p.screen_avail_height,
+                    "deviceScaleFactor": p.device_pixel_ratio,
+                    "mobile": False,
+                    "screenWidth": p.screen_width,
+                    "screenHeight": p.screen_height,
+                },
+            )
+        await session.send(
+            "Emulation.setEmulatedMedia",
+            {
+                "features": [
+                    {"name": "prefers-color-scheme", "value": "light"},
+                    {"name": "prefers-reduced-motion", "value": "no-preference"},
+                ],
+            },
+        )

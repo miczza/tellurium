@@ -1,4 +1,5 @@
 """navigator.languages / Accept-Language parity with real Chrome under stealth."""
+
 import http.server
 import threading
 
@@ -28,6 +29,7 @@ def header_server():
 
 async def test_languages_native_shape_under_stealth(header_server):
     from tellurium import Browser
+
     url, seen = header_server
     browser = await Browser.launch(headless=True, stealth=True, seed=1)
     async with browser:

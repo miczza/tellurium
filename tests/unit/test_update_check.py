@@ -1,9 +1,8 @@
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from unittest.mock import patch, MagicMock
-import pytest
+from unittest.mock import MagicMock
+
 from tellurium.browser import _update_check
 
 
@@ -43,7 +42,8 @@ def test_update_check_warns_if_stale(tmp_path, monkeypatch, caplog):
     check_file.write_text(json.dumps({"last_check": old_iso, "latest_version": ""}))
 
     manifest = {
-        "version": "0.1.0", "chromium_upstream": "146.0.7680.188",
+        "version": "0.1.0",
+        "chromium_upstream": "146.0.7680.188",
         "released_at": (datetime.now(timezone.utc) - timedelta(weeks=2)).isoformat(),
         "security": False,
     }
@@ -66,7 +66,8 @@ def test_update_check_warns_aggressively_on_security(tmp_path, monkeypatch, capl
     check_file.write_text(json.dumps({"last_check": old_iso, "latest_version": ""}))
 
     manifest = {
-        "version": "0.1.1", "chromium_upstream": "146.0.7680.195",
+        "version": "0.1.1",
+        "chromium_upstream": "146.0.7680.195",
         "released_at": datetime.now(timezone.utc).isoformat(),
         "security": True,
         "cve": ["CVE-2026-1234"],

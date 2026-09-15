@@ -4,7 +4,9 @@ More invasive than Network.enable — use only when you need to modify,
 block, or respond to requests. Requires explicit continue_(), abort(),
 or respond() for each paused request.
 """
+
 from __future__ import annotations
+
 import asyncio
 import base64
 from dataclasses import dataclass
@@ -30,10 +32,13 @@ class InterceptedRequest:
 
     async def abort(self) -> None:
         """Abort the request (block it)."""
-        await self.session.send("Fetch.failRequest", {
-            "requestId": self.request_id,
-            "errorReason": "Aborted",
-        })
+        await self.session.send(
+            "Fetch.failRequest",
+            {
+                "requestId": self.request_id,
+                "errorReason": "Aborted",
+            },
+        )
 
     async def respond(
         self,
@@ -69,9 +74,12 @@ class InterceptStream:
 
     async def start(self) -> None:
         """Enable Fetch interception."""
-        await self._session.send("Fetch.enable", {
-            "patterns": [{"urlPattern": self._url_pattern}],
-        })
+        await self._session.send(
+            "Fetch.enable",
+            {
+                "patterns": [{"urlPattern": self._url_pattern}],
+            },
+        )
         self._session.on("Fetch.requestPaused", self._on_paused)
         self._active = True
 

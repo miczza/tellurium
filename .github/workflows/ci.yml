@@ -21,11 +21,6 @@ jobs:
   lint:
     name: lint (ruff)
     runs-on: ubuntu-latest
-    # TODO: flip `continue-on-error` to false (and drop this block) once the
-    # backlog is cleared — `ruff check --fix` + `ruff format` handle most of it;
-    # the manual remainder is BLE001 / F841 / E741 / B904 / B905.
-    # Tracked baseline (2026-09, cdp/domains excluded): 272 findings.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

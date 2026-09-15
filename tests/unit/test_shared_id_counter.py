@@ -1,7 +1,8 @@
 """Verify CDP message IDs are globally unique across sessions on the same transport."""
+
 from __future__ import annotations
+
 import asyncio
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -20,6 +21,7 @@ class _FakeTransport:
 async def test_two_sessions_use_non_colliding_ids():
     """Root and child session must never emit the same `id` over one transport."""
     import json
+
     transport = _FakeTransport()
     router = SessionRouter(transport)
     root = router.root
@@ -53,5 +55,6 @@ async def test_session_removes_request_id_attribute():
     transport = _FakeTransport()
     router = SessionRouter(transport)
     session = Session(router, session_id="x")
-    assert not hasattr(session, "_request_id"), \
+    assert not hasattr(session, "_request_id"), (
         "Session still has _request_id — per-session counter not removed"
+    )

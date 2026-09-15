@@ -17,6 +17,7 @@ tarball of chromium-telluride (top-level ``chromium-telluride/`` stripped).
 
 Override the root with the ``TELLURIUM_CACHE_DIR`` environment variable.
 """
+
 from __future__ import annotations
 
 import json
@@ -63,7 +64,7 @@ def binary_in(version_dir: Path) -> Path | None:
 @dataclass(frozen=True)
 class InstalledBrowser:
     version: str
-    path: Path            # version directory
+    path: Path  # version directory
     binary: Path
     manifest: dict[str, Any] | None
     is_current: bool
@@ -74,6 +75,7 @@ class InstalledBrowser:
         if not self.manifest:
             return None
         from tellurium.browser._manifest import current_platform
+
         table = self.manifest.get("binary_sha256")
         if isinstance(table, dict):
             return table.get(current_platform())
@@ -135,10 +137,15 @@ def installed_browsers(root: Path | None = None) -> list[InstalledBrowser]:
                 manifest = json.loads(mpath.read_text())
             except (OSError, ValueError):
                 manifest = None
-        found.append(InstalledBrowser(
-            version=d.name, path=d, binary=binary, manifest=manifest,
-            is_current=(d.name == cur),
-        ))
+        found.append(
+            InstalledBrowser(
+                version=d.name,
+                path=d,
+                binary=binary,
+                manifest=manifest,
+                is_current=(d.name == cur),
+            )
+        )
     found.sort(key=lambda b: _version_key(b.version), reverse=True)
     return found
 

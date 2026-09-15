@@ -1,5 +1,5 @@
 """End-to-end tests exercising the full Tellurium stack."""
-import pytest
+
 from tellurium import Browser, Cookie
 
 
@@ -71,7 +71,7 @@ async def test_cookie_management():
     """Cookie set/get/save/load cycle."""
     browser = await Browser.launch(headless=True)
     async with browser:
-        tab = await browser.new_tab("about:blank")
+        await browser.new_tab("about:blank")
 
         cookies = [Cookie(name="test", value="123", domain="localhost")]
         await browser.set_cookies(cookies)
@@ -107,4 +107,4 @@ async def test_screenshot_returns_data(local_server):
         tab = await browser.new_tab(f"{local_server}/basic.html")
         data = await tab.screenshot()
         assert len(data) > 100
-        assert data[:4] == b'\x89PNG'  # PNG magic bytes
+        assert data[:4] == b"\x89PNG"  # PNG magic bytes

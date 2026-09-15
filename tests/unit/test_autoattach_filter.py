@@ -1,4 +1,5 @@
 """Tests for Target.setAutoAttach filter (design doc 04 §P1.2)."""
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 

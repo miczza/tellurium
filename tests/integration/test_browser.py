@@ -1,4 +1,3 @@
-import pytest
 from tellurium import Browser
 
 

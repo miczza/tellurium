@@ -1,5 +1,4 @@
 import json
-import os
 import sys
 import warnings
 
@@ -10,7 +9,12 @@ from tellurium.session import storage
 
 def test_save_writes_valid_json(tmp_path):
     path = tmp_path / "session.json"
-    data = {"name": "mario", "seed": 42, "metadata": {"k": "v"}, "created_at": "2026-01-01T00:00:00+00:00"}
+    data = {
+        "name": "mario",
+        "seed": 42,
+        "metadata": {"k": "v"},
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }
     storage.save(str(path), data, full=False)
 
     loaded = json.loads(path.read_text())
@@ -34,7 +38,10 @@ def test_save_sets_updated_at(tmp_path):
 def test_save_full_includes_launch_block(tmp_path):
     path = tmp_path / "session.json"
     data = {
-        "name": "x", "seed": 1, "metadata": {}, "created_at": "2026-01-01T00:00:00+00:00",
+        "name": "x",
+        "seed": 1,
+        "metadata": {},
+        "created_at": "2026-01-01T00:00:00+00:00",
         "launch": {"stealth": True, "proxy": "socks5://h:1", "headless": False, "args": ["--x"]},
     }
     storage.save(str(path), data, full=True)
@@ -47,7 +54,10 @@ def test_save_full_includes_launch_block(tmp_path):
 def test_save_lean_omits_launch_block(tmp_path):
     path = tmp_path / "session.json"
     data = {
-        "name": "x", "seed": 1, "metadata": {}, "created_at": "2026-01-01T00:00:00+00:00",
+        "name": "x",
+        "seed": 1,
+        "metadata": {},
+        "created_at": "2026-01-01T00:00:00+00:00",
         "launch": {"stealth": True},
     }
     storage.save(str(path), data, full=False)
@@ -102,7 +112,9 @@ def test_load_returns_none_when_missing(tmp_path):
 def test_load_roundtrip(tmp_path):
     path = tmp_path / "session.json"
     original = {
-        "name": "mario", "seed": 42, "metadata": {"username": "mario"},
+        "name": "mario",
+        "seed": 42,
+        "metadata": {"username": "mario"},
         "created_at": "2026-01-01T00:00:00+00:00",
     }
     storage.save(str(path), original, full=False)
@@ -124,7 +136,10 @@ def test_load_malformed_raises_corrupt(tmp_path):
 def test_load_full_returns_launch_block(tmp_path):
     path = tmp_path / "session.json"
     data = {
-        "name": "x", "seed": 1, "metadata": {}, "created_at": "2026-01-01T00:00:00+00:00",
+        "name": "x",
+        "seed": 1,
+        "metadata": {},
+        "created_at": "2026-01-01T00:00:00+00:00",
         "launch": {"stealth": True, "headless": False},
     }
     storage.save(str(path), data, full=True)
@@ -137,7 +152,9 @@ def test_load_warns_on_unknown_fields(tmp_path):
     path = tmp_path / "session.json"
     payload = {
         "tellurium_version": "0.1.0",
-        "name": "x", "seed": 1, "metadata": {},
+        "name": "x",
+        "seed": 1,
+        "metadata": {},
         "created_at": "2026-01-01T00:00:00+00:00",
         "updated_at": "2026-01-01T00:00:00+00:00",
         "future_field_xyz": "hello",
@@ -165,10 +182,13 @@ def test_save_persists_chromium_version(tmp_path, monkeypatch):
 
     sess = Session("test", path=str(tmp_path / "sessions"))
     # Simulate that a launch was performed with version 146.0.7680.188
-    sess._chromium_version_used = "146.0.7680.188"   # internal attr set by Browser.launch/Session.start
+    sess._chromium_version_used = (
+        "146.0.7680.188"  # internal attr set by Browser.launch/Session.start
+    )
     sess.save()
 
     import json
+
     data = json.loads((tmp_path / "sessions" / "session.json").read_text())
     assert data.get("chromium_version") == "146.0.7680.188"
 
@@ -176,16 +196,21 @@ def test_save_persists_chromium_version(tmp_path, monkeypatch):
 def test_load_restores_chromium_version_lock(tmp_path):
     """Session loaded from disk exposes chromium_version property."""
     import json
+
     from tellurium import Session
 
     sess_dir = tmp_path / "sessions"
     sess_dir.mkdir(parents=True)
-    (sess_dir / "session.json").write_text(json.dumps({
-        "name": "test",
-        "seed": 42069,
-        "chromium_version": "146.0.7680.188",
-        "created_at": "2026-04-15T10:30:00Z",
-        "metadata": {},
-    }))
+    (sess_dir / "session.json").write_text(
+        json.dumps(
+            {
+                "name": "test",
+                "seed": 42069,
+                "chromium_version": "146.0.7680.188",
+                "created_at": "2026-04-15T10:30:00Z",
+                "metadata": {},
+            }
+        )
+    )
     sess = Session("test", path=str(sess_dir))
     assert sess.chromium_version == "146.0.7680.188"

@@ -7,7 +7,9 @@ stealth scripts (notably `webgl.js` platform-GPU coherence) and are tracked
 as a follow-up; they are xfail-style here, visible in the report but not
 blocking.
 """
+
 from __future__ import annotations
+
 import json
 import os
 import subprocess
@@ -25,10 +27,18 @@ def _run_comparative(frameworks: str) -> dict:
     env["TELLURIUM_STEALTH_FLAG"] = "1"
     env.setdefault("DISPLAY", ":0")
     result = subprocess.run(
-        [sys.executable, str(HERE / "comparative_test.py"),
-         "--frameworks", frameworks,
-         "--chrome-path", STOCK_CHROME],
-        env=env, capture_output=True, text=True, timeout=600,
+        [
+            sys.executable,
+            str(HERE / "comparative_test.py"),
+            "--frameworks",
+            frameworks,
+            "--chrome-path",
+            STOCK_CHROME,
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=600,
     )
     assert result.returncode == 0, f"comparative_test.py failed: {result.stderr[-2000:]}"
     return json.loads((HERE / "comparative_results.json").read_text())
@@ -63,10 +73,7 @@ def test_tellurium_passes_arch_checks_with_stealth():
     tel = data["tellurium"]
 
     failures = [name for (name, check) in ARCH_CHECKS if not check(tel)]
-    assert not failures, (
-        f"Architectural regressions: {failures}. "
-        f"Details: {tel}"
-    )
+    assert not failures, f"Architectural regressions: {failures}. Details: {tel}"
 
 
 @pytest.mark.skipif(
@@ -93,7 +100,9 @@ def test_tellurium_matches_nodriver_on_creepjs():
     data = _run_comparative("tellurium")
     tel = data["tellurium"]
     failures = [name for (name, check) in CREEPJS_CHECKS if not check(tel)]
-    assert not failures, f"CreepJS signal leakage: {failures}. Details: creepjs={tel.get('creepjs')}"
+    assert not failures, (
+        f"CreepJS signal leakage: {failures}. Details: creepjs={tel.get('creepjs')}"
+    )
 
 
 @pytest.mark.skipif(
@@ -105,7 +114,4 @@ def test_tellurium_score_improved_vs_pre_t7():
     data = _run_comparative("tellurium")
     tel = data["tellurium"]
     passed = sum(1 for (_, check) in (ARCH_CHECKS + CREEPJS_CHECKS) if check(tel))
-    assert passed >= 6, (
-        f"T7 score regressed below the 6/8 floor (got {passed}/8). "
-        f"Details: {tel}"
-    )
+    assert passed >= 6, f"T7 score regressed below the 6/8 floor (got {passed}/8). Details: {tel}"

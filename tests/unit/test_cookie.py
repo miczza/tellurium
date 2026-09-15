@@ -1,5 +1,3 @@
-import json
-from pathlib import Path
 from tellurium.browser.cookie import Cookie
 
 
@@ -21,8 +19,15 @@ def test_cookie_to_json():
 
 
 def test_cookie_from_json():
-    j = {"name": "sid", "value": "abc", "domain": ".example.com",
-         "path": "/app", "secure": True, "httpOnly": False, "sameSite": "Strict"}
+    j = {
+        "name": "sid",
+        "value": "abc",
+        "domain": ".example.com",
+        "path": "/app",
+        "secure": True,
+        "httpOnly": False,
+        "sameSite": "Strict",
+    }
     c = Cookie.from_json(j)
     assert c.name == "sid"
     assert c.path == "/app"
@@ -36,8 +41,7 @@ def test_cookie_from_json_minimal():
 
 
 def test_cookie_to_netscape():
-    c = Cookie(name="sid", value="abc", domain=".example.com",
-               secure=True, expires=1742860800)
+    c = Cookie(name="sid", value="abc", domain=".example.com", secure=True, expires=1742860800)
     line = c.to_netscape()
     parts = line.split("\t")
     assert parts[0] == ".example.com"
@@ -61,8 +65,7 @@ def test_cookies_save_load_json(tmp_path):
 
 def test_cookies_save_load_netscape(tmp_path):
     cookies = [
-        Cookie(name="sid", value="abc", domain=".example.com",
-               secure=True, expires=1742860800),
+        Cookie(name="sid", value="abc", domain=".example.com", secure=True, expires=1742860800),
     ]
     path = tmp_path / "cookies.txt"
     Cookie.save_list(cookies, str(path), format="netscape")

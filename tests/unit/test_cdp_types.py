@@ -1,4 +1,4 @@
-from tellurium.cdp.types import CDPError, T_JSON_DICT
+from tellurium.cdp.types import T_JSON_DICT, CDPError
 
 
 def test_cdp_error_with_code():

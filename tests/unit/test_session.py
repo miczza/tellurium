@@ -4,8 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from tellurium.session import Session
-from tellurium.session import SessionCorruptError
+from tellurium.session import Session, SessionCorruptError
 from tellurium.session import storage as _storage
 from tellurium.session.session import _combine_validators, _merge_launch_params
 
@@ -61,10 +60,15 @@ def _write_session_file(dir_path: Path, data: dict) -> None:
 
 def test_loads_metadata_and_seed_from_file(tmp_path):
     path = tmp_path / "s"
-    _write_session_file(path, {
-        "name": "mario", "seed": 7777, "metadata": {"username": "mario"},
-        "created_at": "2026-01-01T00:00:00+00:00",
-    })
+    _write_session_file(
+        path,
+        {
+            "name": "mario",
+            "seed": 7777,
+            "metadata": {"username": "mario"},
+            "created_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
 
     s = Session("mario", path=str(path))
     assert s.seed == 7777
@@ -73,10 +77,15 @@ def test_loads_metadata_and_seed_from_file(tmp_path):
 
 def test_constructor_seed_ignored_when_file_exists(tmp_path):
     path = tmp_path / "s"
-    _write_session_file(path, {
-        "name": "mario", "seed": 7777, "metadata": {},
-        "created_at": "2026-01-01T00:00:00+00:00",
-    })
+    _write_session_file(
+        path,
+        {
+            "name": "mario",
+            "seed": 7777,
+            "metadata": {},
+            "created_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
 
     s = Session("mario", path=str(path), seed=9999)
     assert s.seed == 7777
@@ -84,11 +93,16 @@ def test_constructor_seed_ignored_when_file_exists(tmp_path):
 
 def test_loads_launch_hints_when_present(tmp_path):
     path = tmp_path / "s"
-    _write_session_file(path, {
-        "name": "x", "seed": 1, "metadata": {},
-        "created_at": "2026-01-01T00:00:00+00:00",
-        "launch": {"stealth": True, "headless": False},
-    })
+    _write_session_file(
+        path,
+        {
+            "name": "x",
+            "seed": 1,
+            "metadata": {},
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "launch": {"stealth": True, "headless": False},
+        },
+    )
 
     s = Session("x", path=str(path))
     assert s._launch_hints == {"stealth": True, "headless": False}

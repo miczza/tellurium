@@ -1,17 +1,22 @@
 """Human simulation algorithms: Wind Mouse, Sigma-Lognormal velocity, HumanTyping, HumanScroll, ActionTimer."""
+
 import math
 import random
-
 
 # ---------------------------------------------------------------------------
 # Wind Mouse
 # ---------------------------------------------------------------------------
 
+
 def wind_mouse(
-    start_x: float, start_y: float,
-    dest_x: float, dest_y: float,
-    G_0: float = 9.0, W_0: float = 3.0,
-    M_0: float = 15.0, D_0: float = 12.0,
+    start_x: float,
+    start_y: float,
+    dest_x: float,
+    dest_y: float,
+    G_0: float = 9.0,
+    W_0: float = 3.0,
+    M_0: float = 15.0,
+    D_0: float = 12.0,
 ) -> list[tuple[int, int]]:
     """Generate mouse trajectory using Wind Mouse algorithm.
     Returns list of (x, y) intermediate coordinates.
@@ -64,11 +69,12 @@ def wind_mouse(
 # Sigma-Lognormal velocity profile
 # ---------------------------------------------------------------------------
 
+
 def lognormal_pdf(t: float, mu: float, sigma: float) -> float:
     if t <= 0:
         return 0.0
     return (1.0 / (sigma * math.sqrt(2 * math.pi) * t)) * math.exp(
-        -(math.log(t) - mu) ** 2 / (2 * sigma ** 2)
+        -((math.log(t) - mu) ** 2) / (2 * sigma**2)
     )
 
 
@@ -156,8 +162,8 @@ def apply_lognormal_velocity(
 
 MOUSE_PROFILES = {
     "careful": {"wind": {"G_0": 7, "W_0": 1.5, "M_0": 10, "D_0": 15}, "mu": -0.3, "sigma": 0.5},
-    "normal":  {"wind": {"G_0": 9, "W_0": 3,   "M_0": 15, "D_0": 12}, "mu": -0.5, "sigma": 0.4},
-    "hasty":   {"wind": {"G_0": 12, "W_0": 5,  "M_0": 25, "D_0": 8},  "mu": -0.8, "sigma": 0.3},
+    "normal": {"wind": {"G_0": 9, "W_0": 3, "M_0": 15, "D_0": 12}, "mu": -0.5, "sigma": 0.4},
+    "hasty": {"wind": {"G_0": 12, "W_0": 5, "M_0": 25, "D_0": 8}, "mu": -0.8, "sigma": 0.3},
 }
 
 
@@ -166,17 +172,37 @@ MOUSE_PROFILES = {
 # ---------------------------------------------------------------------------
 
 FINGER_MAP = {
-    'q': ('L', 0), 'a': ('L', 0), 'z': ('L', 0),
-    'w': ('L', 1), 's': ('L', 1), 'x': ('L', 1),
-    'e': ('L', 2), 'd': ('L', 2), 'c': ('L', 2),
-    'r': ('L', 3), 'f': ('L', 3), 'v': ('L', 3),
-    't': ('L', 3), 'g': ('L', 3), 'b': ('L', 3),
-    'y': ('R', 3), 'h': ('R', 3), 'n': ('R', 3),
-    'u': ('R', 3), 'j': ('R', 3), 'm': ('R', 3),
-    'i': ('R', 2), 'k': ('R', 2), ',': ('R', 2),
-    'o': ('R', 1), 'l': ('R', 1), '.': ('R', 1),
-    'p': ('R', 0), ';': ('R', 0), '/': ('R', 0),
-    ' ': ('R', 4),
+    "q": ("L", 0),
+    "a": ("L", 0),
+    "z": ("L", 0),
+    "w": ("L", 1),
+    "s": ("L", 1),
+    "x": ("L", 1),
+    "e": ("L", 2),
+    "d": ("L", 2),
+    "c": ("L", 2),
+    "r": ("L", 3),
+    "f": ("L", 3),
+    "v": ("L", 3),
+    "t": ("L", 3),
+    "g": ("L", 3),
+    "b": ("L", 3),
+    "y": ("R", 3),
+    "h": ("R", 3),
+    "n": ("R", 3),
+    "u": ("R", 3),
+    "j": ("R", 3),
+    "m": ("R", 3),
+    "i": ("R", 2),
+    "k": ("R", 2),
+    ",": ("R", 2),
+    "o": ("R", 1),
+    "l": ("R", 1),
+    ".": ("R", 1),
+    "p": ("R", 0),
+    ";": ("R", 0),
+    "/": ("R", 0),
+    " ": ("R", 4),
 }
 
 
@@ -185,12 +211,32 @@ FINGER_MAP = {
 # and symbols are intentionally absent so that typo injection never corrupts
 # a password or a URL beyond a single-letter slip.
 KEYBOARD_NEIGHBOURS = {
-    'q': 'wa', 'w': 'qeas', 'e': 'wrsd', 'r': 'etdf', 't': 'ryfg',
-    'y': 'tugh', 'u': 'yihj', 'i': 'uojk', 'o': 'ipkl', 'p': 'ol',
-    'a': 'qwsz', 's': 'awedxz', 'd': 'serfcx', 'f': 'drtgvc',
-    'g': 'ftyhbv', 'h': 'gyujnb', 'j': 'huikmn', 'k': 'jiolm',
-    'l': 'kop', 'z': 'asx', 'x': 'zsdc', 'c': 'xdfv', 'v': 'cfgb',
-    'b': 'vghn', 'n': 'bhjm', 'm': 'njk',
+    "q": "wa",
+    "w": "qeas",
+    "e": "wrsd",
+    "r": "etdf",
+    "t": "ryfg",
+    "y": "tugh",
+    "u": "yihj",
+    "i": "uojk",
+    "o": "ipkl",
+    "p": "ol",
+    "a": "qwsz",
+    "s": "awedxz",
+    "d": "serfcx",
+    "f": "drtgvc",
+    "g": "ftyhbv",
+    "h": "gyujnb",
+    "j": "huikmn",
+    "k": "jiolm",
+    "l": "kop",
+    "z": "asx",
+    "x": "zsdc",
+    "c": "xdfv",
+    "v": "cfgb",
+    "b": "vghn",
+    "n": "bhjm",
+    "m": "njk",
 }
 
 #: Per-character probability of a typo when ``typos=True`` (design doc 05
@@ -235,8 +281,9 @@ class HumanTyping:
         :mod:`random` module, unchanged.
     """
 
-    def __init__(self, wpm: float = 52, *, typos: bool = False,
-                 typo_rate: float = TYPO_RATE, rng=None):
+    def __init__(
+        self, wpm: float = 52, *, typos: bool = False, typo_rate: float = TYPO_RATE, rng=None
+    ):
         self._base_iki = 60_000 / (wpm * 5)  # ms per character
         self._typos = typos
         self._typo_rate = typo_rate
@@ -262,12 +309,18 @@ class HumanTyping:
                 events.extend(self._triple(wrong, iki))
                 # Reaction time before the correction is longer than a normal
                 # inter-key interval: the typist has to see the mistake.
-                events.extend(self._triple(
-                    BACKSPACE_KEY, max(80.0, random.gauss(self._base_iki * 2.2, 60)),
-                ))
-                events.extend(self._triple(
-                    char, max(40.0, random.gauss(self._base_iki, self._base_iki * 0.2)),
-                ))
+                events.extend(
+                    self._triple(
+                        BACKSPACE_KEY,
+                        max(80.0, random.gauss(self._base_iki * 2.2, 60)),
+                    )
+                )
+                events.extend(
+                    self._triple(
+                        char,
+                        max(40.0, random.gauss(self._base_iki, self._base_iki * 0.2)),
+                    )
+                )
             else:
                 events.extend(self._triple(char, iki))
             prev_char = char
@@ -275,9 +328,9 @@ class HumanTyping:
 
     def _compute_iki(self, prev: str, curr: str) -> float:
         base = self._base_iki
-        if prev == ' ':
+        if prev == " ":
             base *= random.uniform(1.3, 2.0)
-        elif prev in '.!?,;:':
+        elif prev in ".!?,;:":
             base *= random.uniform(2.0, 4.0)
         prev_info = FINGER_MAP.get(prev.lower())
         curr_info = FINGER_MAP.get(curr.lower())
@@ -293,14 +346,12 @@ class HumanTyping:
 
     def _compute_dwell(self, char: str) -> float:
         base = random.gauss(116, 24)
-        if char == ' ':
+        if char == " ":
             base *= 1.15
         return max(40, base)
 
 
-def apply_key_rollover(
-    events: list[dict], *, threshold_ms: float = 80.0
-) -> list[dict]:
+def apply_key_rollover(events: list[dict], *, threshold_ms: float = 80.0) -> list[dict]:
     """Overlap keyDown[N+1] before keyUp[N] when flight time is short.
 
     Simulates real fast-typist key rollover (40-70% of typists exhibit this
@@ -341,10 +392,11 @@ def apply_key_rollover(
 # HumanScroll
 # ---------------------------------------------------------------------------
 
+
 class HumanScroll:
-    async def scroll_by(self, session, delta_y: float,
-                        mouse_x: float = 400, mouse_y: float = 300):
+    async def scroll_by(self, session, delta_y: float, mouse_x: float = 400, mouse_y: float = 300):
         import asyncio
+
         if abs(delta_y) < 10:
             return
         direction = 1 if delta_y > 0 else -1
@@ -355,10 +407,16 @@ class HumanScroll:
             remaining -= notch_delta
             mx = mouse_x + random.gauss(0, 3)
             my = mouse_y + random.gauss(0, 3)
-            await session.send("Input.dispatchMouseEvent", {
-                "type": "mouseWheel", "x": mx, "y": my,
-                "deltaX": 0, "deltaY": direction * notch_delta,
-            })
+            await session.send(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": "mouseWheel",
+                    "x": mx,
+                    "y": my,
+                    "deltaX": 0,
+                    "deltaY": direction * notch_delta,
+                },
+            )
             total_notches = int(abs(delta_y) / 100) + 1
             t = notch_count / max(1, total_notches - 1)
             if t < 0.2:
@@ -390,7 +448,7 @@ ACTION_TRANSITION_DELAYS = {
 # click, type -> type). Log-normal because human inter-action gaps are
 # right-skewed: most are short, a few are much longer. exp(MU) = 270ms
 # median, mean ~= 300ms.
-_LOGNORMAL_MU = 5.6       # ln(ms)
+_LOGNORMAL_MU = 5.6  # ln(ms)
 _LOGNORMAL_SIGMA = 0.35
 _LOGNORMAL_MAX_MS = 2000.0
 

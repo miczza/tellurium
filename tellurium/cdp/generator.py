@@ -3,19 +3,54 @@
 from __future__ import annotations
 
 import re
-import textwrap
 from typing import Any
 
 # Python builtins / keywords that need a trailing underscore when used as module names
 _PYTHON_RESERVED = frozenset(
     {
-        "False", "None", "True", "and", "as", "assert", "async", "await",
-        "break", "class", "continue", "def", "del", "elif", "else", "except",
-        "finally", "for", "from", "global", "if", "import", "in", "input",
-        "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return",
-        "try", "while", "with", "yield",
+        "False",
+        "None",
+        "True",
+        "and",
+        "as",
+        "assert",
+        "async",
+        "await",
+        "break",
+        "class",
+        "continue",
+        "def",
+        "del",
+        "elif",
+        "else",
+        "except",
+        "finally",
+        "for",
+        "from",
+        "global",
+        "if",
+        "import",
+        "in",
+        "input",
+        "is",
+        "lambda",
+        "nonlocal",
+        "not",
+        "or",
+        "pass",
+        "raise",
+        "return",
+        "try",
+        "while",
+        "with",
+        "yield",
         # also shadow builtins that would clash
-        "input", "type", "id", "list", "dict", "set", "object",
+        "type",
+        "id",
+        "list",
+        "dict",
+        "set",
+        "object",
     }
 )
 
@@ -80,7 +115,7 @@ class CDPGenerator:
         lines: list[str] = []
 
         # Module header
-        lines.append('"""Auto-generated CDP bindings for the {} domain."""'.format(domain_name))
+        lines.append(f'"""Auto-generated CDP bindings for the {domain_name} domain."""')
         lines.append("")
         lines.append("from __future__ import annotations")
         lines.append("")
@@ -137,14 +172,14 @@ class CDPGenerator:
             # Numeric aliases and enums: simple subclass
             python_base = self._PRIMITIVE_MAP.get(base_type, "Any")
             lines = [
-                "class {}({}):".format(type_id, python_base),
+                f"class {type_id}({python_base}):",
                 '    """CDP type alias."""',
                 "",
-                "    def to_json(self) -> {}:".format(python_base),
-                "        return {}(self)".format(python_base),
+                f"    def to_json(self) -> {python_base}:",
+                f"        return {python_base}(self)",
                 "",
                 "    @classmethod",
-                "    def from_json(cls, val: {}) -> {}:".format(python_base, type_id),
+                f"    def from_json(cls, val: {python_base}) -> {type_id}:",
                 "        return cls(val)",
             ]
             return lines
@@ -152,14 +187,14 @@ class CDPGenerator:
     def _generate_string_alias(self, type_id: str) -> list[str]:
         """Generate a string subclass type alias."""
         return [
-            "class {}(str):".format(type_id),
+            f"class {type_id}(str):",
             '    """CDP string type alias."""',
             "",
             "    def to_json(self) -> str:",
             "        return str(self)",
             "",
             "    @classmethod",
-            "    def from_json(cls, val: str) -> {}:".format(type_id),
+            f"    def from_json(cls, val: str) -> {type_id}:",
             "        return cls(val)",
         ]
 
@@ -170,19 +205,19 @@ class CDPGenerator:
         required = [p for p in properties if not p.get("optional")]
         optional = [p for p in properties if p.get("optional")]
 
-        lines = ["@dataclass", "class {}:".format(type_id)]
+        lines = ["@dataclass", f"class {type_id}:"]
 
         # Required fields
         for prop in required:
             py_type = self._resolve_type(domain, prop)
             snake = _to_snake(prop["name"])
-            lines.append("    {}: {}".format(snake, py_type))
+            lines.append(f"    {snake}: {py_type}")
 
         # Optional fields
         for prop in optional:
             py_type = self._resolve_type(domain, prop)
             snake = _to_snake(prop["name"])
-            lines.append("    {}: Optional[{}] = None".format(snake, py_type))
+            lines.append(f"    {snake}: Optional[{py_type}] = None")
 
         if not required and not optional:
             lines.append("    pass")
@@ -200,10 +235,10 @@ class CDPGenerator:
             )
         for prop in optional:
             snake = _to_snake(prop["name"])
-            lines.append("        if self.{} is not None:".format(snake))
+            lines.append(f"        if self.{snake} is not None:")
             lines.append(
                 "            d[{!r}] = {}".format(
-                    prop["name"], self._serialize_field(domain, prop, "self.{}".format(snake))
+                    prop["name"], self._serialize_field(domain, prop, f"self.{snake}")
                 )
             )
         lines.append("        return d")
@@ -211,23 +246,21 @@ class CDPGenerator:
         # from_json classmethod
         lines.append("")
         lines.append("    @classmethod")
-        lines.append(
-            "    def from_json(cls, data: T_JSON_DICT) -> {}:".format(type_id)
-        )
+        lines.append(f"    def from_json(cls, data: T_JSON_DICT) -> {type_id}:")
         args: list[str] = []
         for prop in required:
             snake = _to_snake(prop["name"])
-            expr = self._deserialize_field(domain, prop, 'data[{!r}]'.format(prop["name"]))
-            args.append("            {}={}".format(snake, expr))
+            expr = self._deserialize_field(domain, prop, "data[{!r}]".format(prop["name"]))
+            args.append(f"            {snake}={expr}")
         for prop in optional:
             snake = _to_snake(prop["name"])
-            expr = self._deserialize_field(
-                domain, prop, 'data.get({!r})'.format(prop["name"])
-            )
+            expr = self._deserialize_field(domain, prop, "data.get({!r})".format(prop["name"]))
             # Wrap optional in a conditional to keep None semantics
             args.append(
                 "            {}={} if {!r} in data else None".format(
-                    snake, self._deserialize_field(domain, prop, 'data[{!r}]'.format(prop["name"])), prop["name"]
+                    snake,
+                    self._deserialize_field(domain, prop, "data[{!r}]".format(prop["name"])),
+                    prop["name"],
                 )
             )
         if args:
@@ -249,7 +282,7 @@ class CDPGenerator:
         params = cmd.get("parameters") or []
         returns = cmd.get("returns") or []
 
-        result_class = "{}Result".format(_to_pascal(cmd_name))
+        result_class = f"{_to_pascal(cmd_name)}Result"
         has_result = bool(returns)
 
         lines: list[str] = []
@@ -274,31 +307,29 @@ class CDPGenerator:
 
         # Return type annotation
         if has_result:
-            ret_annotation = 'tuple[T_JSON_DICT, type["{}".format(result_class)]]'.format(
-                result_class
-            )
+            pass
         else:
-            ret_annotation = "tuple[T_JSON_DICT, None]"
+            pass
 
         sig = ", ".join(sig_parts[1:])  # drop leading empty
-        lines.append("def {}({}) -> tuple[T_JSON_DICT, {}]:".format(
-            snake_name,
-            sig,
-            "type[{}]".format(result_class) if has_result else "None",
-        ))
+        lines.append(
+            "def {}({}) -> tuple[T_JSON_DICT, {}]:".format(
+                snake_name,
+                sig,
+                f"type[{result_class}]" if has_result else "None",
+            )
+        )
 
         # Build params dict
         lines.append("    params: T_JSON_DICT = {}")
         for p in required_params:
             snake = _to_snake(p["name"])
             lines.append(
-                "    params[{!r}] = {}".format(
-                    p["name"], self._serialize_field(domain, p, snake)
-                )
+                "    params[{!r}] = {}".format(p["name"], self._serialize_field(domain, p, snake))
             )
         for p in optional_params:
             snake = _to_snake(p["name"])
-            lines.append("    if {} is not None:".format(snake))
+            lines.append(f"    if {snake} is not None:")
             lines.append(
                 "        params[{!r}] = {}".format(
                     p["name"], self._serialize_field(domain, p, snake)
@@ -306,12 +337,10 @@ class CDPGenerator:
             )
 
         lines.append(
-            '    cmd: T_JSON_DICT = {{"method": "{}.{}", "params": params}}'.format(
-                domain, cmd_name
-            )
+            f'    cmd: T_JSON_DICT = {{"method": "{domain}.{cmd_name}", "params": params}}'
         )
         if has_result:
-            lines.append("    return cmd, {}".format(result_class))
+            lines.append(f"    return cmd, {result_class}")
         else:
             lines.append("    return cmd, None")
         return lines
@@ -323,17 +352,17 @@ class CDPGenerator:
         required = [r for r in returns if not r.get("optional")]
         optional = [r for r in returns if r.get("optional")]
 
-        lines = ["@dataclass", "class {}:".format(class_name)]
+        lines = ["@dataclass", f"class {class_name}:"]
 
         for prop in required:
             py_type = self._resolve_type(domain, prop)
             snake = _to_snake(prop["name"])
-            lines.append("    {}: {}".format(snake, py_type))
+            lines.append(f"    {snake}: {py_type}")
 
         for prop in optional:
             py_type = self._resolve_type(domain, prop)
             snake = _to_snake(prop["name"])
-            lines.append("    {}: Optional[{}] = None".format(snake, py_type))
+            lines.append(f"    {snake}: Optional[{py_type}] = None")
 
         if not required and not optional:
             lines.append("    pass")
@@ -341,18 +370,18 @@ class CDPGenerator:
         # from_json classmethod
         lines.append("")
         lines.append("    @classmethod")
-        lines.append("    def from_json(cls, data: T_JSON_DICT) -> {}:".format(class_name))
+        lines.append(f"    def from_json(cls, data: T_JSON_DICT) -> {class_name}:")
         args: list[str] = []
         for prop in required:
             snake = _to_snake(prop["name"])
-            expr = self._deserialize_field(domain, prop, 'data[{!r}]'.format(prop["name"]))
-            args.append("            {}={}".format(snake, expr))
+            expr = self._deserialize_field(domain, prop, "data[{!r}]".format(prop["name"]))
+            args.append(f"            {snake}={expr}")
         for prop in optional:
             snake = _to_snake(prop["name"])
             args.append(
                 "            {}={} if {!r} in data else None".format(
                     snake,
-                    self._deserialize_field(domain, prop, 'data[{!r}]'.format(prop["name"])),
+                    self._deserialize_field(domain, prop, "data[{!r}]".format(prop["name"])),
                     prop["name"],
                 )
             )
@@ -377,36 +406,36 @@ class CDPGenerator:
         required = [p for p in params if not p.get("optional")]
         optional = [p for p in params if p.get("optional")]
 
-        lines = ["@dataclass", "class {}:".format(class_name)]
-        lines.append('    EVENT_NAME: str = field(init=False, repr=False, default="{}.{}")'.format(
-            domain, event_name
-        ))
+        lines = ["@dataclass", f"class {class_name}:"]
+        lines.append(
+            f'    EVENT_NAME: str = field(init=False, repr=False, default="{domain}.{event_name}")'
+        )
 
         for prop in required:
             py_type = self._resolve_type(domain, prop)
             snake = _to_snake(prop["name"])
-            lines.append("    {}: {}".format(snake, py_type))
+            lines.append(f"    {snake}: {py_type}")
 
         for prop in optional:
             py_type = self._resolve_type(domain, prop)
             snake = _to_snake(prop["name"])
-            lines.append("    {}: Optional[{}] = None".format(snake, py_type))
+            lines.append(f"    {snake}: Optional[{py_type}] = None")
 
         # from_json classmethod
         lines.append("")
         lines.append("    @classmethod")
-        lines.append("    def from_json(cls, data: T_JSON_DICT) -> {}:".format(class_name))
+        lines.append(f"    def from_json(cls, data: T_JSON_DICT) -> {class_name}:")
         args: list[str] = []
         for prop in required:
             snake = _to_snake(prop["name"])
-            expr = self._deserialize_field(domain, prop, 'data[{!r}]'.format(prop["name"]))
-            args.append("            {}={}".format(snake, expr))
+            expr = self._deserialize_field(domain, prop, "data[{!r}]".format(prop["name"]))
+            args.append(f"            {snake}={expr}")
         for prop in optional:
             snake = _to_snake(prop["name"])
             args.append(
                 "            {}={} if {!r} in data else None".format(
                     snake,
-                    self._deserialize_field(domain, prop, 'data[{!r}]'.format(prop["name"])),
+                    self._deserialize_field(domain, prop, "data[{!r}]".format(prop["name"])),
                     prop["name"],
                 )
             )
@@ -459,38 +488,34 @@ class CDPGenerator:
                 item_type = items["$ref"].split(".")[-1]
             else:
                 item_type = self._PRIMITIVE_MAP.get(items.get("type", "any"), "Any")
-            return "list[{}]".format(item_type)
+            return f"list[{item_type}]"
 
         return self._PRIMITIVE_MAP.get(cdp_type, "Any")
 
-    def _serialize_field(
-        self, domain: str, prop: dict[str, Any], var: str
-    ) -> str:
+    def _serialize_field(self, domain: str, prop: dict[str, Any], var: str) -> str:
         """Return Python expression that serialises `var` (a field value) to JSON-safe form."""
         if "$ref" in prop:
             # String aliases and dataclasses both have .to_json()
-            return "{}.to_json()".format(var)
+            return f"{var}.to_json()"
 
         cdp_type = prop.get("type", "any")
 
         if cdp_type == "array":
             items = prop.get("items", {})
             if "$ref" in items:
-                return "[i.to_json() for i in {}]".format(var)
+                return f"[i.to_json() for i in {var}]"
             # Primitive arrays pass through
-            return "list({})".format(var)
+            return f"list({var})"
 
         # Primitives pass through as-is
         return var
 
-    def _deserialize_field(
-        self, domain: str, prop: dict[str, Any], expr: str
-    ) -> str:
+    def _deserialize_field(self, domain: str, prop: dict[str, Any], expr: str) -> str:
         """Return Python expression that deserialises `expr` (a raw JSON value)."""
         if "$ref" in prop:
             ref = prop["$ref"]
             class_name = ref.split(".")[-1]
-            return "{}.from_json({})".format(class_name, expr)
+            return f"{class_name}.from_json({expr})"
 
         cdp_type = prop.get("type", "any")
 
@@ -498,16 +523,16 @@ class CDPGenerator:
             items = prop.get("items", {})
             if "$ref" in items:
                 item_class = items["$ref"].split(".")[-1]
-                return "[{}.from_json(i) for i in {}]".format(item_class, expr)
+                return f"[{item_class}.from_json(i) for i in {expr}]"
             # Primitive arrays
             item_py = self._PRIMITIVE_MAP.get(items.get("type", "any"), "Any")
             if item_py in ("str", "int", "float", "bool"):
-                return "[{}(i) for i in {}]".format(item_py, expr)
-            return "list({})".format(expr)
+                return f"[{item_py}(i) for i in {expr}]"
+            return f"list({expr})"
 
         # Cast primitives explicitly for safety
         py_type = self._PRIMITIVE_MAP.get(cdp_type, "Any")
         if py_type in ("str", "int", "float", "bool"):
-            return "{}({})".format(py_type, expr)
+            return f"{py_type}({expr})"
 
         return expr

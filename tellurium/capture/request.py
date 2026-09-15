@@ -1,5 +1,7 @@
 """Captured network request with on-demand body retrieval."""
+
 from __future__ import annotations
+
 import fnmatch
 import json as json_module
 from dataclasses import dataclass, field
@@ -25,9 +27,12 @@ class CapturedRequest:
     async def body(self) -> str:
         """Get response body (fetched on first call, cached)."""
         if self._body_cache is None:
-            result = await self._session.send("Network.getResponseBody", {
-                "requestId": self._request_id,
-            })
+            result = await self._session.send(
+                "Network.getResponseBody",
+                {
+                    "requestId": self._request_id,
+                },
+            )
             self._body_cache = result.get("body", "")
         return self._body_cache
 

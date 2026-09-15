@@ -11,7 +11,9 @@ also consumes it via the {{WEBRTC_PUBLIC_IP}} placeholder.
 Note: in stock mode, webrtc.js rewrites only IPv4 candidates; an IPv6
 SPOOF_IP only takes effect via the native patch (PatchedEngine).
 """
+
 from __future__ import annotations
+
 import ipaddress
 import socket
 from urllib.parse import urlparse

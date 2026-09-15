@@ -12,18 +12,19 @@ Usage:
     python run_all_tests.py [--quick-only] [--chrome PATH]
 """
 
-import asyncio
 import argparse
+import asyncio
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from tellurium import Browser
-from test_fingerprint_sites import run_tests as run_site_tests, validate_results
+from test_fingerprint_sites import run_tests as run_site_tests
+from test_fingerprint_sites import validate_results
 
+from tellurium import Browser
 
 CHROMIUM_TELLURIDE_PATH = "/home/miczza/PycharmProjects/chromium-telluride/src/out/Release/chrome"
 SEED_A = 42069
@@ -152,18 +153,13 @@ async def collect_fingerprint(seed: int, chrome_path: str) -> dict:
 async def test_stability(chrome_path: str) -> dict:
     """Test that same seed produces same fingerprint."""
     print("\n[1/3] STABILITY TEST")
-    print("="*50)
+    print("=" * 50)
     print(f"Running seed {SEED_A} twice...")
 
     fp1 = await collect_fingerprint(SEED_A, chrome_path)
     fp2 = await collect_fingerprint(SEED_A, chrome_path)
 
-    result = {
-        "test": "stability",
-        "seed": SEED_A,
-        "pass": True,
-        "details": {}
-    }
+    result = {"test": "stability", "seed": SEED_A, "pass": True, "details": {}}
 
     checks = ["canvas_hash", "audio", "text_width", "rect_width"]
     for key in checks:
@@ -172,7 +168,7 @@ async def test_stability(chrome_path: str) -> dict:
         result["details"][key] = {
             "run1": str(v1)[:32] if isinstance(v1, str) and len(str(v1)) > 32 else v1,
             "run2": str(v2)[:32] if isinstance(v2, str) and len(str(v2)) > 32 else v2,
-            "match": match
+            "match": match,
         }
         if not match:
             result["pass"] = False
@@ -187,19 +183,13 @@ async def test_stability(chrome_path: str) -> dict:
 async def test_variation(chrome_path: str) -> dict:
     """Test that different seeds produce different fingerprints."""
     print("\n[2/3] VARIATION TEST")
-    print("="*50)
+    print("=" * 50)
     print(f"Comparing seed {SEED_A} vs {SEED_B}...")
 
     fp1 = await collect_fingerprint(SEED_A, chrome_path)
     fp2 = await collect_fingerprint(SEED_B, chrome_path)
 
-    result = {
-        "test": "variation",
-        "seed1": SEED_A,
-        "seed2": SEED_B,
-        "pass": True,
-        "details": {}
-    }
+    result = {"test": "variation", "seed1": SEED_A, "seed2": SEED_B, "pass": True, "details": {}}
 
     checks = ["canvas_hash", "audio", "text_width"]
     for key in checks:
@@ -208,7 +198,7 @@ async def test_variation(chrome_path: str) -> dict:
         result["details"][key] = {
             "seed1": str(v1)[:32] if isinstance(v1, str) and len(str(v1)) > 32 else v1,
             "seed2": str(v2)[:32] if isinstance(v2, str) and len(str(v2)) > 32 else v2,
-            "differs": differs
+            "differs": differs,
         }
         if not differs:
             result["pass"] = False
@@ -223,7 +213,7 @@ async def test_variation(chrome_path: str) -> dict:
 async def test_live_sites(chrome_path: str) -> dict:
     """Test against real fingerprinting sites."""
     print("\n[3/3] LIVE SITE TESTS")
-    print("="*50)
+    print("=" * 50)
 
     results = await run_site_tests(SEED_A, chrome_path)
     critical, warnings = validate_results(results)
@@ -257,18 +247,14 @@ async def main():
     parser.add_argument("--chrome", type=str, default=CHROMIUM_TELLURIDE_PATH, help="Chrome path")
     args = parser.parse_args()
 
-    print("="*60)
+    print("=" * 60)
     print("CHROMIUM-TELLURIDE FINGERPRINT TEST SUITE")
-    print("="*60)
+    print("=" * 60)
     print(f"Chrome: {args.chrome}")
     print(f"Seeds: {SEED_A}, {SEED_B}")
     print(f"Started: {datetime.now().isoformat()}")
 
-    results = {
-        "timestamp": datetime.now().isoformat(),
-        "chrome_path": args.chrome,
-        "tests": []
-    }
+    results = {"timestamp": datetime.now().isoformat(), "chrome_path": args.chrome, "tests": []}
 
     # Run tests
     stability = await test_stability(args.chrome)
@@ -282,9 +268,9 @@ async def main():
         results["tests"].append(live)
 
     # Summary
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("SUMMARY")
-    print("="*60)
+    print("=" * 60)
 
     all_pass = all(t.get("pass", True) for t in results["tests"])
 

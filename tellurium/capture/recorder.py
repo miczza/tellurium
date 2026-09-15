@@ -1,7 +1,10 @@
 """Recording mode — capture and export network sessions."""
+
 from __future__ import annotations
+
 import json
 from datetime import datetime, timezone
+
 from tellurium.capture.manager import CaptureManager
 
 
@@ -30,15 +33,18 @@ class Recorder:
         return RecordingSession(
             created_at=self._start_time.isoformat(),
             duration_seconds=(datetime.now(timezone.utc) - self._start_time).total_seconds(),
-            requests=[{
-                "method": r.method,
-                "url": r.url,
-                "status": r.status,
-                "request_headers": dict(r.request_headers),
-                "response_headers": dict(r.headers),
-                "size": r.size,
-                "content_type": r.content_type,
-            } for r in requests],
+            requests=[
+                {
+                    "method": r.method,
+                    "url": r.url,
+                    "status": r.status,
+                    "request_headers": dict(r.request_headers),
+                    "response_headers": dict(r.headers),
+                    "size": r.size,
+                    "content_type": r.content_type,
+                }
+                for r in requests
+            ],
             cookies_at_export=cookies,
         )
 

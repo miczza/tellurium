@@ -1,4 +1,3 @@
-import json
 from tellurium.cdp.generator import CDPGenerator
 
 MINI_PROTOCOL = {
@@ -78,7 +77,7 @@ def test_generated_code_contains_events():
     gen = CDPGenerator(MINI_PROTOCOL)
     source = gen.generate_domain("Page")
     assert "class LoadEventFired:" in source
-    assert 'EVENT_NAME' in source
+    assert "EVENT_NAME" in source
     assert '"Page.loadEventFired"' in source
 
 
