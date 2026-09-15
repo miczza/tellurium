@@ -43,6 +43,12 @@ def main():
     dl_parser.add_argument("--version", default=None,
                            help="Chromium version to download (default: latest release)")
 
+    # download-geoip
+    geo_parser = sub.add_parser("download-geoip",
+                                help="Download a GeoIP country database for proxy locale detection")
+    geo_parser.add_argument("--maxmind-license-key", default=None,
+                            help="Use MaxMind GeoLite2-Country instead of DB-IP Lite")
+
     # stealth-test
     st_parser = sub.add_parser("stealth-test", help="Test stealth against detection sites")
     st_parser.add_argument("--browser", default="stock", choices=["stock", "patched"])
@@ -75,6 +81,8 @@ def main():
         _update_cdp(args.chrome_version)
     elif args.command == "download-browser":
         asyncio.run(_download_browser(args.browser, args.version))
+    elif args.command == "download-geoip":
+        _download_geoip(args.maxmind_license_key)
     elif args.command == "stealth-test":
         asyncio.run(_stealth_test(args.browser, args.full, args.headed))
     elif args.command == "info":
@@ -211,6 +219,16 @@ async def _download_browser(browser_type: str, version: str | None = None) -> No
             sys.exit(1)
 
 
+def _download_geoip(license_key: str | None) -> None:
+    from tellurium.stealth.geoip import download_geoip_db
+    try:
+        path = download_geoip_db(maxmind_license_key=license_key)
+    except Exception as e:  # noqa: BLE001 - CLI boundary
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    print(f"GeoIP database installed: {path}")
+
+
 async def _stealth_test(browser_type: str, full: bool, headed: bool = False) -> None:
     """Run stealth checks: local invariants, plus live detection sites with --full."""
     from tellurium import Browser
@@ -299,7 +317,12 @@ def _show_info() -> None:
 
     try:
         import maxminddb  # noqa: F401
-        print("  GeoIP:           installed (maxminddb)")
+        from tellurium.stealth.geoip import _ensure_geolite2_db
+        try:
+            print(f"  GeoIP:           {_ensure_geolite2_db()}")
+        except FileNotFoundError:
+            print("  GeoIP:           maxminddb installed, no database "
+                  "(tellurium download-geoip)")
     except ImportError:
         print("  GeoIP:           not installed (pip install tellurium[geoip])")
 

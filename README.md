@@ -30,7 +30,14 @@ Optional GeoIP support (auto-detect timezone/locale from proxy exit IP):
 pip install tellurium[geoip]
 ```
 
-The GeoIP module requires a MaxMind GeoLite2-Country database file at `~/.tellurium/geolite2/GeoLite2-Country.mmdb`. Download it from [MaxMind](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data) (free account required).
+Then fetch a country database once (offline lookups):
+
+```bash
+tellurium download-geoip                                 # DB-IP Country Lite, no account
+tellurium download-geoip --maxmind-license-key KEY       # MaxMind GeoLite2-Country
+```
+
+The database lives in `~/.tellurium/geolite2/` (override with `TELLURIUM_GEOIP_DB`). Without a database tellurium falls back to a one-shot online IP-to-country lookup and logs a warning.
 
 ## Quick Start
 
@@ -752,7 +759,7 @@ Browser.launch(stealth=True, proxy="socks5://user:pass@de:1080")
 **Fallback behavior:**
 - If `tellurium[geoip]` is not installed: logs a warning, uses OS timezone/locale
 - If the IP-echo services are unreachable: falls back to DNS resolution of the proxy hostname
-- If the GeoLite2 database is missing: raises `FileNotFoundError` with instructions
+- If no local database is installed: one online IP-to-country lookup (warning logged); run `tellurium download-geoip` for offline resolution
 - Manual override always takes precedence: `Browser.launch(timezone="Europe/Berlin", languages=["de-DE"])`
 
 **SOCKS5 without auth (no forwarder):** `urllib` does not support SOCKS natively, so the exit IP cannot be determined via HTTP. Falls back to DNS resolution of the proxy hostname. For best results, use proxies with auth or HTTP proxies.

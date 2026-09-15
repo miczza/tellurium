@@ -65,10 +65,34 @@ def test_all_languages_lists_end_with_en():
 # ---------------------------------------------------------------------------
 
 def test_resolve_geoip_missing_maxminddb():
-    """Should raise ImportError when maxminddb is not installed."""
+    """Without maxminddb and with the online fallback disabled -> ImportError."""
     with patch.dict("sys.modules", {"maxminddb": None}):
         with pytest.raises(ImportError, match="maxminddb"):
-            resolve_geoip("8.8.8.8")
+            resolve_geoip("8.8.8.8", online_fallback=False)
+
+
+def test_resolve_geoip_online_fallback_without_db(monkeypatch):
+    """No maxminddb: fall back to an online country lookup."""
+    monkeypatch.setattr("tellurium.stealth.geoip._online_country", lambda ip, timeout=5: "DE")
+    with patch.dict("sys.modules", {"maxminddb": None}):
+        geo = resolve_geoip("8.8.8.8")
+    assert geo.country == "DE" and geo.timezone == "Europe/Berlin"
+
+
+def test_online_country_parses_text_and_json(monkeypatch):
+    from tellurium.stealth import geoip
+    bodies = iter([b"  it\n"])
+
+    class R:
+        def __init__(self, b): self.b = b
+        def read(self): return self.b
+        def __enter__(self): return self
+        def __exit__(self, *a): return None
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=5: R(next(bodies)))
+    assert geoip._online_country("1.1.1.1") == "IT"
+    bodies = iter([b'{"ip":"1.1.1.1","country":"fr"}'])
+    assert geoip._online_country("1.1.1.1") == "FR"
 
 
 def test_resolve_geoip_success():
@@ -226,16 +250,48 @@ def test_resolve_exit_ip_tries_next_service_on_failure():
 # _ensure_geolite2_db
 # ---------------------------------------------------------------------------
 
-def test_ensure_geolite2_db_not_found():
-    """Should raise FileNotFoundError when database doesn't exist."""
-    with patch("pathlib.Path.exists", return_value=False):
-        with pytest.raises(FileNotFoundError, match="GeoLite2 database not found"):
-            _ensure_geolite2_db()
+def test_ensure_geolite2_db_not_found(tmp_path, monkeypatch):
+    monkeypatch.delenv("TELLURIUM_GEOIP_DB", raising=False)
+    monkeypatch.setattr("tellurium.stealth.geoip._geoip_dir", lambda: tmp_path)
+    with pytest.raises(FileNotFoundError, match="download-geoip"):
+        _ensure_geolite2_db()
 
 
-def test_ensure_geolite2_db_found():
-    """Should return path when database exists."""
-    with patch("pathlib.Path.exists", return_value=True):
-        result = _ensure_geolite2_db()
-        assert "GeoLite2-Country.mmdb" in result
-        assert ".tellurium" in result
+def test_ensure_geolite2_db_found(tmp_path, monkeypatch):
+    monkeypatch.delenv("TELLURIUM_GEOIP_DB", raising=False)
+    monkeypatch.setattr("tellurium.stealth.geoip._geoip_dir", lambda: tmp_path)
+    (tmp_path / "dbip-country-lite.mmdb").write_bytes(b"x")
+    assert _ensure_geolite2_db().endswith("dbip-country-lite.mmdb")
+    (tmp_path / "GeoLite2-Country.mmdb").write_bytes(b"x")
+    assert _ensure_geolite2_db().endswith("GeoLite2-Country.mmdb")
+
+
+def test_ensure_geolite2_db_env_override(tmp_path, monkeypatch):
+    db = tmp_path / "custom.mmdb"
+    db.write_bytes(b"x")
+    monkeypatch.setenv("TELLURIUM_GEOIP_DB", str(db))
+    assert _ensure_geolite2_db() == str(db)
+
+
+def test_download_geoip_db_dbip(tmp_path, monkeypatch):
+    import gzip
+    import urllib.error
+    from tellurium.stealth.geoip import download_geoip_db
+    seen = []
+
+    class R:
+        def read(self): return gzip.compress(b"MMDB")
+        def __enter__(self): return self
+        def __exit__(self, *a): return None
+
+    def urlopen(url, timeout=60):
+        seen.append(url)
+        if len(seen) == 1:  # current month not published yet -> 404
+            raise urllib.error.HTTPError(url, 404, "nf", {}, None)
+        return R()
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    path = download_geoip_db(dest_dir=tmp_path)
+    assert path.endswith("dbip-country-lite.mmdb")
+    assert (tmp_path / "dbip-country-lite.mmdb").read_bytes() == b"MMDB"
+    assert len(seen) == 2 and "download.db-ip.com" in seen[0]
