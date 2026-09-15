@@ -28,6 +28,10 @@ class StealthEngine:
         self._headless = headless
         self._has_proxy = has_proxy
         self._extension_dir: str | None = None
+        # Auto-attach is armed on the root session *and* on every page
+        # session; guard against patching the same target twice should both
+        # ever deliver the same sessionId.
+        self._patched_sessions: set[str] = set()
 
     def build_extension(self) -> str | None:
         """Build the stealth Chrome extension. Returns path or None if not needed."""
@@ -47,9 +51,8 @@ class StealthEngine:
         if "native_navigator" not in self._caps:
             await self._set_ua_override(session)
 
-        if "native_client_hints" not in self._caps:
-            # Already included in _set_ua_override via userAgentMetadata
-            pass
+        # Note: client hints are already covered by _set_ua_override()
+        # (userAgentMetadata), so "native_client_hints" needs no branch here.
 
         # Timezone and locale (always, even for patched — CDP is the authority here)
         await session.send("Emulation.setTimezoneOverride", {
@@ -66,16 +69,24 @@ class StealthEngine:
 
         # Headless fixes (always, both backends)
         if self._headless:
-            await self._apply_headless_fixes(session)
+            await self._apply_headless_fixes(session, is_oopif=is_oopif)
 
-    async def setup_auto_attach(self, root_session) -> None:
+    async def setup_auto_attach(self, session) -> None:
         """Configure auto-attach for OOPIF and Worker stealth patching.
 
-        ``waitForDebuggerOnStart=False`` avoids interfering with explicit
-        ``Target.attachToTarget`` calls (e.g. from ``new_tab``); the
-        stealth extension's content-scripts (``document_start``,
-        ``all_frames``) handle JS-level patches, and CDP emulation
-        settings propagate automatically.
+        T7.7 (design doc 04 §P1.1/§P1.2): ``waitForDebuggerOnStart=True``
+        so that a cross-origin iframe / worker target is *frozen* before it
+        runs a single line of JS. ``_patch_and_resume`` injects the stealth
+        overrides and only then sends ``Runtime.runIfWaitingForDebugger``,
+        so an anti-bot running inside the OOPIF or worker never observes an
+        unpatched value.
+
+        Must be called on **every page session**, not just the browser-root
+        one: empirically (Chrome 153) a browser-level ``Target.setAutoAttach``
+        never fires ``Target.attachedToTarget`` for a page's OOPIFs or for a
+        page's dedicated workers — only page-session auto-attach does. The
+        root session is still wired so browser-scoped service workers are
+        covered.
 
         The ``filter`` restricts auto-attach to target types that we
         actually patch (iframe, worker, service_worker, shared_worker).
@@ -83,44 +94,80 @@ class StealthEngine:
         type including 'page' (double injection) and 'browser'
         (deadlock on Runtime.runIfWaitingForDebugger). Design doc 04 §P1.2.
         """
-        await root_session.send("Target.setAutoAttach", {
+        await session.send("Target.setAutoAttach", {
             "autoAttach": True,
-            "waitForDebuggerOnStart": False,
+            "waitForDebuggerOnStart": True,
             "flatten": True,
             "filter": _STEALTH_TARGET_FILTER,
         })
+
+    async def wire_session(self, session) -> None:
+        """Register the auto-attach listener on *session* and enable it.
+
+        Convenience used by ``Browser.launch`` (root + initial tab) and
+        ``Browser.new_tab``. Registering the handler *before* sending
+        ``Target.setAutoAttach`` avoids missing a target that attaches
+        while the command is in flight.
+        """
+        session.on("Target.attachedToTarget", self._on_target_attached)
+        await self.setup_auto_attach(session)
 
     def _on_target_attached(self, params: dict) -> None:
         target_info = params.get("targetInfo", {})
         session_id = params.get("sessionId")
         target_type = target_info.get("type", "")
+        target_url = target_info.get("url", "") or ""
 
         # Ensure the router knows about this auto-attached session
         self._ensure_session(session_id)
 
+        if session_id in self._patched_sessions:
+            return
+        self._patched_sessions.add(session_id)
+
+        loop = asyncio.get_running_loop()
         if "native_fingerprint" in self._caps:
             # Patched: resume immediately
-            asyncio.get_event_loop().create_task(
-                self._resume_target(session_id)
-            )
+            loop.create_task(self._resume_target(session_id))
         else:
             # Stock: patch then resume
-            asyncio.get_event_loop().create_task(
-                self._patch_and_resume(session_id, target_type)
+            loop.create_task(
+                self._patch_and_resume(session_id, target_type, target_url)
             )
 
-    async def _patch_and_resume(self, session_id: str, target_type: str) -> None:
-        """Inject stealth into new OOPIF/Worker, then resume."""
+    async def _patch_and_resume(
+        self, session_id: str, target_type: str, target_url: str = "",
+    ) -> None:
+        """Inject stealth into a frozen OOPIF/Worker target, then resume.
+
+        The target is paused (``waitForDebuggerOnStart``), so the resume
+        lives in a ``finally``: a failed injection must never leave an
+        iframe or worker frozen forever.
+        """
+        session = self._get_session(session_id)
         try:
-            session = self._get_session(session_id)
             if target_type == "iframe":
+                # T7.7: Page.enable is mandatory on a fresh OOPIF session.
+                # Without it Chrome accepts
+                # Page.addScriptToEvaluateOnNewDocument but does not run the
+                # script at document-start — verified empirically: the OOPIF's
+                # own inline <script> still observed navigator.webdriver ===
+                # true, and our source only landed afterwards (runImmediately).
+                await session.send("Page.enable", {})
                 await self.apply_to_session(session, is_oopif=True)
                 # T7: also push runtime JS overrides into the OOPIF.
                 await self.apply_page_scripts(session)
-            # Resume execution
-            await session.send("Runtime.runIfWaitingForDebugger", {})
+            elif target_type in ("worker", "service_worker", "shared_worker"):
+                await self.apply_worker_scripts(session, target_url)
         except Exception:
             logger.debug("Failed to patch target %s", session_id, exc_info=True)
+        finally:
+            try:
+                await session.send(
+                    "Runtime.runIfWaitingForDebugger", {}, timeout=10.0,
+                )
+            except Exception:
+                logger.debug("Failed to resume target %s", session_id, exc_info=True)
 
     async def _resume_target(self, session_id: str) -> None:
         try:
@@ -223,6 +270,45 @@ class StealthEngine:
                 "runImmediately": True,   # apply even if a document already exists
             })
 
+    def _build_worker_scripts(self) -> list[str]:
+        """JS overrides for worker scope (design doc 04 §P1.2).
+
+        Only the window/worker *mismatch* vectors are patched. In
+        particular ``navigator.webdriver`` is intentionally NOT defined:
+        empirically (Chrome 153) ``WorkerNavigator`` has no ``webdriver``
+        property at all, so defining one would be a new fingerprint, not a
+        fix. See ``worker_navigator.js`` for the full rationale and the
+        T7.6 design doc "Out of Scope" note on candidate F6.
+        """
+        if "native_navigator" in self._caps:
+            return []
+        return [
+            load_script("worker_navigator.js", {
+                "HARDWARE_CONCURRENCY": self._profile.hardware_concurrency,
+            }),
+        ]
+
+    async def apply_worker_scripts(self, session, target_url: str = "") -> None:
+        """Inject worker-scope overrides via ``Runtime.evaluate``.
+
+        Workers have no ``Page`` domain, so
+        ``Page.addScriptToEvaluateOnNewDocument`` is unavailable; the target
+        is frozen by ``waitForDebuggerOnStart`` instead, which makes a plain
+        ``Runtime.evaluate`` land before the worker script runs.
+
+        ``Runtime.enable`` is never called (architectural guard in
+        ``tellurium/cdp/transport/_session.py``).
+        """
+        if target_url.startswith(("chrome-extension://", "chrome://", "devtools://")):
+            # Browser-internal / extension workers: not page-visible, leave
+            # them untouched (still resumed by the caller's finally).
+            return
+        for source in self._build_worker_scripts():
+            await session.send("Runtime.evaluate", {
+                "expression": source,
+                "returnByValue": True,
+            }, timeout=10.0)
+
     async def _set_ua_override(self, session) -> None:
         """Set User-Agent and Client Hints via CDP."""
         p = self._profile
@@ -259,18 +345,27 @@ class StealthEngine:
             },
         })
 
-    async def _apply_headless_fixes(self, session) -> None:
-        """Apply headless-specific CDP fixes."""
+    async def _apply_headless_fixes(self, session, is_oopif: bool = False) -> None:
+        """Apply headless-specific CDP fixes.
+
+        T7.7: ``Emulation.setDeviceMetricsOverride`` is rejected by Chrome on
+        subframe targets ("Command can only be executed on top-level
+        targets"). Sending it to an OOPIF raised a CDPError that aborted
+        ``apply_to_session`` *before* ``apply_page_scripts`` ever ran, which
+        is why OOPIFs kept reporting ``navigator.webdriver === true``. The
+        override is inherited from the top-level frame anyway.
+        """
         p = self._profile
         await session.send("Emulation.setFocusEmulationEnabled", {"enabled": True})
-        await session.send("Emulation.setDeviceMetricsOverride", {
-            "width": p.screen_width,
-            "height": p.screen_avail_height,
-            "deviceScaleFactor": p.device_pixel_ratio,
-            "mobile": False,
-            "screenWidth": p.screen_width,
-            "screenHeight": p.screen_height,
-        })
+        if not is_oopif:
+            await session.send("Emulation.setDeviceMetricsOverride", {
+                "width": p.screen_width,
+                "height": p.screen_avail_height,
+                "deviceScaleFactor": p.device_pixel_ratio,
+                "mobile": False,
+                "screenWidth": p.screen_width,
+                "screenHeight": p.screen_height,
+            })
         await session.send("Emulation.setEmulatedMedia", {
             "features": [
                 {"name": "prefers-color-scheme", "value": "light"},

@@ -247,7 +247,7 @@ class Element:
         tx, ty = await target._center()
 
         await self._tab.mouse_move(sx, sy)
-        await self._session.send("Input.dispatchMouseEvent", {
+        await self._tab._dispatch_mouse({
             "type": "mousePressed", "x": sx, "y": sy, "button": "left", "clickCount": 1,
         })
         for i in range(1, steps + 1):
@@ -256,7 +256,7 @@ class Element:
             my = sy + (ty - sy) * frac
             await self._tab.mouse_move(mx, my)
             await asyncio.sleep(0.01)
-        await self._session.send("Input.dispatchMouseEvent", {
+        await self._tab._dispatch_mouse({
             "type": "mouseReleased", "x": tx, "y": ty, "button": "left", "clickCount": 1,
         })
 

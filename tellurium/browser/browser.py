@@ -52,6 +52,7 @@ class Browser:
         self._user_data_dir: str | None = None
         self._stealth_engine = None
         self._stealth_profile = None
+        self._stealth_idle = False
 
     # ------------------------------------------------------------------
     # Launch
@@ -68,6 +69,7 @@ class Browser:
         args: list[str] | None = None,
         proxy: str | None = None,
         stealth: bool = False,
+        stealth_idle: bool = False,
         seed: int | None = None,
         extensions: list[str] | None = None,
         chromium_version: str | None = None,
@@ -96,6 +98,10 @@ class Browser:
             automatically so Chrome only sees ``localhost:<port>``.
         stealth:
             Enable stealth heuristics (engine-level).
+        stealth_idle:
+            Fill ``Tab.wait()`` with human-like idle activity (occasional
+            low-amplitude mouse micro-movements) instead of sleeping with a
+            perfectly still cursor.  Design doc 05 "Idle Simulation".
         seed:
             Fingerprint seed for the patched engine.
         extensions:
@@ -106,6 +112,7 @@ class Browser:
             Chrome branded >= 137 is used (use Chrome for Testing instead).
         """
         self = cls()
+        self._stealth_idle = stealth_idle
 
         # 0. Validate extension paths up-front (before any async work)
         validate_extension_paths(extensions or [])
@@ -326,7 +333,8 @@ class Browser:
 
         if page_target:
             session = await self._router.attach(page_target["targetId"])
-            tab = Tab(session, self, page_target["targetId"])
+            tab = Tab(session, self, page_target["targetId"],
+                      stealth_idle=stealth_idle)
             tab._url = page_target.get("url", "")
             self._tabs.append(tab)
             self._main_tab = tab
@@ -339,16 +347,19 @@ class Browser:
                 # --load-extension is silently rejected.
                 await stealth_engine.apply_page_scripts(session)
 
-        # 14. Setup auto-attach for OOPIF CDP patching (T7, closes TODO).
+        # 14. Setup auto-attach for OOPIF / worker CDP patching (T7, T7.7).
         # _STEALTH_TARGET_FILTER excludes 'page', so explicit attachToTarget
         # from new_tab() is unaffected. Iframes/workers trigger the listener
         # which routes to _on_target_attached -> _patch_and_resume.
+        #
+        # T7.7: auto-attach must be armed on the *page* session too — a
+        # browser-root-only setAutoAttach never fires for a page's OOPIFs or
+        # dedicated workers (verified empirically on Chrome 153). The root
+        # wiring stays for browser-scoped service workers.
         if stealth_engine is not None:
-            self._router.root.on(
-                "Target.attachedToTarget",
-                stealth_engine._on_target_attached,
-            )
-            await stealth_engine.setup_auto_attach(self._router.root)
+            await stealth_engine.wire_session(self._router.root)
+            if self._main_tab is not None:
+                await stealth_engine.wire_session(self._main_tab._session)
 
         return self
 
@@ -366,8 +377,10 @@ class Browser:
         if self._stealth_engine is not None:
             await self._stealth_engine.apply_to_session(session)
             await self._stealth_engine.apply_page_scripts(session)
+            # T7.7: OOPIF/worker auto-attach is per-page-session.
+            await self._stealth_engine.wire_session(session)
 
-        tab = Tab(session, self, target_id)
+        tab = Tab(session, self, target_id, stealth_idle=self._stealth_idle)
         self._tabs.append(tab)
         if url and url != "about:blank":
             await tab.get(url)

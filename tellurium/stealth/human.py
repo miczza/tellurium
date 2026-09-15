@@ -309,14 +309,41 @@ ACTION_TRANSITION_DELAYS = {
 }
 
 
+# Fallback for transitions the table above does not cover (e.g. click ->
+# click, type -> type). Log-normal because human inter-action gaps are
+# right-skewed: most are short, a few are much longer. exp(MU) = 270ms
+# median, mean ~= 300ms.
+_LOGNORMAL_MU = 5.6       # ln(ms)
+_LOGNORMAL_SIGMA = 0.35
+_LOGNORMAL_MAX_MS = 2000.0
+
+
 class ActionTimer:
+    """Inter-action delays for consecutive ``human=True`` actions.
+
+    Design doc 05 "Inter-Action Timing": automatic with ``human=True``.
+    ``Tab`` owns one instance per tab and calls :meth:`delay_between` at the
+    start of every human click / type / scroll, so two consecutive human
+    actions are never back-to-back in the same event-loop tick.
+    """
+
     def __init__(self):
         self._last_action_type: str | None = None
+
+    def mark(self, action: str) -> None:
+        """Record *action* without sleeping (used for navigations)."""
+        self._last_action_type = action
 
     async def delay_between(self, next_action: str):
         if self._last_action_type:
             key = (self._last_action_type, next_action)
             if key in ACTION_TRANSITION_DELAYS:
                 min_ms, max_ms = ACTION_TRANSITION_DELAYS[key]
-                await asyncio.sleep(random.uniform(min_ms, max_ms) / 1000)
+                delay_ms = random.uniform(min_ms, max_ms)
+            else:
+                delay_ms = min(
+                    _LOGNORMAL_MAX_MS,
+                    random.lognormvariate(_LOGNORMAL_MU, _LOGNORMAL_SIGMA),
+                )
+            await asyncio.sleep(delay_ms / 1000)
         self._last_action_type = next_action

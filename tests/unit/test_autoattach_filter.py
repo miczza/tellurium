@@ -27,7 +27,9 @@ def test_setup_auto_attach_sends_filter_for_stealth_targets():
     method, payload = root_session.send.call_args[0]
     assert method == "Target.setAutoAttach"
     assert payload["autoAttach"] is True
-    assert payload["waitForDebuggerOnStart"] is False
+    # T7.7 (design doc 04 §P1.1): the OOPIF/worker must be frozen until
+    # the stealth overrides are injected.
+    assert payload["waitForDebuggerOnStart"] is True
     assert payload["flatten"] is True
 
     filt = payload.get("filter")

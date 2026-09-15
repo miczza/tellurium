@@ -251,7 +251,7 @@
     },
     "browserleaks_canvas": {
       "canvasHash": "020ab27bd4f6ebef4487276fa1369d71",
-      "uniqueness": "99.99% (25 of 298939 user agents have the same signature)"
+      "uniqueness": "99.98% (41 of 258037 user agents have the same signature)"
     },
     "browserleaks_webgl": {
       "vendor": "! Google Inc. (Intel)",
@@ -262,6 +262,6 @@
       "webdriver": false,
       "details": {}
     },
-    "elapsed_s": 53.5
+    "elapsed_s": 54.2
   }
 }

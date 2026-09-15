@@ -272,12 +272,29 @@ async def test_setup_auto_attach_stock_waits_for_debugger():
 
     session.send.assert_called_once_with("Target.setAutoAttach", {
         "autoAttach": True,
-        "waitForDebuggerOnStart": False,
+        "waitForDebuggerOnStart": True,
         "flatten": True,
         "filter": _STEALTH_TARGET_FILTER,
     })
-    # Extension content-scripts handle JS injection; no callback needed
+    # setup_auto_attach only arms the flag; wire_session() registers the
+    # Target.attachedToTarget callback.
     session.on.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_wire_session_registers_listener_before_arming():
+    engine = StockEngine()
+    se = StealthEngine(engine, _make_profile(), headless=False, has_proxy=False)
+
+    session = AsyncMock()
+    session.on = MagicMock()
+    await se.wire_session(session)
+
+    session.on.assert_called_once_with(
+        "Target.attachedToTarget", se._on_target_attached,
+    )
+    session.send.assert_called_once()
+    assert session.send.call_args[0][0] == "Target.setAutoAttach"
 
 
 @pytest.mark.asyncio
@@ -290,7 +307,7 @@ async def test_setup_auto_attach_patched_no_wait():
 
     session.send.assert_called_once_with("Target.setAutoAttach", {
         "autoAttach": True,
-        "waitForDebuggerOnStart": False,
+        "waitForDebuggerOnStart": True,
         "flatten": True,
         "filter": _STEALTH_TARGET_FILTER,
     })

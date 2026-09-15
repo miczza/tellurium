@@ -39,17 +39,35 @@ _TEXT_WALKER_JS = """
 class Tab:
     """High-level wrapper around a single browser tab (CDP target session)."""
 
-    def __init__(self, session: Session, browser: Browser, target_id: str):
+    # Class-level defaults so a Tab built with ``Tab.__new__`` (test doubles)
+    # still behaves; ``__init__`` shadows each of them per instance.
+    _action_timer = None
+    _idle_simulator = None
+    _screen_offset: tuple[float, float] | None = None
+    _screen_parity_done: bool = False
+    _window_id: int | None = None
+
+    def __init__(self, session: Session, browser: Browser, target_id: str,
+                 *, stealth_idle: bool = False):
         self._session = session
         self._browser = browser
         self._target_id = target_id
         self._url: str = ""
         self._title: str = ""
         self._mouse_pos: tuple[float, float] = (0, 0)  # Track current mouse position
-        self._action_timer = None  # Will be set when stealth is active
+        self._action_timer = None  # ActionTimer, created on first human action
+        # Design doc 05 "Idle Simulation" — Browser.launch(stealth_idle=True)
+        self._idle_simulator = None
+        if stealth_idle:
+            from tellurium.stealth.idle import IdleSimulator
+            self._idle_simulator = IdleSimulator()
         self._capture_manager = None
         self._hsim_worlds: dict[str, int] = {}  # frame_id -> executionContextId, per-frame
         self._frame_id: str = ""  # main frame id, populated on first navigation
+        # P0.4 screenX/screenY parity — resolved lazily on first mouse input
+        self._screen_offset: tuple[float, float] | None = None
+        self._screen_parity_done: bool = False
+        self._window_id: int | None = None
 
         def _on_frame_navigated(params: dict) -> None:
             frame = params.get("frame", {})
@@ -84,6 +102,10 @@ class Tab:
         finally:
             self._session.off("Page.loadEventFired", _on_load)
         self._url = url
+        if self._action_timer is not None:
+            # Design doc 05: navigate -> click / navigate -> type carry their
+            # own (longer) transition delays.
+            self._action_timer.mark("navigate")
 
     async def back(self) -> None:
         """Go back in history."""
@@ -217,7 +239,7 @@ class Tab:
 
     async def select(self, selector: str, *, timeout: float = 10) -> Element:
         """Wait for a CSS-matching element and return it."""
-        deadline = asyncio.get_event_loop().time() + timeout
+        deadline = asyncio.get_running_loop().time() + timeout
         while True:
             root = await self._get_document_root()
             result = await self._session.send(
@@ -228,7 +250,7 @@ class Tab:
                 el = Element(self._session, self, nid)
                 el._selector = selector
                 return el
-            if asyncio.get_event_loop().time() >= deadline:
+            if asyncio.get_running_loop().time() >= deadline:
                 raise TimeoutError(f"Timed out waiting for selector {selector!r}")
             await asyncio.sleep(0.2)
 
@@ -245,12 +267,12 @@ class Tab:
 
     async def find(self, text: str, *, timeout: float = 10, exact: bool = False) -> Element:
         """Find an element by visible text content (polls until found or timeout)."""
-        deadline = asyncio.get_event_loop().time() + timeout
+        deadline = asyncio.get_running_loop().time() + timeout
         while True:
             elements = await self._find_text_elements(text, exact)
             if elements:
                 return elements[0]
-            if asyncio.get_event_loop().time() >= deadline:
+            if asyncio.get_running_loop().time() >= deadline:
                 raise TimeoutError(f"Timed out waiting for text {text!r}")
             await asyncio.sleep(0.2)
 
@@ -301,25 +323,40 @@ class Tab:
         return elements
 
     async def xpath(self, expression: str, *, timeout: float = 10) -> Element | None:
-        """Evaluate an XPath expression. Returns first match or *None*."""
-        deadline = asyncio.get_event_loop().time() + timeout
+        """Evaluate an XPath expression. Returns first match or *None*.
+
+        ``DOM.getDocument`` is sent to prime the DOM agent (``performSearch``
+        needs a document); its root node id is not used because the search is
+        document-wide. Every result set is released with
+        ``DOM.discardSearchResults`` — without it each poll iteration leaked
+        one set inside the browser's DOM agent for the lifetime of the tab.
+        """
+        deadline = asyncio.get_running_loop().time() + timeout
         while True:
-            doc = await self._session.send("DOM.getDocument", {"depth": 0})
-            root_id = doc["root"]["nodeId"]
+            await self._session.send("DOM.getDocument", {"depth": 0})
             result = await self._session.send(
                 "DOM.performSearch", {"query": expression}
             )
             search_id = result.get("searchId", "")
             count = result.get("resultCount", 0)
-            if count:
-                nodes = await self._session.send(
-                    "DOM.getSearchResults",
-                    {"searchId": search_id, "fromIndex": 0, "toIndex": 1},
-                )
-                nids = nodes.get("nodeIds", [])
-                if nids and nids[0]:
-                    return Element(self._session, self, nids[0])
-            if asyncio.get_event_loop().time() >= deadline:
+            try:
+                if count:
+                    nodes = await self._session.send(
+                        "DOM.getSearchResults",
+                        {"searchId": search_id, "fromIndex": 0, "toIndex": 1},
+                    )
+                    nids = nodes.get("nodeIds", [])
+                    if nids and nids[0]:
+                        return Element(self._session, self, nids[0])
+            finally:
+                if search_id:
+                    try:
+                        await self._session.send(
+                            "DOM.discardSearchResults", {"searchId": search_id}
+                        )
+                    except Exception:  # noqa: BLE001 — best effort, must never break input
+                        pass
+            if asyncio.get_running_loop().time() >= deadline:
                 return None
             await asyncio.sleep(0.2)
 
@@ -364,6 +401,161 @@ class Tab:
     # Input
     # ------------------------------------------------------------------
 
+    # -- Inter-action timing (design doc 05) ---------------------------
+
+    def _get_action_timer(self):
+        """Lazily create this tab's :class:`ActionTimer`."""
+        if self._action_timer is None:
+            from tellurium.stealth.human import ActionTimer
+            self._action_timer = ActionTimer()
+        return self._action_timer
+
+    async def _human_action(self, action: str) -> None:
+        """Apply the inter-action delay before a ``human=True`` action."""
+        await self._get_action_timer().delay_between(action)
+
+    # -- P0.4: screenX/screenY parity ---------------------------------
+
+    async def _eval_isolated(self, expression: str) -> Any:
+        """Evaluate *expression* in the human-sim isolated world (best effort).
+
+        Falls back to the main world when the isolated world is unavailable
+        (e.g. before the first navigation). Never calls ``Runtime.enable``.
+        """
+        from tellurium.stealth._isolated import get_hsim_world
+
+        params: dict = {"expression": expression, "returnByValue": True}
+        ctx = await get_hsim_world(self, frame_id=self._frame_id)
+        if ctx is not None:
+            params["contextId"] = ctx
+        resp = await self._session.send("Runtime.evaluate", params)
+        return resp.get("result", {}).get("value")
+
+    async def window_offset(self) -> tuple[float, float]:
+        """Offset (dx, dy) between viewport coords and screen coords.
+
+        ``dx`` is the window origin on screen, ``dy`` the window origin plus
+        the height of the browser chrome UI (tab strip + omnibox), estimated
+        as ``window.outerHeight - window.innerHeight`` per design doc 04
+        §P0.4. Cached per tab; the cache is only invalidated by a new Tab.
+
+        Primary source is ``Browser.getWindowForTarget`` (its reply already
+        embeds ``bounds``; ``Browser.getWindowBounds`` is used as a second
+        hop when it does not). Both are browser-level commands and *are*
+        available on the stock backend over ``--remote-debugging-pipe``
+        (verified on Chrome 153). Should they ever be unavailable — they are
+        not implemented on Android/WebView targets — the fallback is
+        ``window.screenX`` / ``window.screenY`` read from the page itself.
+        """
+        if self._screen_offset is not None:
+            return self._screen_offset
+
+        left: float | None = None
+        top: float | None = None
+        outer_height: float = 0.0
+        try:
+            root = self._browser._router.root
+            resp = await root.send(
+                "Browser.getWindowForTarget", {"targetId": self._target_id},
+                timeout=5.0,
+            )
+            self._window_id = resp.get("windowId")
+            bounds = resp.get("bounds") or {}
+            if not bounds and self._window_id is not None:
+                bounds = (await root.send(
+                    "Browser.getWindowBounds", {"windowId": self._window_id},
+                    timeout=5.0,
+                )).get("bounds", {})
+            if bounds:
+                left = float(bounds.get("left") or 0)
+                top = float(bounds.get("top") or 0)
+                outer_height = float(bounds.get("height") or 0)
+        except Exception:  # noqa: BLE001 — best effort, must never break input
+            left = top = None  # fall through to the JS fallback
+
+        chrome_ui = 0.0
+        try:
+            values = await self._eval_isolated(
+                "[window.screenX, window.screenY, window.outerHeight,"
+                " window.innerHeight]"
+            )
+            if isinstance(values, list) and len(values) == 4:
+                if left is None or top is None:
+                    left = float(values[0] or 0)
+                    top = float(values[1] or 0)
+                inner_height = float(values[3] or 0)
+                # window.outerHeight reads 0 on a freshly created headed
+                # window until the WM has mapped it; the CDP window bounds
+                # height is the robust second source.
+                outer = float(values[2] or 0) or outer_height
+                chrome_ui = max(0.0, outer - inner_height)
+        except Exception:  # noqa: BLE001 — best effort, must never break input
+            pass
+
+        offset = (float(left or 0), float(top or 0) + chrome_ui)
+        self._screen_offset = offset
+        return offset
+
+    async def _ensure_screen_parity(self) -> None:
+        """Make CDP-dispatched mouse events carry realistic screenX/screenY.
+
+        Design doc 04 §P0.4 assumed Chrome sets ``screenX = clientX`` for
+        ``Input.dispatchMouseEvent``. That is **no longer true**: measured on
+        Chrome 153 stock (both headed and headless), the browser already adds
+        the window origin and the chrome-UI height itself —
+        ``screenX - clientX == window.screenX`` and
+        ``screenY - clientY == window.screenY + (outerHeight - innerHeight)``,
+        and both follow the window as it is moved. ``Input.dispatchMouseEvent``
+        has no ``screenX``/``screenY`` parameters either, so adding an offset
+        to ``x``/``y`` would move the *click itself* and produce a screen
+        coordinate that is wrong twice over.
+
+        What is left to fix is the degenerate window placement where the
+        offset really is zero (window pinned at screen origin with no frame,
+        which happens in headless): there ``screenX === clientX`` exactly,
+        which is the signal Turnstile keys on. We then move the window to a
+        plausible origin — no JS override, no invented per-event maths, the
+        coordinates stay the browser's own.
+
+        No-op when the backend advertises ``native_cdp_fix`` (patched engine
+        fixes this in ``input_handler.cc``) or when stealth is off.
+        """
+        if self._screen_parity_done:
+            return
+        self._screen_parity_done = True
+
+        browser = getattr(self, "_browser", None)
+        if getattr(browser, "_stealth_engine", None) is None:
+            return
+        try:
+            engine = getattr(browser, "_engine", None)
+            if engine is not None and "native_cdp_fix" in engine.capabilities():
+                return
+        except Exception:  # noqa: BLE001 — best effort, must never break input
+            pass
+
+        try:
+            dx, dy = await self.window_offset()
+            if dx > 0 and dy > 0:
+                return
+            if self._window_id is None:
+                return
+            left = random.randint(22, 140)
+            top = random.randint(18, 96)
+            await self._browser._router.root.send("Browser.setWindowBounds", {
+                "windowId": self._window_id,
+                "bounds": {"left": left, "top": top},
+            }, timeout=5.0)
+            self._screen_offset = None  # recompute against the new origin
+            await self.window_offset()
+        except Exception:  # noqa: BLE001 — best effort, must never break input
+            pass  # best effort: never break input on a parity tweak
+
+    async def _dispatch_mouse(self, params: dict) -> None:
+        """Send ``Input.dispatchMouseEvent`` after the P0.4 parity check."""
+        await self._ensure_screen_parity()
+        await self._session.send("Input.dispatchMouseEvent", params)
+
     async def mouse_move(self, x: float, y: float, human: bool = False) -> None:
         if human:
             from tellurium.stealth.human import wind_mouse, apply_lognormal_velocity, MOUSE_PROFILES
@@ -376,26 +568,27 @@ class Tab:
                 now = time.monotonic()
                 if target_time > now:
                     await asyncio.sleep(target_time - now)
-                await self._session.send("Input.dispatchMouseEvent", {
+                await self._dispatch_mouse({
                     "type": "mouseMoved", "x": px, "y": py,
                 })
             self._mouse_pos = (x, y)
         else:
-            await self._session.send("Input.dispatchMouseEvent", {
+            await self._dispatch_mouse({
                 "type": "mouseMoved", "x": x, "y": y,
             })
             self._mouse_pos = (x, y)
 
     async def mouse_click(self, x: float, y: float, button: str = "left", human: bool = False) -> None:
         if human:
+            await self._human_action("click")
             await self.mouse_move(x, y, human=True)
             await asyncio.sleep(random.uniform(0.1, 0.3))  # reaction time
-        await self._session.send("Input.dispatchMouseEvent", {
+        await self._dispatch_mouse({
             "type": "mousePressed", "x": x, "y": y,
             "button": button, "clickCount": 1,
         })
         await asyncio.sleep(random.uniform(0.08, 0.15) if human else 0.05)
-        await self._session.send("Input.dispatchMouseEvent", {
+        await self._dispatch_mouse({
             "type": "mouseReleased", "x": x, "y": y,
             "button": button, "clickCount": 1,
         })
@@ -475,6 +668,7 @@ class Tab:
         """
         if human:
             from tellurium.stealth.human import HumanTyping, apply_key_rollover
+            await self._human_action("type")
             typer = HumanTyping(wpm=wpm)
             events = apply_key_rollover(typer.get_events(text))
             for event in events:
@@ -526,10 +720,12 @@ class Tab:
         """Dispatch a mouse wheel event."""
         if human and delta_y != 0:
             from tellurium.stealth.human import HumanScroll
+            await self._human_action("scroll")
             scroller = HumanScroll()
+            await self._ensure_screen_parity()
             await scroller.scroll_by(self._session, delta_y, x or 400, y or 300)
         else:
-            await self._session.send("Input.dispatchMouseEvent", {
+            await self._dispatch_mouse({
                 "type": "mouseWheel", "x": x or 0, "y": y or 0,
                 "deltaX": delta_x, "deltaY": delta_y,
             })
@@ -539,18 +735,28 @@ class Tab:
     # ------------------------------------------------------------------
 
     async def wait(self, seconds: float) -> None:
-        """Sleep for *seconds* (convenience wrapper)."""
+        """Sleep for *seconds*.
+
+        With ``Browser.launch(stealth_idle=True)`` the wait is filled with
+        low-amplitude background mouse activity instead of a perfectly still
+        cursor (design doc 05 "Idle Simulation"). The idle loop never
+        overshoots *seconds*.
+        """
+        if self._idle_simulator is not None:
+            self._idle_simulator.update_pos(*self._mouse_pos)
+            await self._idle_simulator.idle(self, seconds)
+            return
         await asyncio.sleep(seconds)
 
     async def wait_for_url(self, url: str, *, timeout: float = 30) -> None:
         """Poll until the page URL contains *url*."""
-        deadline = asyncio.get_event_loop().time() + timeout
+        deadline = asyncio.get_running_loop().time() + timeout
         while True:
             current = await self.eval("window.location.href")
             if current and url in current:
                 self._url = current
                 return
-            if asyncio.get_event_loop().time() >= deadline:
+            if asyncio.get_running_loop().time() >= deadline:
                 raise TimeoutError(f"Timed out waiting for URL containing {url!r}")
             await asyncio.sleep(0.25)
 
