@@ -899,77 +899,71 @@ Tellurium sets `0600` permissions on POSIX; it does not encrypt the file.
 - `SessionLoginFailedError` — login callback raised (original exception preserved as `__cause__`).
 - `SessionCorruptError` — `session.json` is unparseable.
 
-## Patched binary (experimental)
+## Patched binary (chromium-telluride)
 
-Tellurium can drive a hardened Chromium binary built from the separate
-`chromium-telluride` repository. **In v0.1, the
-patched-binary path is experimental and requires manual install** —
-the `tellurium update-browser` command does not auto-download yet
-(deferred to v0.1.x).
+Tellurium can drive a hardened Chromium build from the separate
+[`chromium-telluride`](https://github.com/miczza/chromium-telluride)
+repository. The patched binary implements fingerprint spoofing natively
+(canvas, audio, WebGL, client hints, navigator, timing) so tellurium skips
+its JS-level stealth scripts and only passes `--fingerprint=<seed>` flags.
 
-Two patterns are supported today:
-
-### Pattern A — explicit binary path
-
-Bypasses the cache layout and integrity verification entirely. Best when
-you have a build at an arbitrary location:
-
-```python
-import asyncio
-from tellurium import Browser
-
-async def main():
-    browser = await Browser.launch(
-        browser="patched",
-        executable="/path/to/tellurium-chromium",
-    )
-    async with browser:
-        tab = await browser.new_tab("https://example.com")
-        # ...
-
-asyncio.run(main())
-```
-
-### Pattern B — cache layout (with optional integrity verification)
-
-Drop the binary into the standard cache directory and (optionally) place
-a `MANIFEST.json` next to it for SHA256 verification:
+### Install
 
 ```bash
-mkdir -p ~/.tellurium/chromium/146.0.7680.188
-cp /path/to/tellurium-chromium ~/.tellurium/chromium/146.0.7680.188/tellurium-chromium
-# Optional: ship MANIFEST.json (with sha256 field) for integrity verification
+tellurium download-browser --browser patched            # latest release
+tellurium download-browser --browser patched --version 146.0.7680.188
+tellurium list-browsers                                  # what is installed
+tellurium verify-browser [--reinstall]                   # SHA256 against MANIFEST.json
+tellurium update-browser [--check] [--security-only]     # upgrade to the latest release
+tellurium prune-browsers --keep 2                        # drop old versions (never `current`)
 ```
 
-Then launch normally:
+Releases are downloaded from GitHub Releases of `chromium-telluride`, checked
+against `SHA256SUMS`, extracted to `~/.tellurium/chromium/<chromium-version>/`
+and the `chrome` binary is verified against `MANIFEST.json` (`binary_sha256`).
+The `current` symlink points at the default version. Override the cache
+location with `TELLURIUM_CACHE_DIR`.
+
+Manual install works too: extract the release tarball and move its
+`chromium-telluride/` directory to `~/.tellurium/chromium/<version>/`
+(the directory must contain `chrome`, `MANIFEST.json` and the runtime
+resources shipped in the tarball).
+
+### Launch
 
 ```python
 import asyncio
 from tellurium import Browser
 
 async def main():
+    # default version (`current`, with a silent daily update check)
+    browser = await Browser.launch(browser="patched", seed=42069)
+    # or pin a version (no update check) and optionally its binary hash
     browser = await Browser.launch(
         browser="patched",
         chromium_version="146.0.7680.188",
+        chromium_sha256="08ddbd55...",   # optional
     )
+    # or point at any build on disk (skips cache + integrity verification)
+    browser = await Browser.launch(browser="patched", executable="/path/to/chrome")
     async with browser:
         tab = await browser.new_tab("https://example.com")
-        # ...
 
 asyncio.run(main())
 ```
 
-If `MANIFEST.json` is present, tellurium verifies the SHA256 on every launch.
-If absent, tellurium emits a warning but proceeds.
+Notes:
 
-### Where to get the binary
-
-`chromium-telluride` doesn't yet have a public release. Until it does,
-build from source (see `chromium-telluride/docs/`) or request a dev
-binary from the maintainer.
-
-Auto-download (`tellurium update-browser`) is planned for v0.1.x —
-see `CHANGELOG.md`.
+- `--fingerprint=<seed>` is required by the fork, so tellurium always passes
+  one: `seed=` (or the stealth profile seed) when given, otherwise a random
+  seed per launch, readable from the engine after launch.
+- `stealth=True` additionally builds a `StealthProfile` and passes
+  `--fingerprint-platform=<os>`; `webrtc_ip=` maps to
+  `--fingerprint-webrtc-ip=<mode>`.
+- `auto_security_update=True` installs a security release automatically when
+  the daily check finds one (ignored when `chromium_version` is pinned).
+- If the release tarball ships without `chrome_sandbox`, launch with
+  `args=["--no-sandbox"]` or enable unprivileged user namespaces.
 
 ## Known limitations
 
@@ -983,19 +977,9 @@ sessions (e.g. `DISPLAY=:0` with Xorg + GPU) typically score lower.
 In v0.1 this is documented as accepted state. The runtime stealth posture
 itself reports `headless=0%, lies=0` and matches nodriver 8/8 on CreepJS.
 
-### Patched binary: 3 residual CreepJS lies
+### Patched binary: CreepJS status
 
-When using the experimental patched binary, three lies remain on CreepJS:
-
-1. Client Hints `platformVersion: ""` (medium severity — Cloudflare/DataDome check this)
-2. `speechSynthesis.getVoices()` returns Google Cloud voices on Linux (low-medium)
-3. One unidentified (under investigation in `chromium-telluride`)
-
-These are tracked in `chromium-telluride/docs/known-issues.md`. The
-stock-Chrome runtime stealth path is **not** affected by these.
-
-### Auto-download deferred
-
-`tellurium update-browser` and `tellurium verify-browser --reinstall`
-are not wired in v0.1. See "Patched binary (experimental)" above for the
-manual workflow. Auto-download is planned for v0.1.x.
+The patched binary reports `lies = 0` on CreepJS (`window.Fingerprint.lies.totalLies`,
+triage in `chromium-telluride/docs/superpowers/notes/2026-04-26-lie3-triage.md`).
+Residual non-lie signals (`like_headless`, canvas entropy cluster) are tracked in
+`chromium-telluride/docs/known-issues.md`.

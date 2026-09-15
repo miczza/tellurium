@@ -22,7 +22,7 @@ def _make_manifest(binary_bytes: bytes, platform: str = "linux-x64") -> dict:
 
 def test_manifest_verify_happy_path(tmp_path):
     bin_bytes = b"chromium-binary-content"
-    binary = tmp_path / "tellurium-chromium"
+    binary = tmp_path / "chrome"
     binary.write_bytes(bin_bytes)
     manifest_path = tmp_path / "MANIFEST.json"
     manifest_path.write_text(json.dumps(_make_manifest(bin_bytes)))
@@ -33,7 +33,7 @@ def test_manifest_verify_happy_path(tmp_path):
 
 def test_manifest_verify_mismatch_raises(tmp_path):
     bin_bytes = b"chromium-binary-content"
-    binary = tmp_path / "tellurium-chromium"
+    binary = tmp_path / "chrome"
     binary.write_bytes(bin_bytes)
     manifest_path = tmp_path / "MANIFEST.json"
     manifest_path.write_text(json.dumps(_make_manifest(b"different-content")))
@@ -45,7 +45,7 @@ def test_manifest_verify_mismatch_raises(tmp_path):
 
 def test_manifest_verify_missing_platform_raises(tmp_path):
     bin_bytes = b"chromium-binary-content"
-    binary = tmp_path / "tellurium-chromium"
+    binary = tmp_path / "chrome"
     binary.write_bytes(bin_bytes)
     manifest_path = tmp_path / "MANIFEST.json"
     manifest_path.write_text(json.dumps(_make_manifest(bin_bytes, "windows-x64")))

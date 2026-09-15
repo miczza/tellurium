@@ -1,35 +1,28 @@
 """Tellurium CLI."""
 from __future__ import annotations
+
 import argparse
 import asyncio
 import sys
 from pathlib import Path
 
+from tellurium.browser import _cache
+
 
 def _cache_dir() -> Path:
-    """Return the Tellurium cache directory."""
-    return Path.home() / ".tellurium"
+    """Return the patched-browser cache root (``~/.tellurium/chromium``)."""
+    return _cache.cache_root()
 
 
 def _get_installed_version(cache: Path) -> str | None:
-    """Return the installed patched browser version, or None if not installed."""
-    for d in sorted(cache.glob("chromium-patched-*"), reverse=True):
-        if (d / "chrome").exists():
-            return d.name.replace("chromium-patched-", "")
-    return None
+    """Return the default installed patched version, or None if not installed."""
+    return _cache.installed_version(cache)
 
 
 def _check_latest_patched() -> str | None:
-    """Check GitHub releases for latest patched browser version."""
-    import urllib.request
-    import json
-    try:
-        url = "https://api.github.com/repos/miczza/tellurium-chromium/releases/latest"
-        with urllib.request.urlopen(url, timeout=10) as resp:
-            data = json.loads(resp.read())
-            return data.get("tag_name", "").lstrip("v")
-    except Exception:
-        return None
+    """Return the chromium version of the latest chromium-telluride release."""
+    from tellurium.browser._patched_download import latest_version
+    return latest_version()
 
 
 def main():
@@ -47,11 +40,15 @@ def main():
     dl_parser = sub.add_parser("download-browser", help="Download browser binary")
     dl_parser.add_argument("--browser", default="stock", choices=["stock", "patched"],
                            help="Browser type to download")
+    dl_parser.add_argument("--version", default=None,
+                           help="Chromium version to download (default: latest release)")
 
     # stealth-test
     st_parser = sub.add_parser("stealth-test", help="Test stealth against detection sites")
     st_parser.add_argument("--browser", default="stock", choices=["stock", "patched"])
-    st_parser.add_argument("--full", action="store_true", help="Run full test suite")
+    st_parser.add_argument("--full", action="store_true",
+                           help="Also visit live detection sites (needs network)")
+    st_parser.add_argument("--headed", action="store_true", help="Run with a visible window")
 
     # info
     sub.add_parser("info", help="Show Tellurium info")
@@ -77,9 +74,9 @@ def main():
     if args.command == "update-cdp":
         _update_cdp(args.chrome_version)
     elif args.command == "download-browser":
-        asyncio.run(_download_browser(args.browser))
+        asyncio.run(_download_browser(args.browser, args.version))
     elif args.command == "stealth-test":
-        asyncio.run(_stealth_test(args.browser, args.full))
+        asyncio.run(_stealth_test(args.browser, args.full, args.headed))
     elif args.command == "info":
         _show_info()
     elif args.command == "list-browsers":
@@ -95,12 +92,10 @@ def main():
 
 
 def _protocol_path():
-    from pathlib import Path
     return Path(__file__).parent / "cdp" / "protocol.json"
 
 
 def _domains_dir():
-    from pathlib import Path
     return Path(__file__).parent / "cdp" / "domains"
 
 
@@ -113,7 +108,9 @@ def _update_cdp(chrome_version: str | None) -> None:
     overwrite the bundled file, then regenerate.
     """
     import json
+    import urllib.error
     import urllib.request
+
     from tellurium.cdp.generator import CDPGenerator
 
     protocol_path = _protocol_path()
@@ -162,61 +159,124 @@ def _update_cdp(chrome_version: str | None) -> None:
     print(f"\n{len(modules)} CDP domains regenerated.")
 
 
-async def _download_browser(browser_type: str) -> None:
+# --------------------------------------------------------------------------- #
+# Patched browser management
+# --------------------------------------------------------------------------- #
+
+def _progress_printer():
+    last = [-1]
+
+    def cb(done: int, total: int | None) -> None:
+        if total:
+            pct = int(done * 100 / total)
+            if pct != last[0] and pct % 5 == 0:
+                last[0] = pct
+                print(f"\r  downloading... {pct:3d}% ({done >> 20} MB)", end="", flush=True)
+        else:
+            mb = done >> 20
+            if mb != last[0]:
+                last[0] = mb
+                print(f"\r  downloading... {mb} MB", end="", flush=True)
+    return cb
+
+
+def _install_patched(version: str | None, *, reinstall: bool = False) -> bool:
+    """Download (or re-download) a patched release; print outcome; return success."""
+    from tellurium.browser._patched_download import DownloadError, download_patched, reinstall as _re
+    try:
+        if reinstall and version:
+            entry = _re(version, cache_root=_cache_dir(), progress=_progress_printer())
+        else:
+            entry = download_patched(version, cache_root=_cache_dir(), progress=_progress_printer())
+    except DownloadError as e:
+        print(f"\nError: {e}", file=sys.stderr)
+        return False
+    except OSError as e:
+        print(f"\nError: network/filesystem failure: {e}", file=sys.stderr)
+        return False
+    print(f"\nchromium-telluride {entry.version} installed: {entry.binary}")
+    if entry.is_current:
+        print("  (set as current)")
+    return True
+
+
+async def _download_browser(browser_type: str, version: str | None = None) -> None:
     """Download a browser binary."""
     if browser_type == "stock":
         from tellurium.browser.launcher import download_cft
-        path = await download_cft()
+        path = await download_cft(version or "latest")
         print(f"Chrome for Testing downloaded: {path}")
     elif browser_type == "patched":
-        print("tellurium-chromium download not yet available.")
-        print("Binary will be available via GitHub Releases when the patched Chromium is built.")
+        if not _install_patched(version):
+            sys.exit(1)
 
 
-async def _stealth_test(browser_type: str, full: bool) -> None:
-    """Run stealth tests against detection sites."""
+async def _stealth_test(browser_type: str, full: bool, headed: bool = False) -> None:
+    """Run stealth checks: local invariants, plus live detection sites with --full."""
     from tellurium import Browser
 
-    print("Running stealth tests...\n")
+    print(f"Running stealth tests (browser={browser_type})...\n")
 
-    tests = [
-        ("navigator.webdriver", "navigator.webdriver"),
-        ("window.chrome", "typeof window.chrome === 'object'"),
-        ("navigator.plugins", "navigator.plugins.length > 0"),
+    local_tests = [
+        ("navigator.webdriver", "navigator.webdriver", lambda r: r is False or r is None),
+        ("window.chrome", "typeof window.chrome === 'object'", bool),
+        ("navigator.plugins", "navigator.plugins.length > 0", bool),
+        ("webdriver getter shape",
+         "Function.prototype.toString.call(Object.getOwnPropertyDescriptor("
+         "Object.getPrototypeOf(navigator),'webdriver').get)",
+         lambda r: r == "function get webdriver() { [native code] }"),
+        ("Function.prototype.toString shape",
+         "Function.prototype.toString.call(Function.prototype.toString)",
+         lambda r: r == "function toString() { [native code] }"),
     ]
 
-    if full:
-        tests.extend([
-            ("WebGL renderer", "(() => { const c = document.createElement('canvas'); const gl = c.getContext('webgl'); if (!gl) return false; const ext = gl.getExtension('WEBGL_debug_renderer_info'); return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : false; })()"),
-        ])
-
-    async with Browser.launch(headless=True, stealth=True, browser=browser_type) as browser:
+    failures = 0
+    browser = await Browser.launch(headless=not headed, stealth=True, browser=browser_type)
+    async with browser:
         tab = await browser.new_tab("about:blank")
-
-        for name, expr in tests:
+        for name, expr, ok in local_tests:
             try:
                 result = await tab.eval(expr)
-                if name == "navigator.webdriver":
-                    passed = result is None or result is False
-                else:
-                    passed = bool(result)
-                status = "PASS" if passed else "FAIL"
-                print(f"  {name:<30} {status}  ({result})")
-            except Exception as e:
-                print(f"  {name:<30} ERROR ({e})")
+                passed = bool(ok(result))
+            except Exception as e:  # noqa: BLE001 - report every failure
+                result, passed = f"ERROR {e}", False
+            failures += not passed
+            print(f"  {name:<36} {'PASS' if passed else 'FAIL'}  ({result})")
 
-    print("\nDone.")
+        if full:
+            print("\nLive detection sites:")
+            sites = [
+                ("bot.sannysoft.com", "https://bot.sannysoft.com/",
+                 "document.querySelectorAll('.failed').length", lambda r: r == 0),
+                ("browserscan.net/bot-detection", "https://www.browserscan.net/bot-detection",
+                 "!/robot|bot detected/i.test(document.body.innerText) ? 0 : 1",
+                 lambda r: r == 0),
+            ]
+            for name, url, expr, ok in sites:
+                try:
+                    await tab.get(url, timeout=45)
+                    await asyncio.sleep(6)
+                    result = await tab.eval(expr)
+                    passed = bool(ok(result))
+                except Exception as e:  # noqa: BLE001
+                    result, passed = f"ERROR {e}", False
+                failures += not passed
+                print(f"  {name:<36} {'PASS' if passed else 'FAIL'}  ({result})")
+            print("\nFor CreepJS parity run: pytest examples/fingerprint_tests/"
+                  "test_stock_runtime_parity.py")
+
+    print(f"\nDone. {failures} failure(s).")
+    if failures:
+        sys.exit(1)
 
 
 def _show_info() -> None:
     """Show Tellurium installation info."""
-    import shutil
-    from pathlib import Path
-
-    print("Tellurium 0.1.0\n")
-
-    # Stock browser
+    from tellurium import __version__
     from tellurium.browser.launcher import _find_chrome_candidates
+
+    print(f"Tellurium {__version__}\n")
+
     candidates = _find_chrome_candidates()
     if candidates:
         path, kind = candidates[0]
@@ -224,188 +284,158 @@ def _show_info() -> None:
     else:
         print("  Browser stock:   not found")
 
-    # Patched browser
-    patched = Path.home() / ".tellurium" / "chromium-patched-146.0.7680.188" / "chrome"
-    if patched.exists():
-        print(f"  Browser patched: {patched}")
+    browsers = _cache.installed_browsers(_cache_dir())
+    if browsers:
+        default = next((b for b in browsers if b.is_current), browsers[0])
+        print(f"  Browser patched: {default.binary} ({default.version}"
+              f"{', current' if default.is_current else ''})")
+        if len(browsers) > 1:
+            print(f"                   +{len(browsers) - 1} more (tellurium list-browsers)")
     else:
-        print("  Browser patched: not installed")
+        print("  Browser patched: not installed (tellurium download-browser --browser patched)")
 
-    # CDP bindings
     protocol = Path(__file__).parent / "cdp" / "protocol.json"
-    if protocol.exists():
-        print(f"  CDP bindings:    bundled")
-    else:
-        print(f"  CDP bindings:    not found")
+    print(f"  CDP bindings:    {'bundled' if protocol.exists() else 'not found'}")
 
-    # GeoIP
     try:
-        import maxminddb
+        import maxminddb  # noqa: F401
         print("  GeoIP:           installed (maxminddb)")
     except ImportError:
         print("  GeoIP:           not installed (pip install tellurium[geoip])")
 
-    # Cache dir
-    cache = Path.home() / ".tellurium"
-    print(f"  Cache:           {cache}")
+    print(f"  Cache:           {_cache_dir()}")
 
 
 def _list_browsers() -> None:
-    """List installed browser versions."""
-    import json
-    cache = _cache_dir()
-    browsers = sorted(cache.glob("chromium-patched-*"), reverse=True)
-
+    """List installed patched browser versions."""
+    browsers = _cache.installed_browsers(_cache_dir())
     if not browsers:
         print("No browsers installed.")
+        print("Run 'tellurium download-browser --browser patched' to install one.")
         return
 
     print("Installed browsers:\n")
-    for browser_dir in browsers:
-        version = browser_dir.name.replace("chromium-patched-", "")
-        chrome_path = browser_dir / "chrome"
-        manifest_path = browser_dir / "MANIFEST.json"
-
-        if not chrome_path.exists():
-            continue
-
-        sha256_prefix = ""
-        if manifest_path.exists():
-            try:
-                manifest = json.loads(manifest_path.read_text())
-                sha256 = manifest.get("sha256", "")
-                if sha256:
-                    sha256_prefix = sha256[:16] + "..."
-            except Exception:
-                pass
-
-        print(f"  {version}")
-        print(f"    Path: {browser_dir}")
-        if sha256_prefix:
-            print(f"    SHA256: {sha256_prefix}")
+    for b in browsers:
+        marker = "  (current)" if b.is_current else ""
+        print(f"  {b.version}{marker}")
+        print(f"    Path: {b.path}")
+        sha = b.expected_sha256
+        if sha:
+            print(f"    SHA256: {sha[:16]}...")
+        if b.manifest:
+            rel = b.manifest.get("telluride_version") or b.manifest.get("version")
+            if rel and rel != b.version:
+                print(f"    Release: {rel}")
+            if b.manifest.get("security"):
+                print(f"    Security release: {', '.join(b.manifest.get('cve', []))}")
         print()
 
 
 def _update_browser(check_only: bool, security_only: bool) -> None:
     """Check for and optionally install browser updates."""
+    from tellurium.browser import _update_check
+
     cache = _cache_dir()
     installed = _get_installed_version(cache)
-    latest = _check_latest_patched()
+    info = _update_check.check_for_update(cache_root=cache, force=True)
+    latest = info.latest if info else _check_latest_patched()
 
     if not latest:
         print("Could not check for updates (network error or no releases found).")
-        return
+        sys.exit(1)
 
     if not installed:
-        print(f"No patched browser installed.")
+        print("No patched browser installed.")
         print(f"Latest available: {latest}")
-        if not check_only:
-            print("\nRun 'tellurium download-browser --browser patched' to install.")
+        if check_only:
+            return
+        if not _install_patched(latest):
+            sys.exit(1)
         return
 
     if installed == latest:
         print(f"Already up to date: {installed}")
         return
 
+    is_security = bool(info and info.security)
     print(f"Installed: {installed}")
-    print(f"Available: {latest}")
+    print(f"Available: {latest}{' (SECURITY release)' if is_security else ''}")
 
     if check_only:
         print("\nUpdate available. Run 'tellurium update-browser' to install.")
-    else:
-        # v0.1.x: implement actual update download — see CHANGELOG.md "Unreleased"
-        print(
-            "\nAuto-download is experimental and not wired in v0.1.\n"
-            "To install the patched binary manually, see README.md\n"
-            "  → 'Patched binary (experimental)'.\n"
-            "Recommended for v0.1: use stock Chrome via Browser.launch()\n"
-            "  without browser='patched'."
-        )
+        return
+    if security_only and not is_security:
+        print("\nNot a security release; skipping (--security-only).")
+        return
+    if not _install_patched(latest):
+        sys.exit(1)
 
 
 def _prune_browsers(keep: int) -> None:
-    """Remove old browser versions, keeping the N most recent."""
+    """Remove old browser versions, keeping the N most recent (never 'current')."""
     import shutil
-    cache = _cache_dir()
-    browsers = sorted(cache.glob("chromium-patched-*"), reverse=True)
 
+    browsers = _cache.installed_browsers(_cache_dir())
     if len(browsers) <= keep:
         print(f"Only {len(browsers)} browser(s) installed, keeping all.")
         return
 
-    to_remove = browsers[keep:]
     to_keep = browsers[:keep]
+    to_remove = [b for b in browsers[keep:] if not b.is_current]
+    kept_current = [b for b in browsers[keep:] if b.is_current]
 
     print(f"Keeping {keep} most recent version(s):")
-    for b in to_keep:
-        version = b.name.replace("chromium-patched-", "")
-        print(f"  {version}")
+    for b in to_keep + kept_current:
+        print(f"  {b.version}{'  (current)' if b.is_current else ''}")
 
     print(f"\nRemoving {len(to_remove)} old version(s):")
-    for browser_dir in to_remove:
-        version = browser_dir.name.replace("chromium-patched-", "")
-        print(f"  {version}")
-        shutil.rmtree(browser_dir)
+    for b in to_remove:
+        print(f"  {b.version}")
+        shutil.rmtree(b.path)
 
     print("\nDone.")
 
 
 def _verify_browser(reinstall: bool) -> None:
     """Verify browser binary integrity using SHA256 from MANIFEST.json."""
-    import hashlib
-    import json
+    from tellurium.browser._manifest import _sha256_file
 
-    cache = _cache_dir()
-    browsers = list(cache.glob("chromium-patched-*"))
-
+    browsers = _cache.installed_browsers(_cache_dir())
     if not browsers:
         print("No browsers installed.")
         return
 
     all_valid = True
-    for browser_dir in browsers:
-        version = browser_dir.name.replace("chromium-patched-", "")
-        chrome_path = browser_dir / "chrome"
-        manifest_path = browser_dir / "MANIFEST.json"
-
-        if not chrome_path.exists():
-            print(f"  {version}: MISSING (chrome binary not found)")
-            all_valid = False
+    for b in browsers:
+        expected_hash = b.expected_sha256
+        if b.manifest is None:
+            print(f"  {b.version}: SKIP (no MANIFEST.json)")
             continue
-
-        if not manifest_path.exists():
-            print(f"  {version}: SKIP (no MANIFEST.json)")
+        if not expected_hash:
+            print(f"  {b.version}: SKIP (no SHA256 for this platform in manifest)")
             continue
 
         try:
-            manifest = json.loads(manifest_path.read_text())
-            expected_hash = manifest.get("sha256")
-            if not expected_hash:
-                print(f"  {version}: SKIP (no SHA256 in manifest)")
-                continue
-
-            actual_hash = hashlib.sha256(chrome_path.read_bytes()).hexdigest()
-
-            if actual_hash == expected_hash:
-                print(f"  {version}: OK (SHA256 valid)")
-            else:
-                print(f"  {version}: CORRUPT (SHA256 mismatch)")
-                print(f"    Expected: {expected_hash[:16]}...")
-                print(f"    Actual:   {actual_hash[:16]}...")
-                all_valid = False
-
-                if reinstall:
-                    # v0.1.x: implement reinstall — see CHANGELOG.md "Unreleased"
-                    print(
-                        "    --reinstall is not wired in v0.1.\n"
-                        "    Manual fix: remove the corrupt binary at\n"
-                        f"      {browser_dir}\n"
-                        "    and re-install via the manual workflow in\n"
-                        "    README.md → 'Patched binary (experimental)'."
-                    )
-        except Exception as e:
-            print(f"  {version}: ERROR ({e})")
+            actual_hash = _sha256_file(b.binary)
+        except OSError as e:
+            print(f"  {b.version}: ERROR ({e})")
             all_valid = False
+            continue
+
+        if actual_hash == expected_hash:
+            print(f"  {b.version}: OK (SHA256 valid)")
+            continue
+
+        print(f"  {b.version}: CORRUPT (SHA256 mismatch)")
+        print(f"    Expected: {expected_hash[:16]}...")
+        print(f"    Actual:   {actual_hash[:16]}...")
+        if reinstall:
+            print(f"    Reinstalling {b.version}...")
+            if _install_patched(b.version, reinstall=True):
+                continue
+            print("    Reinstall failed; remove the directory manually and retry:")
+            print(f"      {b.path}")
+        all_valid = False
 
     if not all_valid:
         sys.exit(1)

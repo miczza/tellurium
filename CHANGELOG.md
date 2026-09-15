@@ -5,7 +5,36 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-(none)
+### Added
+
+- Patched-binary auto-install: `tellurium download-browser --browser patched
+  [--version]`, `update-browser` (installs; `--security-only`), `verify-browser
+  --reinstall` now wired. Releases are fetched from GitHub Releases of
+  `chromium-telluride`, checked against `SHA256SUMS`, extracted safely and the
+  `chrome` binary verified against `MANIFEST.json`.
+- `Browser.launch(auto_security_update=True)` installs security releases found
+  by the daily check (was `NotImplementedError`).
+- `TELLURIUM_CACHE_DIR` environment override for the browser cache.
+- `tellurium stealth-test`: fixed (`async with` on a coroutine), adds toString
+  shape invariants, `--full` visits sannysoft/browserscan, `--headed`.
+
+### Changed
+
+- Single cache layout shared by engine, CLI and installer:
+  `~/.tellurium/chromium/<chromium-version>/chrome` (+ `MANIFEST.json`,
+  `current` symlink). CLI previously looked in `chromium-patched-<v>/`.
+  The legacy binary name `tellurium-chromium` is still accepted.
+- CLI reads `binary_sha256[<platform>]` from `MANIFEST.json` (was flat `sha256`,
+  which never matched the fork's manifest).
+- `PatchedEngine` always passes `--fingerprint=<seed>` (random seed if none
+  given: the fork requires it) and no longer emits `--fingerprint-timezone` /
+  `--fingerprint-locale`, which no chromium-telluride patch implements.
+- Update-check and release URLs point at `github.com/miczza/chromium-telluride`.
+
+### Fixed
+
+- CHANGELOG/README claimed 3 residual CreepJS lies on the patched binary; the
+  2026-04-27 triage measured `totalLies = 0`.
 
 ## [0.1.0] - 2026-04-26
 

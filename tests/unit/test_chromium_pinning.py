@@ -10,14 +10,14 @@ def test_pinned_version_uses_specific_dir(tmp_path):
     cache_root = tmp_path / ".tellurium" / "chromium"
     pinned = cache_root / "146.0.7680.188"
     pinned.mkdir(parents=True)
-    (pinned / "tellurium-chromium").write_text("binary")
+    (pinned / "chrome").write_text("binary")
 
     eng = PatchedEngine(
         cache_root=cache_root,
         chromium_version="146.0.7680.188",
     )
     resolved = eng.resolve_binary_path()
-    assert resolved == pinned / "tellurium-chromium"
+    assert resolved == pinned / "chrome"
 
 
 def test_pinned_version_bypasses_update_check(tmp_path, monkeypatch):
@@ -33,7 +33,7 @@ def test_pinned_version_bypasses_update_check(tmp_path, monkeypatch):
     cache_root = tmp_path / ".tellurium" / "chromium"
     pinned = cache_root / "146.0.7680.188"
     pinned.mkdir(parents=True)
-    (pinned / "tellurium-chromium").write_text("binary")
+    (pinned / "chrome").write_text("binary")
 
     eng = PatchedEngine(
         cache_root=cache_root,
@@ -48,7 +48,7 @@ def test_pinned_sha256_verified(tmp_path):
     cache_root = tmp_path / ".tellurium" / "chromium"
     pinned = cache_root / "146.0.7680.188"
     pinned.mkdir(parents=True)
-    binary = pinned / "tellurium-chromium"
+    binary = pinned / "chrome"
     binary.write_bytes(b"binary-content")
     expected_sha = hashlib.sha256(b"binary-content").hexdigest()
 
@@ -69,12 +69,49 @@ def test_pinned_sha256_verified(tmp_path):
     assert eng2.resolve_binary_path() == binary
 
 
-def test_auto_security_update_not_implemented(tmp_path):
-    """auto_security_update=True must raise NotImplementedError (deferred feature)."""
+def test_auto_security_update_installs_security_release(tmp_path, monkeypatch):
+    """auto_security_update=True downloads a security release when the daily
+    check reports one; non-security releases are only warned about."""
+    from tellurium.browser._update_check import UpdateInfo
     cache_root = tmp_path / ".tellurium" / "chromium"
-    cache_root.mkdir(parents=True)
-    with pytest.raises(NotImplementedError, match="auto_security_update"):
-        PatchedEngine(
-            cache_root=cache_root,
-            auto_security_update=True,
-        )
+    cur = cache_root / "146.0.7680.180"
+    cur.mkdir(parents=True)
+    (cur / "chrome").write_text("binary")
+    from tellurium.browser import _cache
+    _cache.set_current("146.0.7680.180", cache_root)
+
+    info = UpdateInfo(installed="146.0.7680.180", latest="146.0.7680.195",
+                      manifest={"security": True, "cve": ["CVE-2026-1"]})
+    monkeypatch.setattr("tellurium.browser._update_check.check_for_update", lambda **kw: info)
+    downloaded = []
+    monkeypatch.setattr(
+        "tellurium.browser._patched_download.download_patched",
+        lambda v, **kw: downloaded.append(v),
+    )
+    PatchedEngine(cache_root=cache_root, auto_security_update=True).resolve_binary_path()
+    assert downloaded == ["146.0.7680.195"]
+
+    downloaded.clear()
+    PatchedEngine(cache_root=cache_root, auto_security_update=False).resolve_binary_path()
+    assert downloaded == []
+
+
+def test_legacy_binary_name_still_resolves(tmp_path):
+    """Installs done with the v0.1.0 README (binary named tellurium-chromium) keep working."""
+    cache_root = tmp_path / ".tellurium" / "chromium"
+    pinned = cache_root / "146.0.7680.188"
+    pinned.mkdir(parents=True)
+    (pinned / "tellurium-chromium").write_text("binary")
+    eng = PatchedEngine(cache_root=cache_root, chromium_version="146.0.7680.188")
+    assert eng.resolve_binary_path() == pinned / "tellurium-chromium"
+
+
+def test_unpinned_without_current_symlink_uses_newest(tmp_path, monkeypatch):
+    monkeypatch.setattr("tellurium.browser._update_check.check_for_update", lambda **kw: None)
+    cache_root = tmp_path / ".tellurium" / "chromium"
+    for v in ("146.0.7680.188", "147.0.7700.1"):
+        d = cache_root / v
+        d.mkdir(parents=True)
+        (d / "chrome").write_text("binary")
+    eng = PatchedEngine(cache_root=cache_root)
+    assert eng.resolve_binary_path() == cache_root / "147.0.7700.1" / "chrome"

@@ -1,17 +1,28 @@
-"""Read and verify tellurium-chromium release manifests."""
+"""Read and verify chromium-telluride release manifests (MANIFEST.json).
+
+Schema contract: ``chromium-telluride/docs/manifest-schema.md``.  Only the
+fields in :class:`ReleaseManifest` are required; everything else is ignored.
+"""
 from __future__ import annotations
+
 import hashlib
 import json
 import platform as _plat
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+_CHUNK = 1 << 20
+
 
 def _sha256_file(path: Path) -> str:
-    """Return hex SHA256 of *path*. Task 4 may switch to chunked hashing."""
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    """Return hex SHA256 of *path* (chunked; binaries are ~300 MB)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(_CHUNK), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def current_platform() -> str:
@@ -41,10 +52,10 @@ class ReleaseManifest:
     chromium_upstream: str
     data_version: str
     binary_sha256: dict[str, str]
+    supported_flags: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_path(cls, path: Path) -> ReleaseManifest:
-        data: dict[str, Any] = json.loads(path.read_text())
+    def from_dict(cls, data: dict[str, Any]) -> ReleaseManifest:
         return cls(
             version=data["version"],
             previous=data.get("previous", ""),
@@ -55,7 +66,21 @@ class ReleaseManifest:
             chromium_upstream=data.get("chromium_upstream", ""),
             data_version=data.get("data_version", ""),
             binary_sha256=dict(data["binary_sha256"]),
+            supported_flags=list(data.get("supported_flags", [])),
         )
+
+    @classmethod
+    def from_path(cls, path: Path) -> ReleaseManifest:
+        return cls.from_dict(json.loads(path.read_text()))
+
+    @property
+    def install_dir_name(self) -> str:
+        """Cache directory name for this release: the chromium upstream version.
+
+        Falls back to ``version`` for manifests that predate the schema
+        (where ``version`` already held the chromium version).
+        """
+        return self.chromium_upstream or self.version
 
 
 def verify_binary(binary_path: Path, manifest: ReleaseManifest, platform: str) -> None:

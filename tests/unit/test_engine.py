@@ -21,12 +21,20 @@ def test_patched_engine_capabilities():
     assert "native_navigator" in caps
 
 
-def test_patched_engine_build_args_no_profile():
+def test_patched_engine_build_args_no_profile_uses_random_seed():
+    """The fork requires --fingerprint: with no profile/seed a random seed is used."""
     engine = PatchedEngine()
-    assert engine.build_args(None) == []
+    args = engine.build_args(None)
+    assert len(args) == 1 and args[0].startswith("--fingerprint=")
+    assert engine.seed is not None and args[0] == f"--fingerprint={engine.seed}"
 
 
-def test_patched_engine_build_args_with_seed():
+def test_patched_engine_build_args_explicit_seed_without_profile():
+    engine = PatchedEngine(seed=42069)
+    assert engine.build_args(None) == ["--fingerprint=42069"]
+
+
+def test_patched_engine_build_args_with_profile():
     engine = PatchedEngine()
     class FakeProfile:
         seed = 42069
@@ -34,10 +42,9 @@ def test_patched_engine_build_args_with_seed():
         timezone = "Europe/Berlin"
         locale = "de-DE"
     args = engine.build_args(FakeProfile())
-    assert "--fingerprint=42069" in args
-    assert "--fingerprint-platform=linux" in args
-    assert "--fingerprint-timezone=Europe/Berlin" in args
-    assert "--fingerprint-locale=de-DE" in args
+    assert args == ["--fingerprint=42069", "--fingerprint-platform=linux"]
+    # timezone/locale are NOT flags of chromium-telluride (no patch implements them)
+    assert not any("timezone" in a or "locale" in a for a in args)
 
 
 def test_patched_engine_build_args_partial_profile():

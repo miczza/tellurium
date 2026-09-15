@@ -43,7 +43,7 @@ def test_update_check_warns_if_stale(tmp_path, monkeypatch, caplog):
     check_file.write_text(json.dumps({"last_check": old_iso, "latest_version": ""}))
 
     manifest = {
-        "version": "146.0.7680.188",
+        "version": "0.1.0", "chromium_upstream": "146.0.7680.188",
         "released_at": (datetime.now(timezone.utc) - timedelta(weeks=2)).isoformat(),
         "security": False,
     }
@@ -66,7 +66,7 @@ def test_update_check_warns_aggressively_on_security(tmp_path, monkeypatch, capl
     check_file.write_text(json.dumps({"last_check": old_iso, "latest_version": ""}))
 
     manifest = {
-        "version": "146.0.7680.195",
+        "version": "0.1.1", "chromium_upstream": "146.0.7680.195",
         "released_at": datetime.now(timezone.utc).isoformat(),
         "security": True,
         "cve": ["CVE-2026-1234"],
@@ -79,3 +79,23 @@ def test_update_check_warns_aggressively_on_security(tmp_path, monkeypatch, capl
     messages = "\n".join(r.message for r in caplog.records)
     assert "security" in messages.lower()
     assert "CVE-2026-1234" in messages
+
+
+def test_update_check_returns_info_and_url_points_to_chromium_telluride(tmp_path, monkeypatch):
+    cache_root = tmp_path / ".tellurium" / "chromium"
+    d = cache_root / "146.0.7680.188"
+    d.mkdir(parents=True)
+    (cache_root / "current").symlink_to(d)
+    check_file = tmp_path / ".update-check"
+    seen = []
+
+    def urlopen(url, *a, **kw):
+        seen.append(url)
+        return _fake_urlopen({"version": "0.1.0", "chromium_upstream": "146.0.7680.188"})(url)
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    info = _update_check.check_for_update(cache_root=cache_root, check_file=check_file)
+    assert info is not None and not info.available
+    assert info.installed == "146.0.7680.188"
+    assert seen == [_update_check.MANIFEST_URL]
+    assert "miczza/chromium-telluride" in _update_check.MANIFEST_URL
