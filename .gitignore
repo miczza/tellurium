@@ -1,1 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# IDE / tooling
+.idea/
+.serena/
 .worktrees/
+.archive/
+
+# Session prompts and local scratch
+prompt*.txt
+
+# Runtime artifacts
+examples/sessions/
+examples/fingerprint_tests/diagnose_results.json
+examples/fingerprint_tests/results_seed_*.json
+examples/fingerprint_tests/results_patched_*.json

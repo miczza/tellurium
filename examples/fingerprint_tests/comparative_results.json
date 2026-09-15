@@ -1,0 +1,267 @@
+{
+  "tellurium": {
+    "framework": "tellurium",
+    "chrome": "/usr/bin/google-chrome-stable",
+    "fp_seed": null,
+    "webdriver_check": {
+      "webdriver": false,
+      "chrome": true,
+      "permissions": "object"
+    },
+    "sannysoft": {
+      "passed": 31,
+      "failed": 0,
+      "warnings": 0,
+      "details": {
+        "User Agent (Old)": {
+          "value": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.188 Safari/537.36",
+          "status": "passed"
+        },
+        "WebDriver (New)": {
+          "value": "missing (passed)",
+          "status": "passed"
+        },
+        "WebDriver Advanced": {
+          "value": "passed",
+          "status": "passed"
+        },
+        "Chrome (New)": {
+          "value": "present (passed)",
+          "status": "passed"
+        },
+        "Permissions (New)": {
+          "value": "prompt",
+          "status": "passed"
+        },
+        "Plugins Length (Old)": {
+          "value": "5",
+          "status": "passed"
+        },
+        "Plugins is of type PluginArray": {
+          "value": "passed",
+          "status": "passed"
+        },
+        "Languages (Old)": {
+          "value": "en-US,en;q=0.9",
+          "status": "passed"
+        },
+        "WebGL Vendor": {
+          "value": "Google Inc. (Intel)",
+          "status": "passed"
+        },
+        "WebGL Renderer": {
+          "value": "ANGLE (Intel, Mesa Intel(R) Arc(tm) Graphics (MTL), OpenGL ES 3.2)",
+          "status": "passed"
+        },
+        "Broken Image Dimensions": {
+          "value": "16x16",
+          "status": "passed"
+        },
+        "PHANTOM_UA": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "PHANTOM_PROPERTIES": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "PHANTOM_ETSL": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "PHANTOM_LANGUAGE": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "PHANTOM_WEBSOCKET": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "MQ_SCREEN": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "PHANTOM_OVERFLOW": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "PHANTOM_WINDOW_HEIGHT": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "HEADCHR_UA": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "HEADCHR_CHROME_OBJ": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "HEADCHR_PERMISSIONS": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "HEADCHR_PLUGINS": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "HEADCHR_IFRAME": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "CHR_DEBUG_TOOLS": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "SELENIUM_DRIVER": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "CHR_BATTERY": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "CHR_MEMORY": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "TRANSPARENT_PIXEL": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "SEQUENTUM": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "VIDEO_CODECS": {
+          "value": "ok",
+          "status": "passed"
+        },
+        "navigator.cookieEnabled": {
+          "value": "document.write(navigator.cookieEnabled);\n            true",
+          "status": "unknown"
+        },
+        "navigator.doNotTrack": {
+          "value": "document.write(navigator.doNotTrack);\n            null",
+          "status": "unknown"
+        },
+        "navigator.msDoNotTrack": {
+          "value": "document.write(navigator.msDoNotTrack);\n            undefined",
+          "status": "unknown"
+        },
+        "navigator.sendBeacon": {
+          "value": "document.write(navigator.sendBeacon());",
+          "status": "unknown"
+        },
+        "navigator.userAgent": {
+          "value": "document.write(navigator.userAgent);\n            Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.188 Safari/537.36",
+          "status": "unknown"
+        },
+        "navigator.appName": {
+          "value": "document.write(navigator.appName);\n            Netscape",
+          "status": "unknown"
+        },
+        "navigator.vendor": {
+          "value": "document.write(navigator.vendor);\n            Google Inc.",
+          "status": "unknown"
+        },
+        "navigator.appCodeName": {
+          "value": "document.write(navigator.appCodeName);\n            Mozilla",
+          "status": "unknown"
+        },
+        "navigator.getUserMedia": {
+          "value": "document.write(navigator.getUserMedia());",
+          "status": "unknown"
+        },
+        "navigator.sayswho": {
+          "value": "document.write(navigator.sayswho);\n            undefined",
+          "status": "unknown"
+        },
+        "navigator.javaEnabled": {
+          "value": "document.write(navigator.javaEnabled());\n            false",
+          "status": "unknown"
+        },
+        "navigator.plugins": {
+          "value": "document.write(JSON.stringify(navigator.plugins));\n            {\"0\":{\"0\":{},\"1\":{}},\"1\":{\"0\":{},\"1\":{}},\"2\":{\"0\":{},\"1\":{}},\"3\":{\"0\":{},\"1\":{}},\"4\":{\"0\":{},\"1\":{}}}",
+          "status": "unknown"
+        },
+        "screen.width": {
+          "value": "document.write(screen.width);\n            2048",
+          "status": "unknown"
+        },
+        "screen.height": {
+          "value": "document.write(screen.height);\n            1280",
+          "status": "unknown"
+        },
+        "screen.colorDepth": {
+          "value": "document.write(screen.colorDepth);\n            24",
+          "status": "unknown"
+        },
+        "navigator.language": {
+          "value": "document.write(navigator.language);\n            en-US",
+          "status": "unknown"
+        },
+        "navigator.loadPurpose": {
+          "value": "document.write(navigator.loadPurpose);\n            undefined",
+          "status": "unknown"
+        },
+        "navigator.platform": {
+          "value": "document.write(navigator.platform);\n            Linux x86_64",
+          "status": "unknown"
+        },
+        "navigator.mediaDevices": {
+          "value": "audioinput:  id = videoinput:  id = audiooutput:  id =",
+          "status": "unknown"
+        },
+        "navigator.getBattery details": {
+          "value": "Charging: trueLevel: 0.8",
+          "status": "unknown"
+        },
+        "Canvas1": {
+          "value": "Hash: -1038593297",
+          "status": "unknown"
+        },
+        "Canvas2": {
+          "value": "Hash: -1038593297",
+          "status": "unknown"
+        },
+        "Canvas3 (iframe sandbox)": {
+          "value": "Hash: -1038593297",
+          "status": "unknown"
+        },
+        "Canvas4 (iframe sandbox)": {
+          "value": "Hash: -1038593297",
+          "status": "unknown"
+        },
+        "Canvas5 (iframe)": {
+          "value": "Hash: -1038593297",
+          "status": "unknown"
+        }
+      }
+    },
+    "creepjs": {
+      "lies_detected": 0,
+      "headless_pct": 0,
+      "like_headless_pct": 38,
+      "stealth_pct": 0,
+      "version": {
+        "source": "script-src",
+        "value": "https://abrahamjuliot.github.io/creepjs/creep.js"
+      }
+    },
+    "browserleaks_canvas": {
+      "canvasHash": "020ab27bd4f6ebef4487276fa1369d71",
+      "uniqueness": "99.99% (25 of 298939 user agents have the same signature)"
+    },
+    "browserleaks_webgl": {
+      "vendor": "! Google Inc. (Intel)",
+      "renderer": "! ANGLE (Intel, Mesa Intel(R) Arc(tm) Graphics (MTL), OpenGL ES 3.2)"
+    },
+    "browserscan": {
+      "bot_detected": false,
+      "webdriver": false,
+      "details": {}
+    },
+    "elapsed_s": 53.5
+  }
+}
