@@ -71,6 +71,8 @@ extend-exclude = [
     "opencli",
     "CloakBrowser",
     "examples/sessions",
+    "*.md",   # ruff >= 0.16 formats fenced code blocks in Markdown; docs are prose
+    "docs",
 ]
 
 [tool.ruff.lint]
