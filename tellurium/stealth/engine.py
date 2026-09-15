@@ -322,7 +322,9 @@ class StealthEngine:
 
         await session.send("Emulation.setUserAgentOverride", {
             "userAgent": p.user_agent,
-            "acceptLanguage": p.accept_language,
+            # Empty = keep Chrome's own Accept-Language (set via --accept-lang
+            # at launch). A non-empty value leaks into navigator.languages.
+            "acceptLanguage": "",
             "platform": p.platform,
             "userAgentMetadata": {
                 "brands": [

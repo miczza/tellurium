@@ -249,6 +249,16 @@ class Browser:
         stealth_flags: list[str] = []
         user_exts: list[str] = extensions or []
         if stealth and stealth_engine is not None:
+            # Languages: let Chrome derive both navigator.languages and the
+            # Accept-Language header (with its native q-values) from the
+            # --accept-lang pref. Overriding acceptLanguage via
+            # Emulation.setUserAgentOverride leaks the raw string into
+            # navigator.languages (["en-US", "en;q=0.9"]) and produces a
+            # malformed header ("en-US, en;q=0.9;q=0.9"). Measured on Chrome 153.
+            if stealth_profile is not None and stealth_profile.languages:
+                stealth_flags.append(
+                    "--accept-lang=" + ",".join(stealth_profile.languages)
+                )
             ext_path = stealth_engine.build_extension()
             if ext_path or user_exts:
                 stealth_flags.append(

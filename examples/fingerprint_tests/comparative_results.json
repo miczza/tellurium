@@ -42,7 +42,7 @@
           "status": "passed"
         },
         "Languages (Old)": {
-          "value": "en-US,en;q=0.9",
+          "value": "en-US,en",
           "status": "passed"
         },
         "WebGL Vendor": {
@@ -262,6 +262,6 @@
       "webdriver": false,
       "details": {}
     },
-    "elapsed_s": 54.2
+    "elapsed_s": 54.4
   }
 }
