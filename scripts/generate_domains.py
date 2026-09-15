@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Generate CDP domain bindings from protocol.json."""
+
 import json
 import sys
 from pathlib import Path
