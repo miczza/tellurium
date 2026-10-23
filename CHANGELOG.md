@@ -84,6 +84,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The pipe transport re-scanned its whole receive buffer for the message
+  terminator on every chunk, so one large reply (full-page screenshot, big
+  response body) cost quadratic time with the event loop blocked: 64 MB took
+  about 1.5 s. Only new bytes are scanned now.
+- `PipePosixTransport.close()` left the read end of the CDP pipe open: one fd
+  leaked per launch/close cycle.
 - Elements went stale after any later query: every `select`/`xpath`/`find`
   refreshes the DOM agent (`DOM.getDocument`), voiding all earlier nodeIds,
   so `h1 = select("h1"); select("p"); h1.text()` raised "No node with given

@@ -21,7 +21,7 @@ class Session:
         self._pending: dict[int, asyncio.Future] = {}
         self._event_handlers: dict[str, list[callable]] = {}
         self._lock = asyncio.Lock()
-        self._closed_reason: str | None = None
+        self._closed_error: ConnectionError | None = None
 
     async def send(
         self,
@@ -35,8 +35,8 @@ class Session:
                 f"and enables Proxy ownKeys trap detection. "
                 f"Use Page.createIsolatedWorld + Runtime.evaluate instead."
             )
-        if self._closed_reason is not None:
-            raise ConnectionError(self._closed_reason)
+        if self._closed_error is not None:
+            raise type(self._closed_error)(*self._closed_error.args)
         msg_id = await self._router._allocate_id()
         async with self._lock:
             msg: dict = {"id": msg_id, "method": method, "params": params or {}}
@@ -87,12 +87,13 @@ class Session:
                     # pending send() would then wait forever.
                     logger.exception("CDP event handler for %s failed", msg["method"])
 
-    def _close(self, reason: str) -> None:
-        """Fail every pending command and reject future ones."""
-        self._closed_reason = reason
+    def _close(self, reason: str, error: type[ConnectionError] = ConnectionError) -> None:
+        """Fail every pending command and reject future ones with *error*."""
+        if self._closed_error is None:
+            self._closed_error = error(reason)
         for future in self._pending.values():
             if not future.done():
-                future.set_exception(ConnectionError(reason))
+                future.set_exception(error(reason))
         self._pending.clear()
 
 

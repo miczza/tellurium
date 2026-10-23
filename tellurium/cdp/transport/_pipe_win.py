@@ -11,6 +11,7 @@ if sys.platform != "win32":
     raise ImportError("Windows-only module")
 
 from tellurium.cdp.transport._base import CDPTransport
+from tellurium.cdp.transport._framing import NullFramer
 
 
 class PipeWindowsTransport(CDPTransport):
@@ -21,13 +22,18 @@ class PipeWindowsTransport(CDPTransport):
     in asyncio's proactor loop for anonymous pipes, so blocking ``os.read`` /
     ``os.write`` calls are pushed to the default thread executor instead.
 
+    :meth:`close` must run only after Chrome has exited: closing an anonymous
+    pipe handle while an executor thread is blocked in ``ReadFile`` on it can
+    itself block.  :class:`~tellurium.browser.process.BrowserProcess` stops
+    Chrome first, which ends the pending read with EOF.
+
     **Untested on real Windows.**
     """
 
     def __init__(self, read_fd: int, write_fd: int):
         self._read_fd = read_fd
         self._write_fd = write_fd
-        self._buffer = bytearray()
+        self._framer = NullFramer()
 
     async def start(self) -> None:
         """No-op: the fds are usable as-is (kept for transport parity)."""
@@ -42,18 +48,16 @@ class PipeWindowsTransport(CDPTransport):
     async def recv(self) -> dict:
         loop = asyncio.get_running_loop()
         while True:
-            null_pos = self._buffer.find(b"\0")
-            if null_pos != -1:
-                raw = bytes(self._buffer[:null_pos])
-                del self._buffer[: null_pos + 1]
-                return json.loads(raw)
+            message = self._framer.next_message()
+            if message is not None:
+                return json.loads(message)
             chunk = await loop.run_in_executor(None, self._read_sync)
             if not chunk:
                 raise EOFError("Pipe closed")
-            self._buffer.extend(chunk)
+            self._framer.feed(chunk)
 
     def _read_sync(self) -> bytes:
-        return os.read(self._read_fd, 65536)
+        return os.read(self._read_fd, 1 << 20)
 
     async def close(self) -> None:
         for fd in (self._read_fd, self._write_fd):
