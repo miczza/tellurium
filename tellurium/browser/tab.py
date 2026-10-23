@@ -253,7 +253,8 @@ class Tab:
     async def eval_on(self, selector: str, expression: str, timeout: float | None = None) -> Any:
         """Run JS on the first element matching *selector*.
 
-        *expression* is a function body called with the element as ``this``.
+        *expression* is a function (``"el => el.id"``, ``"function() { return
+        this.id; }"``) called with the element as ``this`` and as its argument.
         *timeout* bounds each CDP command (default: the session's, 30 s).
         """
         send = self._session.send
@@ -268,18 +269,13 @@ class Tab:
             raise LookupError(f"No element matching {selector!r}")
         node = {"nodeId": node_id, "objectGroup": self._handles.name}
         object_id = (await send("DOM.resolveNode", node, timeout=timeout))["object"]["objectId"]
-        fn = expression
-        if "=>" in fn and not fn.strip().startswith("function"):  # "el => el.id"
-            args, body = (part.strip() for part in fn.split("=>", 1))
-            args = args if args.startswith("(") else f"({args})"
-            body = body if body.startswith("{") else f"{{ return {body}; }}"
-            fn = f"function{args} {body}"
         try:
             res = await self._session.send(
                 "Runtime.callFunctionOn",
                 {
-                    "functionDeclaration": fn,
+                    "functionDeclaration": expression,
                     "objectId": object_id,
+                    "arguments": [{"objectId": object_id}],
                     "returnByValue": True,
                     "awaitPromise": True,
                 },

@@ -113,6 +113,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Tab.eval_on(selector, "el => el.id")` passes the element as the first
+  argument as well as `this`: arrow functions (which have no `this`) got
+  `undefined`, and `async el => …` was mangled by the old arrow rewriting.
 - `BrowserContext.get_cookies(domain)` matches the domain and its subdomains
   instead of any substring, like `Browser.get_cookies`.
 - `Browser.launch(stealth=True, proxy=...)` looks up the proxy exit IP and its
