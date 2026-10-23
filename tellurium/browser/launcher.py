@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import zipfile
 from pathlib import Path
+
+from tellurium.browser._cache import _version_key
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +40,19 @@ _VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)\.(\d+)")
 
 
 def _detect_chrome_version(executable: str) -> tuple[int, ...] | None:
-    """Run *executable* --version and return a 4-tuple of ints, or None on failure."""
+    """Run *executable* --version and return a 4-tuple of ints, or None on failure.
+
+    On Windows ``chrome.exe --version`` opens a window and prints nothing, so
+    the version is read from the install layout instead: the executable sits
+    next to a directory named after its version.
+    """
+    if sys.platform == "win32":
+        versions = [
+            tuple(int(x) for x in m.groups())
+            for entry in Path(executable).parent.glob("*")
+            if entry.is_dir() and (m := _VERSION_RE.fullmatch(entry.name))
+        ]
+        return max(versions, default=None)
     try:
         output = subprocess.check_output(
             [executable, "--version"],
@@ -82,7 +98,10 @@ def _find_cft_managed() -> list[tuple[str, str]]:
     if not base.is_dir():
         return results
 
-    for entry in sorted(base.iterdir(), reverse=True):  # newest version first
+    def version(entry: Path) -> tuple[int, ...]:
+        return _version_key(entry.name.removeprefix("chrome-"))
+
+    for entry in sorted(base.iterdir(), key=version, reverse=True):  # newest first
         if not entry.is_dir():
             continue
         # Linux / macOS binary names
@@ -275,6 +294,38 @@ async def find_chrome(stealth: bool = False) -> str:
     return await download_cft()
 
 
+def _extract_zip(zip_path: Path, dest: Path) -> None:
+    """Extract *zip_path* into *dest*, keeping Unix modes and symlinks.
+
+    ``zipfile.extractall`` drops both: helpers such as
+    ``chrome_crashpad_handler`` lose their exec bit and the macOS framework
+    links become text files. Entries that would land outside *dest*
+    (``..``, absolute paths, paths through a symlink) are refused.
+    """
+    root = dest.resolve()
+    with zipfile.ZipFile(zip_path) as zf:
+        for info in zf.infolist():
+            name = Path(info.filename)
+            parent = (root / name).parent.resolve()
+            if name.is_absolute() or ".." in name.parts or not parent.is_relative_to(root):
+                raise ValueError(f"Archive entry outside the install dir: {info.filename}")
+            target = parent / name.name
+            mode = info.external_attr >> 16
+            if info.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            parent.mkdir(parents=True, exist_ok=True)
+            if os.path.lexists(target):
+                target.unlink()
+            if stat.S_ISLNK(mode):
+                os.symlink(zf.read(info).decode(), target)
+                continue
+            with zf.open(info) as src, open(target, "wb") as out:
+                shutil.copyfileobj(src, out)
+            if mode & 0o777:
+                target.chmod(mode & 0o777)
+
+
 async def download_cft(version: str = "latest") -> str:
     """Download Chrome for Testing and return the path to its executable.
 
@@ -290,6 +341,11 @@ async def download_cft(version: str = "latest") -> str:
     str
         Absolute path to the extracted Chrome executable.
     """
+    # Network, unzip and chmod: all blocking, so off the event loop.
+    return await asyncio.to_thread(_download_cft_sync, version)
+
+
+def _download_cft_sync(version: str) -> str:
     try:
         import json as _json
         import urllib.request
@@ -329,9 +385,10 @@ async def download_cft(version: str = "latest") -> str:
     urllib.request.urlretrieve(download_url, zip_path)  # noqa: S310
 
     logger.info("Extracting %s", zip_path)
-    with zipfile.ZipFile(zip_path) as zf:
-        zf.extractall(dest_dir)
-    zip_path.unlink(missing_ok=True)
+    try:
+        _extract_zip(zip_path, dest_dir)
+    finally:
+        zip_path.unlink(missing_ok=True)
 
     # Locate the extracted binary
     for candidate in (

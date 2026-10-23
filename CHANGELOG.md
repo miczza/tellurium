@@ -86,6 +86,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Tellurium-managed Chrome for Testing installs were ranked by directory name,
+  so `chrome-99…` beat `chrome-140…`; they are ranked by version now.
+- `download_cft` extracted with `zipfile.extractall`, losing exec bits
+  (`chrome_crashpad_handler`) and symlinks (macOS framework links); modes and
+  links are kept now, and entries outside the install dir are refused. The
+  download and extraction run off the event loop.
+- Windows: the Chrome version (used to refuse extensions on branded Chrome
+  137+) is read from the install layout; `chrome.exe --version` prints
+  nothing there, so the check silently passed.
 - Chrome's stdout and stderr went to pipes nobody read: once about 64 KiB of
   log piled up (failed TLS handshakes, `--enable-logging=stderr`) Chrome
   blocked and every CDP command hung. The output is now drained on a thread
