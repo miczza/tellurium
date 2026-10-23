@@ -251,8 +251,8 @@ def install_from_tarball(
         binary = _cache.binary_in(staging)
         if binary is None:
             raise DownloadError(f"Tarball has no {_cache.BINARY_NAME} binary.")
+        binary.chmod(binary.stat().st_mode | 0o111)  # before hashing: chmod changes ctime
         verify_binary(binary, manifest, current_platform())
-        binary.chmod(binary.stat().st_mode | 0o111)
         sandbox = staging / "chrome_sandbox"
         if sandbox.is_file():
             sandbox.chmod(sandbox.stat().st_mode | 0o111)

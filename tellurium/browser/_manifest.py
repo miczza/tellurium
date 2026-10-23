@@ -93,7 +93,9 @@ def verify_binary(binary_path: Path, manifest: ReleaseManifest, platform: str) -
         raise BinaryCorruptedError(
             f"No SHA256 for platform {platform} in manifest {manifest.version}"
         )
-    actual = _sha256_file(binary_path)
+    from tellurium.browser._cache import binary_sha256  # _cache imports this module
+
+    actual = binary_sha256(binary_path)
     if actual != expected:
         raise BinaryCorruptedError(
             f"SHA256 mismatch for {binary_path}: expected {expected}, got {actual}. "

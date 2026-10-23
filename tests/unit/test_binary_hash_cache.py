@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import time
+
+import pytest
 
 from tellurium.browser import _cache, _manifest
 
@@ -62,3 +65,86 @@ def test_the_record_is_not_listed_as_a_browser(tmp_path):
     (version / _cache.BINARY_NAME).write_bytes(b"x")
     _cache.binary_sha256(version / _cache.BINARY_NAME)
     assert [b.version for b in _cache.installed_browsers(tmp_path)] == ["146.0.7680.188"]
+
+
+# --- wired into verification and the engine ---------------------------------
+
+
+def _install(tmp_path, content: bytes = b"binary-content"):
+    from tellurium.browser._manifest import current_platform
+
+    root = tmp_path / "chromium"
+    version = root / "146.0.7680.188"
+    version.mkdir(parents=True)
+    (version / _cache.BINARY_NAME).write_bytes(content)
+    manifest = {
+        "version": "0.1.0",
+        "chromium_upstream": "146.0.7680.188",
+        "binary_sha256": {current_platform(): hashlib.sha256(content).hexdigest()},
+    }
+    (version / _cache.MANIFEST_NAME).write_text(json.dumps(manifest))
+    return root, version / _cache.BINARY_NAME
+
+
+def test_verify_binary_hashes_once_per_file_version(tmp_path, monkeypatch):
+    from tellurium.browser._manifest import ReleaseManifest, current_platform, verify_binary
+
+    root, binary = _install(tmp_path)
+    manifest = ReleaseManifest.from_path(binary.with_name(_cache.MANIFEST_NAME))
+    calls = _counting(monkeypatch)
+    verify_binary(binary, manifest, current_platform())
+    verify_binary(binary, manifest, current_platform())
+    assert len(calls) == 1
+
+
+def test_engine_launches_reuse_the_hash(tmp_path, monkeypatch):
+    from tellurium.browser.engine import PatchedEngine
+
+    root, binary = _install(tmp_path)
+    pin = hashlib.sha256(b"binary-content").hexdigest()
+    calls = _counting(monkeypatch)
+    for _ in range(3):
+        engine = PatchedEngine(
+            cache_root=root, chromium_version="146.0.7680.188", chromium_sha256=pin
+        )
+        assert engine.resolve_binary_path() == binary
+    assert len(calls) == 1  # pin and MANIFEST checks share one hash, across launches
+
+
+def test_a_tampered_binary_still_fails_verification(tmp_path, monkeypatch):
+    from tellurium.browser.engine import BinaryCorruptedError, PatchedEngine
+
+    root, binary = _install(tmp_path)
+    engine = PatchedEngine(cache_root=root, chromium_version="146.0.7680.188")
+    engine.resolve_binary_path()
+    time.sleep(0.05)
+    binary.write_bytes(b"binary-c0ntent")  # same size
+    with pytest.raises(BinaryCorruptedError):
+        engine.resolve_binary_path()
+
+
+async def test_engine_get_executable_does_not_block_the_loop(tmp_path, monkeypatch):
+    import asyncio
+
+    from tellurium.browser.engine import PatchedEngine
+
+    def slow_resolve(self):
+        time.sleep(0.6)
+        return tmp_path / "chrome"
+
+    monkeypatch.setattr(PatchedEngine, "resolve_binary_path", slow_resolve)
+    gaps: list[float] = []
+
+    async def ticker() -> None:
+        last = time.monotonic()
+        while True:
+            await asyncio.sleep(0.01)
+            gaps.append(time.monotonic() - last)
+            last = time.monotonic()
+
+    tick = asyncio.create_task(ticker())
+    try:
+        assert await PatchedEngine(cache_root=tmp_path).get_executable() == str(tmp_path / "chrome")
+    finally:
+        tick.cancel()
+    assert gaps and max(gaps) < 0.3, f"event loop blocked for {max(gaps or [0]):.2f}s"

@@ -116,12 +116,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `Browser.launch(stealth=True, proxy=...)` looks up the proxy exit IP and its
   GeoIP data in a worker thread: run on the event loop, the lookup through an
   authenticated proxy starved the forwarder it was waiting for.
-- `Browser.launch` resolves the browser binary in a worker thread: with
+- `Browser.launch` resolves the browser binary off the event loop: with
   `browser="patched"` the daily update check (HTTP), an automatic security
   download and the binary hash no longer freeze the event loop.
-- `tellurium.browser._cache.binary_sha256()` remembers a binary's SHA256 beside
-  it until the file changes (size, inode, mtime, ctime), so it need not be
-  rehashed on every launch.
+- The patched binary is no longer rehashed (~300 MB) on every launch: its
+  SHA256 is remembered beside it until the file changes (size, inode, mtime,
+  ctime) and reused by the MANIFEST and `chromium_sha256` checks.
+  `PatchedEngine.get_executable()` resolves the binary in a worker thread.
+  `tellurium verify-browser` still hashes the file in full.
 - The initial tab enables the `Page` domain at launch, so a dialog opened
   before its first `get()` (e.g. by `tab.eval("alert(1)")`) is answered
   instead of blocking the tab.

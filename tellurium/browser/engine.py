@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 from tellurium.browser import _cache, _update_check
-from tellurium.browser._manifest import _sha256_file
 
 logger = logging.getLogger("tellurium")
 
@@ -129,7 +129,7 @@ class PatchedEngine(BrowserEngine):
                 f"or pass executable=/path/to/chrome."
             )
         if self._chromium_sha256:
-            actual = _sha256_file(binary)
+            actual = _cache.binary_sha256(binary)
             if actual != self._chromium_sha256:
                 raise BinaryCorruptedError(
                     f"SHA256 mismatch for {binary}: expected {self._chromium_sha256}, "
@@ -153,7 +153,9 @@ class PatchedEngine(BrowserEngine):
     async def get_executable(self) -> str:
         if self._executable:
             return self._executable
-        return str(self.resolve_binary_path())
+        # In a thread: the daily update check (HTTP), a security download and
+        # the binary hash all block.
+        return str(await asyncio.to_thread(self.resolve_binary_path))
 
     # ------------------------------------------------------------------ #
     # Flags
