@@ -4,6 +4,55 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import Any
+
+#: Prefix curl, yt-dlp and browser extensions put on HttpOnly cookie lines.
+_HTTP_ONLY_PREFIX = "#HttpOnly_"
+
+
+def matches_domain(cookie_domain: str, domain: str) -> bool:
+    """Whether a cookie stored for *cookie_domain* belongs to *domain*.
+
+    Equal hosts or subdomains match (``sub.example.com`` belongs to
+    ``example.com``); ``notexample.com`` does not. Leading dots are ignored.
+    """
+    host = cookie_domain.lstrip(".").lower()
+    wanted = domain.lstrip(".").lower()
+    return host == wanted or host.endswith("." + wanted)
+
+
+# CookieParam fields that identify a stored cookie (Storage.setCookies).
+_IDENTITY = ("name", "domain", "path", "secure", "httpOnly", "sameSite", "partitionKey")
+
+
+async def read_jar(
+    session: Any, domain: str | None = None, context_id: str | None = None
+) -> list[Cookie]:
+    """Cookies of the browser (or of *context_id*), only *domain*'s when given."""
+    params = {"browserContextId": context_id} if context_id else {}
+    result = await session.send("Storage.getCookies", params)
+    cookies = [Cookie.from_json(c) for c in result.get("cookies", [])]
+    return [c for c in cookies if domain is None or matches_domain(c.domain, domain)]
+
+
+async def clear_jar(session: Any, domain: str | None = None, context_id: str | None = None) -> None:
+    """Delete every cookie of the browser (or of *context_id*), or only *domain*'s.
+
+    Runs on the browser session: ``Storage`` is there, ``Network`` is not.
+    A domain's cookies are deleted by storing them again already expired.
+    """
+    params: dict[str, Any] = {"browserContextId": context_id} if context_id else {}
+    if not domain:
+        await session.send("Storage.clearCookies", params)
+        return
+    result = await session.send("Storage.getCookies", params)
+    expired = [
+        {**{k: c[k] for k in _IDENTITY if k in c}, "value": "", "expires": 1}
+        for c in result.get("cookies", [])
+        if matches_domain(c["domain"], domain)
+    ]
+    if expired:
+        await session.send("Storage.setCookies", {**params, "cookies": expired})
 
 
 @dataclass
@@ -46,12 +95,16 @@ class Cookie:
         include_sub = "TRUE" if self.domain.startswith(".") else "FALSE"
         secure = "TRUE" if self.secure else "FALSE"
         exp = str(int(self.expires)) if self.expires > 0 else "0"
-        return "\t".join([self.domain, include_sub, self.path, secure, exp, self.name, self.value])
+        domain = _HTTP_ONLY_PREFIX + self.domain if self.http_only else self.domain
+        return "\t".join([domain, include_sub, self.path, secure, exp, self.name, self.value])
 
     @classmethod
     def from_netscape(cls, line: str) -> Cookie:
-        parts = line.strip().split("\t")
+        line = line.strip()
+        http_only = line.startswith(_HTTP_ONLY_PREFIX)
+        parts = line.removeprefix(_HTTP_ONLY_PREFIX).split("\t")
         return cls(
+            http_only=http_only,
             domain=parts[0],
             path=parts[2],
             secure=parts[3] == "TRUE",
@@ -81,7 +134,7 @@ class Cookie:
                 cookies = []
                 for line in f:
                     line = line.strip()
-                    if line and not line.startswith("#"):
+                    if line.startswith(_HTTP_ONLY_PREFIX) or (line and not line.startswith("#")):
                         cookies.append(cls.from_netscape(line))
                 return cookies
         return []

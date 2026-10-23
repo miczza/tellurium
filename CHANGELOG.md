@@ -101,6 +101,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Browser.clear_cookies()` and `clear_cookies(domain)` work: they used the
+  `Network` domain on the browser session, which has none, and always failed.
+- `Browser.get_cookies(domain)` (and `save_cookies(domain=...)`) match the
+  domain and its subdomains instead of any substring: `"example.com"` no longer
+  returns `notexample.com` cookies.
+- Netscape cookie files keep `#HttpOnly_` lines on import (they were skipped as
+  comments, dropping the session cookies) and write the prefix on export.
+- `save_cookies` / `load_cookies` read and write the file off the event loop.
 - `Tab.get(timeout=...)` longer than 30 s is no longer cut short by the new
   per-command default: `Page.navigate` is bounded only by the navigation
   deadline. `Tab.eval(expression, timeout=None)` takes an explicit timeout for

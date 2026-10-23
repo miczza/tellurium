@@ -88,3 +88,38 @@ def test_cookies_load_autodetect_netscape(tmp_path):
     loaded = Cookie.load_list(str(path))
     assert len(loaded) == 1
     assert loaded[0].name == "x"
+
+
+def test_netscape_httponly_prefix_is_imported(tmp_path):
+    path = tmp_path / "cookies.txt"
+    path.write_text(
+        "# Netscape HTTP Cookie File\n"
+        "#HttpOnly_.example.com\tTRUE\t/\tTRUE\t0\tauth\tsecret\n"
+        ".example.com\tTRUE\t/\tFALSE\t0\tplain\tv\n"
+    )
+    loaded = Cookie.load_list(str(path))
+    assert [(c.name, c.http_only) for c in loaded] == [("auth", True), ("plain", False)]
+    assert loaded[0].domain == ".example.com"
+    assert loaded[0].secure is True
+
+
+def test_netscape_httponly_round_trip(tmp_path):
+    path = tmp_path / "cookies.txt"
+    cookie = Cookie(name="auth", value="secret", domain=".example.com", http_only=True)
+    assert cookie.to_netscape().startswith("#HttpOnly_.example.com\t")
+    Cookie.save_list([cookie], str(path), format="netscape")
+    loaded = Cookie.load_list(str(path), format="netscape")
+    assert len(loaded) == 1 and loaded[0].http_only is True
+
+
+def test_matches_domain_is_not_a_substring_match():
+    from tellurium.browser.cookie import matches_domain
+
+    assert matches_domain(".example.com", "example.com")
+    assert matches_domain("example.com", "example.com")
+    assert matches_domain("sub.example.com", "example.com")
+    assert matches_domain(".sub.example.com", ".example.com")
+    assert not matches_domain("notexample.com", "example.com")
+    assert not matches_domain(".notexample.com", "example.com")
+    assert not matches_domain("example.com.evil.net", "example.com")
+    assert not matches_domain("example.com", "sub.example.com")
