@@ -204,11 +204,25 @@ async def test_new_tab_inherits_the_browser_mouse_profile():
     browser = browser_mod.Browser()
     browser._mouse_profile = "careful"
     browser._router = MagicMock()
-    browser._router.root.send = AsyncMock(return_value={"targetId": "T2"})
     session = MagicMock()
     session.send = AsyncMock(return_value={})
     session.on = MagicMock()
-    browser._router.attach = AsyncMock(return_value=session)
+    browser._router.register = MagicMock(return_value=session)
+
+    async def root_send(method, params=None, timeout=None):
+        if method == "Target.createTarget":
+            # Chrome auto-attaches the new page (frozen) via the root session.
+            browser._on_attached_to_target(
+                {
+                    "sessionId": "S2",
+                    "waitingForDebugger": True,
+                    "targetInfo": {"targetId": "T2", "type": "page", "url": "about:blank"},
+                }
+            )
+            return {"targetId": "T2"}
+        return {}
+
+    browser._router.root.send = AsyncMock(side_effect=root_send)
 
     tab = await browser.new_tab()
     assert tab._mouse_profile == "careful"

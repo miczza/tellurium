@@ -57,6 +57,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `parity`, `clean`).
 - `docs/RELEASE.md`: end-to-end publishing procedure for tellurium and for
   `chromium-telluride`.
+- Popup tracking: every new page (`new_tab`, context tabs, `target=_blank`,
+  `window.open`) is auto-attached frozen from the browser root, patched
+  (stealth scripts, overrides) and only then resumed; popups appear in
+  `browser.tabs`. `Browser.wait_for_tab(url)` waits for one.
+- `Tab.close()` / `Tab.closed`; tabs closed by the page leave `browser.tabs`.
+- `Tab.get(wait_until=...)` now honours `"commit"`, `"domcontentloaded"`,
+  `"load"` and `"networkidle"` (via `Page.lifecycleEvent`, tied to the
+  navigation's loader); unknown values raise `ValueError`.
 
 ### Changed
 
@@ -76,6 +84,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Elements went stale after any later query: every `select`/`xpath`/`find`
+  refreshes the DOM agent (`DOM.getDocument`), voiding all earlier nodeIds,
+  so `h1 = select("h1"); select("p"); h1.text()` raised "No node with given
+  id". Elements are now addressed by their `objectId`, resolved as soon as
+  they are found; `html()`, `attributes()`, `upload()`, `focus()` and the
+  relative `select()`/`select_all()` no longer use nodeIds.
+- CDP dispatch could hang every pending command: an event handler that raised
+  killed the dispatch loop silently; a detached target left its commands
+  waiting forever; a malformed message ended the loop without failing them.
+  Handler errors are now logged, detached sessions fail their pending and
+  future commands with `ConnectionError`, and any end of the loop fails all
+  pending commands.
+- `webrtc_ip="auto"` with `browser="patched"` passed the literal `auto` to
+  `--fingerprint-webrtc-ip`, which the fork took as the IP to advertise. The
+  resolved IP is passed now; `"disable"` leaves the flag out.
+- `Tab.get()` ignored `wait_until` and timed out on same-document
+  (`#fragment`) navigations; `Tab.title` was always `""`; `Tab.url` kept the
+  requested URL after a redirect.
+- `BrowserContext.new_tab()` applied no stealth or overrides and loaded the
+  URL before any patching.
+- `Tab.select()`/`wait_for()` raised instead of retrying when a navigation
+  removed the node between the query and its resolution.
 - CHANGELOG/README claimed 3 residual CreepJS lies on the patched binary; the
   2026-04-27 triage measured `totalLies = 0`.
 - Accept-Language: `Emulation.setUserAgentOverride.acceptLanguage` leaked the

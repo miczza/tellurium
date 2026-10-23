@@ -43,7 +43,11 @@ function(expr) {
 async def _elements_from_remote_array(
     session: Session, tab: Tab, array_object_id: str
 ) -> list[Element]:
-    """Map a remote JS array of DOM nodes to a list of :class:`Element`."""
+    """Map a remote JS array of DOM nodes to a list of :class:`Element`.
+
+    Each element keeps the node's ``objectId`` directly: no ``DOM.requestNode``
+    round trip, and no nodeId that the next ``DOM.getDocument`` would void.
+    """
     props = await session.send(
         "Runtime.getProperties",
         {
@@ -57,26 +61,34 @@ async def _elements_from_remote_array(
             continue
         obj = prop.get("value", {})
         object_id = obj.get("objectId")
-        if not object_id:
-            continue
-        node = await session.send("DOM.requestNode", {"objectId": object_id})
-        node_id = node.get("nodeId", 0)
-        if node_id:
-            elements.append(Element(session, tab, node_id))
+        if object_id:
+            elements.append(Element(session, tab, object_id=object_id))
     return elements
 
 
 class Element:
-    """Represents a DOM element backed by a CDP *nodeId*.
+    """Represents a DOM element backed by a CDP remote object.
+
+    The element is addressed by its ``objectId``, which stays valid for the
+    life of the document. A bare *nodeId* is not enough: every
+    ``DOM.getDocument`` (issued by each Tab query) invalidates all nodeIds
+    handed out before it, so producers resolve the objectId right away.
 
     All property accessors are async because they issue CDP calls.
     """
 
-    def __init__(self, session: Session, tab: Tab, node_id: int):
+    def __init__(
+        self,
+        session: Session,
+        tab: Tab,
+        node_id: int = 0,
+        *,
+        object_id: str | None = None,
+    ):
         self._session = session
         self._tab = tab
         self._node_id = node_id
-        self._object_id: str | None = None
+        self._object_id: str | None = object_id
         self._selector: str | None = (
             None  # CSS selector used to locate this element (for isolated-world queries)
         )
@@ -87,6 +99,16 @@ class Element:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @classmethod
+    async def _from_node_id(
+        cls, session: Session, tab: Tab, node_id: int, selector: str | None = None
+    ) -> Element:
+        """Build an Element from a fresh *nodeId*, resolving it immediately."""
+        element = cls(session, tab, node_id)
+        element._selector = selector
+        await element._resolve()
+        return element
 
     async def _resolve(self) -> str:
         """Resolve *nodeId* to a remote *objectId* (cached)."""
@@ -127,12 +149,6 @@ class Element:
         self, function_declaration: str, arguments: list | None = None
     ) -> list[Element]:
         """Call JS returning an array of nodes and map it to :class:`Element`s."""
-        # DOM.requestNode can only map remote objects to nodeIds once the DOM
-        # agent has the full tree in its node map — but DOM.getDocument also
-        # invalidates every previously handed-out nodeId, so this element is
-        # resolved to a (stable) objectId *first*.
-        await self._resolve()
-        await self._session.send("DOM.getDocument", {"depth": -1})
         remote = await self._call_raw(function_declaration, arguments, return_by_value=False)
         array_id = remote.get("objectId")
         if not array_id or remote.get("subtype") != "array":
@@ -143,17 +159,11 @@ class Element:
         self, function_declaration: str, arguments: list | None = None
     ) -> Element | None:
         """Call JS returning a single node (or null) and map it to an Element."""
-        await self._resolve()  # before getDocument invalidates our nodeId
-        await self._session.send("DOM.getDocument", {"depth": -1})
         remote = await self._call_raw(function_declaration, arguments, return_by_value=False)
         object_id = remote.get("objectId")
         if not object_id or remote.get("subtype") == "null":
             return None
-        node = await self._session.send("DOM.requestNode", {"objectId": object_id})
-        node_id = node.get("nodeId", 0)
-        if not node_id:
-            return None
-        return Element(self._session, self._tab, node_id)
+        return Element(self._session, self._tab, object_id=object_id)
 
     async def _center(self) -> tuple[float, float]:
         """Return the (x, y) centre of the element's bounding box."""
@@ -202,7 +212,8 @@ class Element:
 
     async def html(self) -> str:
         """Return the outer HTML of this element."""
-        result = await self._session.send("DOM.getOuterHTML", {"nodeId": self._node_id})
+        object_id = await self._resolve()
+        result = await self._session.send("DOM.getOuterHTML", {"objectId": object_id})
         return result.get("outerHTML", "")
 
     async def attr(self, name: str) -> str | None:
@@ -214,8 +225,9 @@ class Element:
 
     async def attributes(self) -> dict[str, str]:
         """Return all attributes as a dict."""
-        result = await self._session.send("DOM.getAttributes", {"nodeId": self._node_id})
-        flat = result.get("attributes", [])
+        object_id = await self._resolve()
+        result = await self._session.send("DOM.describeNode", {"objectId": object_id})
+        flat = result.get("node", {}).get("attributes", [])
         return dict(zip(flat[::2], flat[1::2], strict=False))
 
     async def bounding_box(self) -> dict:
@@ -238,9 +250,8 @@ class Element:
         Staleness note: the stashed ``_selector`` is re-resolved via
         ``document.querySelector`` in the isolated world at call time.  If the
         DOM has mutated between ``select()`` and the human action the rect may
-        reflect a *different* element than ``self._node_id`` refers to.  The
-        fallback path (via ``bounding_box()`` + ``DOM.resolveNode`` + nodeId)
-        preserves identity.  Users who need stable identity should rely on the
+        reflect a *different* element than this one.  The fallback path
+        (``bounding_box()`` on this element's objectId) preserves identity.  Users who need stable identity should rely on the
         fallback (don't pass a selector, or use XPath-based selection).
         """
         import json
@@ -353,9 +364,10 @@ class Element:
 
     async def upload(self, *files: str) -> None:
         """Set files on an ``<input type="file">`` element."""
+        object_id = await self._resolve()
         await self._session.send(
             "DOM.setFileInputFiles",
-            {"nodeId": self._node_id, "files": list(files)},
+            {"objectId": object_id, "files": list(files)},
         )
 
     async def select_option(self, value: str) -> None:
@@ -389,7 +401,8 @@ class Element:
             )
 
     async def focus(self) -> None:
-        await self._session.send("DOM.focus", {"nodeId": self._node_id})
+        object_id = await self._resolve()
+        await self._session.send("DOM.focus", {"objectId": object_id})
 
     async def drag_to(self, target: Element, steps: int = 10) -> None:
         """Drag this element to *target* with intermediate mouse-move steps."""
@@ -430,20 +443,19 @@ class Element:
 
     async def select(self, selector: str) -> Element:
         """querySelector relative to this element."""
-        result = await self._session.send(
-            "DOM.querySelector", {"nodeId": self._node_id, "selector": selector}
+        element = await self._call_element(
+            "function(s) { return this.querySelector(s); }", arguments=[{"value": selector}]
         )
-        nid = result.get("nodeId", 0)
-        if not nid:
+        if element is None:
             raise LookupError(f"No element matching {selector!r} inside this element")
-        return Element(self._session, self._tab, nid)
+        return element
 
     async def select_all(self, selector: str) -> list[Element]:
         """querySelectorAll relative to this element."""
-        result = await self._session.send(
-            "DOM.querySelectorAll", {"nodeId": self._node_id, "selector": selector}
+        return await self._call_elements(
+            "function(s) { return Array.from(this.querySelectorAll(s)); }",
+            arguments=[{"value": selector}],
         )
-        return [Element(self._session, self._tab, nid) for nid in result.get("nodeIds", [])]
 
     async def find(self, text: str, *, exact: bool = False) -> Element:
         """Find a descendant by visible text.  Raises ``LookupError``."""

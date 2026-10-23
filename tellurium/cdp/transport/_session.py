@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 from tellurium.cdp.transport._base import CDPTransport
 from tellurium.cdp.types import CDPError
+
+logger = logging.getLogger(__name__)
 
 
 class Session:
@@ -18,6 +21,7 @@ class Session:
         self._pending: dict[int, asyncio.Future] = {}
         self._event_handlers: dict[str, list[callable]] = {}
         self._lock = asyncio.Lock()
+        self._closed_reason: str | None = None
 
     async def send(
         self,
@@ -31,6 +35,8 @@ class Session:
                 f"and enables Proxy ownKeys trap detection. "
                 f"Use Page.createIsolatedWorld + Runtime.evaluate instead."
             )
+        if self._closed_reason is not None:
+            raise ConnectionError(self._closed_reason)
         msg_id = await self._router._allocate_id()
         async with self._lock:
             msg: dict = {"id": msg_id, "method": method, "params": params or {}}
@@ -72,8 +78,22 @@ class Session:
                 else:
                     future.set_result(msg.get("result", {}))
         elif "method" in msg:
-            for handler in self._event_handlers.get(msg["method"], []):
-                handler(msg.get("params", {}))
+            # Copy: a handler may call off() on itself while we iterate.
+            for handler in list(self._event_handlers.get(msg["method"], [])):
+                try:
+                    handler(msg.get("params", {}))
+                except Exception:
+                    # A buggy handler must not kill the dispatch loop: every
+                    # pending send() would then wait forever.
+                    logger.exception("CDP event handler for %s failed", msg["method"])
+
+    def _close(self, reason: str) -> None:
+        """Fail every pending command and reject future ones."""
+        self._closed_reason = reason
+        for future in self._pending.values():
+            if not future.done():
+                future.set_exception(ConnectionError(reason))
+        self._pending.clear()
 
 
 class SessionRouter:
@@ -101,6 +121,14 @@ class SessionRouter:
     def get_session(self, session_id: str | None) -> Session:
         return self._sessions.get(session_id, self._root)
 
+    def register(self, session_id: str) -> Session:
+        """Return the session for an auto-attached *session_id*, creating it."""
+        session = self._sessions.get(session_id)
+        if session is None:
+            session = Session(self, session_id=session_id)
+            self._sessions[session_id] = session
+        return session
+
     async def attach(self, target_id: str) -> Session:
         result = await self._root.send(
             "Target.attachToTarget", {"targetId": target_id, "flatten": True}
@@ -122,8 +150,19 @@ class SessionRouter:
                 sid = msg.get("sessionId")
                 target = self._sessions.get(sid, self._root)
                 await target._handle_message(msg)
+                if msg.get("method") == "Target.detachedFromTarget":
+                    self._drop_session(msg.get("params", {}).get("sessionId"))
         except (ConnectionError, EOFError):
+            pass
+        finally:
+            # Whatever ended the loop (pipe closed, malformed message,
+            # cancellation), no reply will ever arrive for pending commands.
             for session in self._sessions.values():
-                for future in session._pending.values():
-                    if not future.done():
-                        future.set_exception(ConnectionError("Browser pipe closed"))
+                session._close("Browser pipe closed")
+
+    def _drop_session(self, session_id: str | None) -> None:
+        if session_id is None:
+            return
+        session = self._sessions.pop(session_id, None)
+        if session is not None:
+            session._close(f"Target detached (session {session_id})")

@@ -32,29 +32,22 @@ class BrowserContext:
         return list(self._tabs)
 
     async def new_tab(self, url: str = "about:blank") -> Tab:
-        """Create a new tab inside this browser context."""
-        from tellurium.browser.tab import Tab
+        """Create a new tab inside this browser context.
 
+        Like :meth:`Browser.new_tab`, the page is created blank and patched
+        (stealth, overrides) before navigating to *url*.
+        """
         root = self._browser._router.root
         result = await root.send(
             "Target.createTarget",
             {
-                "url": url,
+                "url": "about:blank",
                 "browserContextId": self._context_id,
             },
         )
-        target_id = result["targetId"]
-        session = await self._browser._router.attach(target_id)
-        tab = Tab(
-            session,
-            self._browser,
-            target_id,
-            stealth_idle=getattr(self._browser, "_stealth_idle", False),
-            mouse_profile=getattr(self._browser, "_mouse_profile", "normal"),
-        )
-        tab._url = url
-        self._tabs.append(tab)
-        self._browser._tabs.append(tab)
+        tab = await self._browser._wait_adopted(result["targetId"])
+        if url and url != "about:blank":
+            await tab.get(url)
         return tab
 
     async def get_cookies(self, domain: str | None = None) -> list[Cookie]:
@@ -85,13 +78,8 @@ class BrowserContext:
     async def close(self) -> None:
         """Dispose of this browser context and detach all its tabs."""
         for tab in list(self._tabs):
-            try:
-                await self._browser._router.detach(tab._session)
-            except Exception:  # noqa: BLE001 - close must not raise
-                pass
-            if tab in self._browser._tabs:
-                self._browser._tabs.remove(tab)
-        self._tabs.clear()
+            self._browser._forget_tab(tab._target_id)
+        self._browser._contexts.pop(self._context_id, None)
         root = self._browser._router.root
         await root.send(
             "Target.disposeBrowserContext",

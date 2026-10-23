@@ -85,3 +85,56 @@ def test_webrtc_js_anchored_to_candidate_lines():
         "webrtc.js must not rely on RTCSessionDescription constructor "
         "(undefined in some isolated worlds)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Browser.launch(browser="patched") -> --fingerprint-webrtc-ip value
+# ---------------------------------------------------------------------------
+
+
+def _patched_engine_args(monkeypatch, **launch_kwargs) -> list[str]:
+    """Run launch() with the patched engine up to flag assembly; return its args."""
+    import asyncio
+
+    from tellurium.browser import browser as browser_mod
+    from tellurium.browser.engine import PatchedEngine
+
+    captured: list[str] = []
+    real_build_args = PatchedEngine.build_args
+
+    def spy_build_args(self, profile):
+        args = real_build_args(self, profile)
+        captured.extend(args)
+        return args
+
+    async def fake_exec(self):
+        return "/bin/true"
+
+    def stop(**_kw):
+        raise RuntimeError("stop-here")
+
+    monkeypatch.setattr(PatchedEngine, "build_args", spy_build_args)
+    monkeypatch.setattr(PatchedEngine, "get_executable", fake_exec)
+    monkeypatch.setattr(browser_mod, "build_chrome_flags", stop)
+    with pytest.raises(RuntimeError, match="stop-here"):
+        asyncio.run(browser_mod.Browser.launch(browser="patched", headless=True, **launch_kwargs))
+    return captured
+
+
+def test_patched_auto_passes_the_resolved_proxy_ip(monkeypatch):
+    args = _patched_engine_args(
+        monkeypatch, webrtc_ip="auto", proxy="http://127.0.0.1:8080", seed=1
+    )
+    assert "--fingerprint-webrtc-ip=127.0.0.1" in args
+
+
+def test_patched_explicit_ip_is_passed_through(monkeypatch):
+    args = _patched_engine_args(monkeypatch, webrtc_ip="198.51.100.7", seed=1)
+    assert "--fingerprint-webrtc-ip=198.51.100.7" in args
+
+
+def test_patched_disable_leaves_the_native_default(monkeypatch):
+    """'disable' means no spoofing: the native patch keeps its default
+    (drop srflx/relay, seeded mDNS) instead of dropping every candidate."""
+    args = _patched_engine_args(monkeypatch, webrtc_ip="disable", seed=1)
+    assert not any(a.startswith("--fingerprint-webrtc-ip") for a in args)

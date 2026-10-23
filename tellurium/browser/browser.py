@@ -22,13 +22,48 @@ from tellurium.browser.launcher import (
     validate_extension_paths,
 )
 from tellurium.browser.proxy import ProxyForwarder, parse_proxy_url
-from tellurium.browser.tab import Tab
+from tellurium.browser.tab import Tab, url_matches
 from tellurium.cdp.transport import create_transport
 from tellurium.cdp.transport._session import SessionRouter
 from tellurium.stealth._grease import parse_grease_brands, parse_product_version
 from tellurium.stealth._webrtc import resolve_webrtc_ip
 
 logger = logging.getLogger("tellurium")
+
+
+class _CommandPipeline:
+    """Session stand-in that issues commands without awaiting their replies.
+
+    Every command reaches the transport in call order; :meth:`drain` then
+    collects the replies. Only for callers that ignore command results.
+    """
+
+    def __init__(self, session: Any):
+        self._session = session
+        self._pending: list[asyncio.Future] = []
+
+    async def send(self, method: str, params: dict | None = None, timeout: float | None = None):
+        self._pending.append(asyncio.ensure_future(self._session.send(method, params)))
+        await asyncio.sleep(0)  # let the command hit the transport before the next one
+        return {}
+
+    def on(self, event_name: str, handler: Any) -> None:
+        self._session.on(event_name, handler)
+
+    def off(self, event_name: str, handler: Any) -> None:
+        self._session.off(event_name, handler)
+
+    async def drain(self, target_id: str, timeout: float = 10) -> None:
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*self._pending, return_exceptions=True), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Tab %s did not acknowledge its setup commands", target_id)
+            return
+        for result in results:
+            if isinstance(result, Exception):
+                logger.debug("Setup command failed on tab %s: %r", target_id, result)
 
 
 class Browser:
@@ -46,6 +81,10 @@ class Browser:
         self._dispatch_task: asyncio.Task | None = None
         self._tabs: list[Tab] = []
         self._main_tab: Tab | None = None
+        # targetId -> Tab, resolved once an auto-attached page is patched
+        self._adopted: dict[str, asyncio.Future] = {}
+        self._contexts: dict[str, BrowserContext] = {}
+        self._tabs_changed = asyncio.Event()
         self._tmp_dir: str | None = None
         self._forwarder: ProxyForwarder | None = None
         self._user_data_dir: str | None = None
@@ -163,6 +202,15 @@ class Browser:
         # 0. Validate extension paths up-front (before any async work)
         validate_extension_paths(extensions or [])
 
+        # 0b. Resolve webrtc_ip up-front: the native patch only understands an
+        # IP literal (or its own 'disable', which drops every candidate), so
+        # 'auto' must reach it already resolved and our 'disable' — no
+        # spoofing — must leave the flag out entirely.
+        if webrtc_ip is not None:
+            resolved_webrtc_ip = resolve_webrtc_ip(webrtc_ip, proxy=proxy)
+        else:
+            resolved_webrtc_ip = None
+
         # 1. Select engine
         if browser == "patched":
             engine = PatchedEngine(
@@ -170,7 +218,7 @@ class Browser:
                 chromium_version=chromium_version,
                 chromium_sha256=chromium_sha256,
                 auto_security_update=auto_security_update,
-                webrtc_ip_flag=webrtc_ip,  # raw user setting; native patch accepts ip/auto/disable
+                webrtc_ip_flag=resolved_webrtc_ip,
             )
         else:
             if chromium_version or chromium_sha256 or auto_security_update:
@@ -227,12 +275,6 @@ class Browser:
                 proxy_flag = f"localhost:{self._forwarder.port}"
             else:
                 proxy_flag = f"{info['host']}:{info['port']}"
-
-        # 3b. Resolve webrtc_ip setting (after proxy is known)
-        if webrtc_ip is not None:
-            resolved_webrtc_ip = resolve_webrtc_ip(webrtc_ip, proxy=proxy)
-        else:
-            resolved_webrtc_ip = None
 
         # 4. User-data dir
         if user_data_dir:
@@ -458,10 +500,27 @@ class Browser:
         # browser-root-only setAutoAttach never fires for a page's OOPIFs or
         # dedicated workers (verified empirically on Chrome 153). The root
         # wiring stays for browser-scoped service workers.
+        #
+        # The root auto-attach also covers every *new page* (popups, new_tab,
+        # context tabs): each one is frozen until _adopt_page has patched it.
+        root = self._router.root
+        root.on("Target.attachedToTarget", self._on_attached_to_target)
+        root.on("Target.targetInfoChanged", self._on_target_info_changed)
+        root.on("Target.targetDestroyed", self._on_target_destroyed)
         if stealth_engine is not None:
-            await stealth_engine.wire_session(self._router.root)
+            await stealth_engine.wire_session(root, include_pages=True)
             if self._main_tab is not None:
                 await stealth_engine.wire_session(self._main_tab._session)
+        else:
+            await root.send(
+                "Target.setAutoAttach",
+                {
+                    "autoAttach": True,
+                    "waitForDebuggerOnStart": True,
+                    "flatten": True,
+                    "filter": [{"type": "page", "exclude": False}],
+                },
+            )
 
         # 15. Pin the window geometry for a headed browser. --window-size is
         # honoured at startup by headless Chrome but a window manager can
@@ -499,10 +558,100 @@ class Browser:
     async def new_tab(self, url: str = "about:blank") -> Tab:
         """Open a new tab, navigate to *url*, wait for load, and return it."""
         result = await self._router.root.send("Target.createTarget", {"url": "about:blank"})
-        target_id = result["targetId"]
-        session = await self._router.attach(target_id)
+        tab = await self._wait_adopted(result["targetId"])
+        if url and url != "about:blank":
+            await tab.get(url)
+        return tab
 
-        # Apply stealth to the new tab's session
+    @property
+    def tabs(self) -> list[Tab]:
+        return list(self._tabs)
+
+    async def wait_for_tab(self, url: str, *, timeout: float = 30) -> Tab:
+        """Return the first open tab whose URL matches *url*, waiting for one.
+
+        Meant for popups (``target=_blank`` links, ``window.open``): they are
+        tracked automatically and show up in :attr:`tabs`. *url* is a glob
+        when it contains ``*`` or ``?``, a substring otherwise.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            for tab in self._tabs:
+                if url_matches(url, tab.url):
+                    return tab
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise TimeoutError(f"Timed out waiting for a tab matching {url!r}")
+            self._tabs_changed.clear()
+            try:
+                await asyncio.wait_for(self._tabs_changed.wait(), timeout=remaining)
+            except asyncio.TimeoutError:
+                pass
+
+    # ------------------------------------------------------------------
+    # Page target tracking
+    # ------------------------------------------------------------------
+
+    def _find_tab(self, target_id: str) -> Tab | None:
+        return next((t for t in self._tabs if t._target_id == target_id), None)
+
+    def _on_attached_to_target(self, params: dict) -> None:
+        info = params.get("targetInfo", {})
+        if info.get("type") != "page":
+            return
+        session = self._router.register(params["sessionId"])
+        waiting = bool(params.get("waitingForDebugger"))
+        loop = asyncio.get_running_loop()
+        if self._find_tab(info["targetId"]) is not None:
+            # Already driven through its own session (the initial tab).
+            loop.create_task(self._release_duplicate(session, waiting))
+        else:
+            loop.create_task(self._adopt_page(session, info, waiting))
+
+    async def _release_duplicate(self, session: Any, waiting: bool) -> None:
+        try:
+            if waiting:
+                await session.send("Runtime.runIfWaitingForDebugger", {})
+            await self._router.detach(session)
+        except Exception:  # noqa: BLE001 — target may be gone already
+            logger.debug("Could not release duplicate page session", exc_info=True)
+
+    async def _adopt_page(self, session: Any, info: dict, waiting: bool) -> None:
+        """Track a new page and patch it before it runs a single script."""
+        target_id = info["targetId"]
+        adopted = self._adopted.setdefault(target_id, asyncio.get_running_loop().create_future())
+        tab = Tab(
+            session,
+            self,
+            target_id,
+            stealth_idle=self._stealth_idle,
+            mouse_profile=self._mouse_profile,
+        )
+        tab._url = info.get("url", "")
+        self._tabs.append(tab)
+        context = self._contexts.get(info.get("browserContextId", ""))
+        if context is not None:
+            context._tabs.append(tab)
+        # A frozen popup answers nothing until it is resumed, so the patches
+        # are pipelined ahead of the resume instead of awaited one by one:
+        # the target processes them in order, before its first script.
+        pipeline = _CommandPipeline(session)
+        try:
+            await self._prepare_page_session(pipeline)
+        except Exception:  # noqa: BLE001 — never leave the page frozen
+            logger.warning("Could not prepare new tab %s", target_id, exc_info=True)
+        if waiting:
+            await pipeline.send("Runtime.runIfWaitingForDebugger", {})
+        await pipeline.drain(target_id)
+        if not adopted.done():
+            adopted.set_result(tab)
+        self._tabs_changed.set()
+
+    async def _prepare_page_session(self, session: Any) -> None:
+        # Page.enable first: without it scripts registered on a frozen page
+        # are not run at document-start (same as for OOPIFs, T7.7).
+        await session.send("Page.enable", {})
         if self._stealth_engine is not None:
             await self._stealth_engine.apply_to_session(session)
             await self._stealth_engine.apply_page_scripts(session)
@@ -511,23 +660,44 @@ class Browser:
         else:
             await self._apply_manual_overrides(session)
 
-        tab = Tab(
-            session,
-            self,
-            target_id,
-            stealth_idle=self._stealth_idle,
-            mouse_profile=self._mouse_profile,
-        )
-        self._tabs.append(tab)
-        if url and url != "about:blank":
-            await tab.get(url)
-        else:
-            tab._url = url
-        return tab
+    async def _wait_adopted(self, target_id: str, timeout: float = 10) -> Tab:
+        adopted = self._adopted.setdefault(target_id, asyncio.get_running_loop().create_future())
+        return await asyncio.wait_for(asyncio.shield(adopted), timeout=timeout)
 
-    @property
-    def tabs(self) -> list[Tab]:
-        return list(self._tabs)
+    def _on_target_info_changed(self, params: dict) -> None:
+        info = params.get("targetInfo", {})
+        tab = self._find_tab(info.get("targetId", ""))
+        if tab is not None and info.get("url"):
+            tab._url = info["url"]
+            self._tabs_changed.set()
+
+    def _on_target_destroyed(self, params: dict) -> None:
+        self._forget_tab(params.get("targetId", ""))
+
+    async def _close_tab(self, tab: Tab, timeout: float = 5) -> None:
+        """Close *tab* and wait until Chrome reports its target destroyed."""
+        await self._router.root.send("Target.closeTarget", {"targetId": tab._target_id})
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while not tab._closed and loop.time() < deadline:
+            self._tabs_changed.clear()
+            try:
+                await asyncio.wait_for(self._tabs_changed.wait(), timeout=deadline - loop.time())
+            except asyncio.TimeoutError:
+                break
+        self._forget_tab(tab._target_id)
+
+    def _forget_tab(self, target_id: str) -> None:
+        self._adopted.pop(target_id, None)
+        tab = self._find_tab(target_id)
+        if tab is None:
+            return
+        tab._closed = True
+        self._tabs.remove(tab)
+        for context in self._contexts.values():
+            if tab in context._tabs:
+                context._tabs.remove(tab)
+        self._tabs_changed.set()
 
     @property
     def main_tab(self) -> Tab:
@@ -597,7 +767,9 @@ class Browser:
         if proxy:
             params["proxyServer"] = proxy
         result = await self._router.root.send("Target.createBrowserContext", params)
-        return BrowserContext(self, result["browserContextId"])
+        context = BrowserContext(self, result["browserContextId"])
+        self._contexts[context.context_id] = context
+        return context
 
     # ------------------------------------------------------------------
     # Lifecycle

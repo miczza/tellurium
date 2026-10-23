@@ -27,6 +27,8 @@ def _tab_with_search(sequence):
             return {"searchId": f"s{len(sent)}", "resultCount": count}
         if method == "DOM.getSearchResults":
             return {"nodeIds": [42]}
+        if method == "DOM.resolveNode":
+            return {"object": {"objectId": "OBJ42"}}
         return {}
 
     session = MagicMock()

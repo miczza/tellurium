@@ -183,7 +183,20 @@ tab = await browser.get("https://example.com")
 
 #### `browser.tabs -> list[Tab]`
 
-All open tabs.
+All open tabs, popups included. Every new page — `new_tab()`, context tabs,
+`target=_blank` links and `window.open` popups — is held frozen until its
+stealth patches and overrides are in place, so none of its scripts runs
+unpatched. Tabs closed by the page drop out of the list.
+
+#### `browser.wait_for_tab(url, timeout=30) -> Tab`
+
+Return the first open tab whose URL matches (glob with `*`/`?`, substring
+otherwise), waiting for it to appear. Use it to pick up popups:
+
+```python
+await (await tab.select("a[target=_blank]")).click(human=True)
+popup = await browser.wait_for_tab("*/checkout*")
+```
 
 #### `browser.main_tab -> Tab`
 
@@ -237,7 +250,9 @@ Controls a single browser tab.
 ```python
 # Navigate to URL (waits for page load)
 await tab.get("https://example.com")
+# wait_until: "commit" | "domcontentloaded" | "load" (default) | "networkidle"
 await tab.get("https://example.com", wait_until="domcontentloaded")
+await tab.get("https://example.com", wait_until="networkidle")  # 500 ms without requests
 
 # History
 await tab.back()
@@ -245,8 +260,11 @@ await tab.forward()
 await tab.reload()
 
 # Current state
-print(tab.url)
-print(tab.title)
+print(tab.url)    # final URL (after redirects), kept up to date
+print(tab.title)  # document.title as of the last tab.get()
+
+# Close
+await tab.close()
 
 # Wait for navigation
 await tab.wait_for_navigation()
@@ -1184,7 +1202,9 @@ Notes:
   seed per launch, readable from the engine after launch.
 - `stealth=True` additionally builds a `StealthProfile` and passes
   `--fingerprint-platform=<os>`; `webrtc_ip=` maps to
-  `--fingerprint-webrtc-ip=<mode>`.
+  `--fingerprint-webrtc-ip=<ip>` with the resolved address (`"auto"` → the
+  proxy's IP); `"disable"` passes no flag, leaving the fork's default (drop
+  srflx/relay candidates, seeded mDNS hostnames).
 - `auto_security_update=True` installs a security release automatically when
   the daily check finds one (ignored when `chromium_version` is pinned).
 - If the release tarball ships without `chrome_sandbox`, launch with

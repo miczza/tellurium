@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html><head><title>Late Fetch</title></head>
+<body>
+  <script>
+    window.lateDone = false;
+    window.addEventListener('load', () => {
+      fetch('/slow/800/late').then(() => { window.lateDone = true; });
+    });
+  </script>
+</body></html>

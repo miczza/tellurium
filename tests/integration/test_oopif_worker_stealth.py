@@ -162,14 +162,19 @@ async def test_freezing_targets_does_not_slow_navigation(oopif_site):
 
     frozen = StealthEngine.setup_auto_attach
 
-    async def unfrozen(self, session):
+    async def unfrozen(self, session, *, include_pages=False):
+        # Pages stay auto-attached (Browser adopts tabs through it); only
+        # the freeze is switched off.
+        target_filter = list(_STEALTH_TARGET_FILTER)
+        if include_pages:
+            target_filter.append({"type": "page", "exclude": False})
         await session.send(
             "Target.setAutoAttach",
             {
                 "autoAttach": True,
                 "waitForDebuggerOnStart": False,
                 "flatten": True,
-                "filter": _STEALTH_TARGET_FILTER,
+                "filter": target_filter,
             },
         )
 

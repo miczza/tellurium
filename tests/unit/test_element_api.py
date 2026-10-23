@@ -81,21 +81,19 @@ async def test_children_maps_the_array_to_elements():
     element = _fake_element(
         call_result={"type": "object", "subtype": "array", "objectId": "ARR"},
         array_items=("A", "B"),
-        node_ids=[7, 8],
     )
     children = await element.children()
-    assert [c._node_id for c in children] == [7, 8]
-    # The DOM agent must hold the full tree before DOM.requestNode is usable.
-    assert ("DOM.getDocument", {"depth": -1}) in element._sent
+    assert [c._object_id for c in children] == ["A", "B"]
+    # Refreshing the document would void the nodeIds of every other Element.
+    assert "DOM.getDocument" not in [m for m, _ in element._sent]
 
 
 async def test_parent_returns_an_element():
     element = _fake_element(
         call_result={"type": "object", "subtype": "node", "objectId": "P"},
-        node_ids=[3],
     )
     parent = await element.parent()
-    assert parent is not None and parent._node_id == 3
+    assert parent is not None and parent._object_id == "P"
 
 
 async def test_parent_of_the_root_is_none():
@@ -112,10 +110,9 @@ async def test_find_all_scopes_the_tree_walker_to_this_element():
     element = _fake_element(
         call_result={"type": "object", "subtype": "array", "objectId": "ARR"},
         array_items=("A",),
-        node_ids=[5],
     )
     found = await element.find_all("Buy")
-    assert [e._node_id for e in found] == [5]
+    assert [e._object_id for e in found] == ["A"]
     call = dict(element._sent)["Runtime.callFunctionOn"]
     assert "createTreeWalker(this" in call["functionDeclaration"]
     assert call["arguments"] == [{"value": "Buy"}, {"value": False}]
@@ -131,10 +128,9 @@ async def test_xpath_is_evaluated_with_this_element_as_context():
     element = _fake_element(
         call_result={"type": "object", "subtype": "array", "objectId": "ARR"},
         array_items=("A", "B"),
-        node_ids=[11, 12],
     )
     matches = await element.xpath_all(".//a")
-    assert [m._node_id for m in matches] == [11, 12]
+    assert [m._object_id for m in matches] == ["A", "B"]
     call = dict(element._sent)["Runtime.callFunctionOn"]
     assert "expr, this" in call["functionDeclaration"]
     assert "ORDERED_NODE_SNAPSHOT_TYPE" in call["functionDeclaration"]

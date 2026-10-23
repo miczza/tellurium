@@ -84,7 +84,7 @@ class StealthEngine:
         if self._headless:
             await self._apply_headless_fixes(session, is_oopif=is_oopif)
 
-    async def setup_auto_attach(self, session) -> None:
+    async def setup_auto_attach(self, session, *, include_pages: bool = False) -> None:
         """Configure auto-attach for OOPIF and Worker stealth patching.
 
         T7.7 (design doc 04 §P1.1/§P1.2): ``waitForDebuggerOnStart=True``
@@ -106,18 +106,26 @@ class StealthEngine:
         Without the filter Chromium fires auto-attach for every target
         type including 'page' (double injection) and 'browser'
         (deadlock on Runtime.runIfWaitingForDebugger). Design doc 04 §P1.2.
+
+        *include_pages* (browser-root session only) also auto-attaches new
+        pages — popups, ``new_tab``, context tabs — frozen, so ``Browser``
+        can patch them before their first script; ``_on_target_attached``
+        leaves pages to ``Browser``, which injects exactly once.
         """
+        target_filter = list(_STEALTH_TARGET_FILTER)
+        if include_pages:
+            target_filter.append({"type": "page", "exclude": False})
         await session.send(
             "Target.setAutoAttach",
             {
                 "autoAttach": True,
                 "waitForDebuggerOnStart": True,
                 "flatten": True,
-                "filter": _STEALTH_TARGET_FILTER,
+                "filter": target_filter,
             },
         )
 
-    async def wire_session(self, session) -> None:
+    async def wire_session(self, session, *, include_pages: bool = False) -> None:
         """Register the auto-attach listener on *session* and enable it.
 
         Convenience used by ``Browser.launch`` (root + initial tab) and
@@ -126,13 +134,15 @@ class StealthEngine:
         while the command is in flight.
         """
         session.on("Target.attachedToTarget", self._on_target_attached)
-        await self.setup_auto_attach(session)
+        await self.setup_auto_attach(session, include_pages=include_pages)
 
     def _on_target_attached(self, params: dict) -> None:
         target_info = params.get("targetInfo", {})
         session_id = params.get("sessionId")
         target_type = target_info.get("type", "")
         target_url = target_info.get("url", "") or ""
+        if target_type == "page":
+            return  # Browser adopts pages (stealth + resume) itself
 
         # Ensure the router knows about this auto-attached session
         self._ensure_session(session_id)

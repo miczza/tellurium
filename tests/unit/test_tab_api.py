@@ -103,10 +103,11 @@ async def test_select_all_polls_until_a_match_appears():
         responses={
             "DOM.getDocument": {"root": {"nodeId": 1}},
             "DOM.querySelectorAll": query,
+            "DOM.resolveNode": lambda p: {"object": {"objectId": f"OBJ{p['nodeId']}"}},
         }
     )
     elements = await tab.select_all("li", timeout=5)
-    assert [e._node_id for e in elements] == [11, 12]
+    assert [e._object_id for e in elements] == ["OBJ11", "OBJ12"]
     assert calls["n"] == 2
 
 
@@ -123,10 +124,11 @@ async def test_xpath_all_returns_every_match_and_discards_results():
             "DOM.getDocument": {"root": {"nodeId": 1}},
             "DOM.performSearch": {"searchId": "S1", "resultCount": 3},
             "DOM.getSearchResults": {"nodeIds": [4, 5, 6]},
+            "DOM.resolveNode": lambda p: {"object": {"objectId": f"OBJ{p['nodeId']}"}},
         }
     )
     elements = await tab.xpath_all("//li")
-    assert [e._node_id for e in elements] == [4, 5, 6]
+    assert [e._object_id for e in elements] == ["OBJ4", "OBJ5", "OBJ6"]
     search = dict(tab._sent)["DOM.getSearchResults"]
     assert search == {"searchId": "S1", "fromIndex": 0, "toIndex": 3}
     assert ("DOM.discardSearchResults", {"searchId": "S1"}) in tab._sent

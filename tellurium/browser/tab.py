@@ -10,7 +10,8 @@ import random
 import time
 from typing import TYPE_CHECKING, Any
 
-from tellurium.browser.element import Element
+from tellurium.browser.element import Element, _elements_from_remote_array
+from tellurium.cdp.types import CDPError
 
 logger = logging.getLogger("tellurium")
 
@@ -38,6 +39,15 @@ _TEXT_WALKER_JS = """
     return [...new Set(results)];
 })(%s, %s)
 """
+
+
+# Tab.get(wait_until=...) -> Page.lifecycleEvent name (None: return on commit).
+_WAIT_UNTIL_EVENTS: dict[str, str | None] = {
+    "commit": None,
+    "domcontentloaded": "DOMContentLoaded",
+    "load": "load",
+    "networkidle": "networkIdle",
+}
 
 
 def url_matches(pattern: str, url: str) -> bool:
@@ -90,6 +100,8 @@ class Tab:
         self._target_id = target_id
         self._url: str = ""
         self._title: str = ""
+        self._lifecycle_enabled = False
+        self._closed = False
         self._mouse_pos: tuple[float, float] = (0, 0)  # Track current mouse position
         self._action_timer = None  # ActionTimer, created on first human action
         # Design doc 05 "Idle Simulation" — Browser.launch(stealth_idle=True)
@@ -122,27 +134,77 @@ class Tab:
     # ------------------------------------------------------------------
 
     async def get(self, url: str, *, wait_until: str = "load", timeout: float = 30) -> None:
-        """Navigate to *url* and wait for the page to load."""
-        await self._session.send("Page.enable", {})
-        loaded = asyncio.get_running_loop().create_future()
+        """Navigate to *url* and wait for the page to reach *wait_until*.
 
-        def _on_load(params: dict) -> None:
-            if not loaded.done():
-                loaded.set_result(True)
+        ``wait_until``:
 
-        self._session.on("Page.loadEventFired", _on_load)
+        * ``"commit"`` — return once the navigation is committed
+        * ``"domcontentloaded"`` — the ``DOMContentLoaded`` event fired
+        * ``"load"`` — the ``load`` event fired (all subresources done)
+        * ``"networkidle"`` — no network activity for 500 ms after load
+
+        A same-document navigation (``#fragment``) returns right away: there
+        is no new document to wait for.
+        """
+        if wait_until not in _WAIT_UNTIL_EVENTS:
+            raise ValueError(
+                f"Unknown wait_until {wait_until!r}; expected one of {sorted(_WAIT_UNTIL_EVENTS)}"
+            )
+        await self._enable_lifecycle_events()
+        event_name = _WAIT_UNTIL_EVENTS[wait_until]
+        events: list[dict] = []
+        arrived = asyncio.Event()
+
+        def _on_lifecycle(params: dict) -> None:
+            events.append(params)
+            arrived.set()
+
+        self._session.on("Page.lifecycleEvent", _on_lifecycle)
         try:
             result = await self._session.send("Page.navigate", {"url": url})
-            if "errorText" in result and result.get("errorText"):
+            if result.get("errorText"):
                 raise RuntimeError(f"Navigation failed: {result['errorText']}")
-            await asyncio.wait_for(loaded, timeout=timeout)
+            loader_id = result.get("loaderId")
+            if event_name is not None and loader_id:
+                await asyncio.wait_for(
+                    _wait_lifecycle(events, arrived, result.get("frameId"), loader_id, event_name),
+                    timeout=timeout,
+                )
         finally:
-            self._session.off("Page.loadEventFired", _on_load)
+            self._session.off("Page.lifecycleEvent", _on_lifecycle)
         self._url = url
+        await self._refresh_document_info()
         if self._action_timer is not None:
             # Design doc 05: navigate -> click / navigate -> type carry their
             # own (longer) transition delays.
             self._action_timer.mark("navigate")
+
+    async def _enable_lifecycle_events(self) -> None:
+        if self._lifecycle_enabled:
+            return
+        await self._session.send("Page.enable", {})
+        await self._session.send("Page.setLifecycleEventsEnabled", {"enabled": True})
+        self._lifecycle_enabled = True
+
+    async def _refresh_document_info(self) -> None:
+        """Read the title and the final URL (after redirects) of the document."""
+        try:
+            info = await self.eval("[document.title, location.href]") or ["", ""]
+        except Exception:  # noqa: BLE001 — never worth failing a navigation
+            logger.debug("Could not read document title/url", exc_info=True)
+            return
+        self._title = info[0] or ""
+        if info[1]:
+            self._url = info[1]
+
+    async def close(self) -> None:
+        """Close this tab. Further commands on it raise ``ConnectionError``."""
+        if not self._closed:
+            await self._browser._close_tab(self)
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
 
     async def back(self) -> None:
         """Go back in history."""
@@ -169,6 +231,7 @@ class Tab:
 
     @property
     def title(self) -> str:
+        """Document title as of the last :meth:`get` (see :meth:`eval` for live)."""
         return self._title
 
     async def wait_for_navigation(self, url: str | None = None, timeout: float = 30) -> None:
@@ -277,6 +340,13 @@ class Tab:
         doc = await self._session.send("DOM.getDocument", {"depth": 0})
         return doc["root"]["nodeId"]
 
+    async def _element_or_none(self, node_id: int, selector: str | None = None) -> Element | None:
+        """Resolve a just-queried node; ``None`` if a navigation removed it meanwhile."""
+        try:
+            return await Element._from_node_id(self._session, self, node_id, selector)
+        except CDPError:
+            return None
+
     async def select(self, selector: str, *, timeout: float = 10) -> Element:
         """Wait for a CSS-matching element and return it."""
         deadline = asyncio.get_running_loop().time() + timeout
@@ -286,10 +356,9 @@ class Tab:
                 "DOM.querySelector", {"nodeId": root, "selector": selector}
             )
             nid = result.get("nodeId", 0)
-            if nid:
-                el = Element(self._session, self, nid)
-                el._selector = selector
-                return el
+            element = await self._element_or_none(nid, selector) if nid else None
+            if element is not None:
+                return element
             if asyncio.get_running_loop().time() >= deadline:
                 raise TimeoutError(f"Timed out waiting for selector {selector!r}")
             await asyncio.sleep(0.2)
@@ -311,7 +380,10 @@ class Tab:
             result = await self._session.send(
                 "DOM.querySelectorAll", {"nodeId": root, "selector": selector}
             )
-            elements = [Element(self._session, self, nid) for nid in result.get("nodeIds", [])]
+            elements = [
+                await Element._from_node_id(self._session, self, nid)
+                for nid in result.get("nodeIds", [])
+            ]
             if elements or asyncio.get_running_loop().time() >= deadline:
                 return elements
             await asyncio.sleep(0.2)
@@ -349,10 +421,6 @@ class Tab:
         js_exact = "true" if exact else "false"
         js = _TEXT_WALKER_JS % (js_text, js_exact)
 
-        # Ensure the full DOM tree is populated in the CDP node map so that
-        # DOM.requestNode can map remote object IDs to nodeIds.
-        await self._session.send("DOM.getDocument", {"depth": -1})
-
         result = await self._session.send(
             "Runtime.evaluate",
             {
@@ -365,29 +433,7 @@ class Tab:
         if remote.get("type") != "object" or remote.get("subtype") != "array":
             return []
 
-        # Get the array's length
-        arr_id = remote["objectId"]
-        props = await self._session.send(
-            "Runtime.getProperties",
-            {
-                "objectId": arr_id,
-                "ownProperties": True,
-            },
-        )
-        elements: list[Element] = []
-        for prop in props.get("result", []):
-            if not prop["name"].isdigit():
-                continue
-            obj = prop.get("value", {})
-            obj_id = obj.get("objectId")
-            if not obj_id:
-                continue
-            # Request the node for this object
-            node_result = await self._session.send("DOM.requestNode", {"objectId": obj_id})
-            nid = node_result.get("nodeId", 0)
-            if nid:
-                elements.append(Element(self._session, self, nid))
-        return elements
+        return await _elements_from_remote_array(self._session, self, remote["objectId"])
 
     async def xpath(self, expression: str, *, timeout: float = 10) -> Element | None:
         """Evaluate an XPath expression. Returns first match or *None*.
@@ -412,7 +458,7 @@ class Tab:
                     )
                     nids = nodes.get("nodeIds", [])
                     if nids and nids[0]:
-                        return Element(self._session, self, nids[0])
+                        return await Element._from_node_id(self._session, self, nids[0])
             finally:
                 if search_id:
                     try:
@@ -448,7 +494,9 @@ class Tab:
                         {"searchId": search_id, "fromIndex": 0, "toIndex": count},
                     )
                     elements = [
-                        Element(self._session, self, nid) for nid in nodes.get("nodeIds", []) if nid
+                        await Element._from_node_id(self._session, self, nid)
+                        for nid in nodes.get("nodeIds", [])
+                        if nid
                     ]
             finally:
                 if search_id:
@@ -493,8 +541,7 @@ class Tab:
             )
             node_id = result.get("nodeId", 0)
             if node_id:
-                element = Element(self._session, self, node_id)
-                element._selector = selector
+                element = await self._element_or_none(node_id, selector)
 
             if state == "attached" and element is not None:
                 return element
@@ -1263,3 +1310,27 @@ def _json_escape(s: str) -> str:
     import json
 
     return json.dumps(s)
+
+
+async def _wait_lifecycle(
+    events: list[dict], arrived: asyncio.Event, frame_id: str | None, loader_id: str, name: str
+) -> None:
+    """Wait for lifecycle event *name* of the document loaded by *loader_id*.
+
+    A client-side redirect commits a new document in the same frame: its
+    ``init`` event hands over the loader we wait on, as ``loadEventFired``
+    used to.
+    """
+    seen = 0
+    while True:
+        while seen < len(events):
+            event = events[seen]
+            seen += 1
+            if frame_id and event.get("frameId") != frame_id:
+                continue
+            if event.get("name") == "init" and event.get("loaderId") != loader_id:
+                loader_id = event.get("loaderId")
+            elif event.get("loaderId") == loader_id and event.get("name") == name:
+                return
+        arrived.clear()
+        await arrived.wait()
