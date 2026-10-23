@@ -78,14 +78,15 @@ def _fake_chrome(tmp_path: Path, stderr: str, code: int) -> str:
 
 
 async def test_verbose_chrome_logging_does_not_freeze_the_browser(local_server):
+    """Spec R1, outcome 1: 200 pages with verbose logging, no freeze."""
     browser = await Browser.launch(headless=True, args=VERBOSE)
     try:
 
         async def scrape() -> None:
-            for _ in range(20):
-                await browser.main_tab.get(f"{local_server}/basic.html")
+            for i in range(200):
+                await browser.main_tab.get(f"{local_server}/basic.html?page={i}")
 
-        await asyncio.wait_for(scrape(), timeout=60)
+        await asyncio.wait_for(scrape(), timeout=120)
     finally:
         await browser.close()
 
