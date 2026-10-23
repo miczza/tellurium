@@ -55,6 +55,14 @@ _TEXT_WALKER_JS = """
 """
 
 
+# eval_on: called on the element. A compile error never runs it, so the
+# caller may retry *expression* as a body; anything thrown is returned.
+_EVAL_ON_JS = (
+    "async function() { try { const __f = %s;\n"
+    "return {ok: true, value: await (typeof __f === 'function' ? __f.call(this, this) : __f)}; "
+    "} catch (e) { return {ok: false, error: String((e && e.stack) || e)}; } }"
+)
+
 __all__ = ["Tab", "url_matches"]
 
 
@@ -252,11 +260,12 @@ class Tab:
         return remote.get("value")
 
     async def eval_on(self, selector: str, expression: str, timeout: float | None = None) -> Any:
-        """Run JS on the first element matching *selector*.
+        """Run JS on the first element matching *selector* and return the result.
 
         *expression* is a function (``"el => el.id"``, ``"() => this.id"``,
-        ``"function() { return this.id; }"``) called with the element as ``this``
-        and as its argument; arrows are rewritten as functions to bind ``this``.
+        ``"function() { return this.id; }"``), called with the element as ``this``
+        and as its argument; an expression (``"this.id"``); or a function body
+        (``"return this.id"``). A JavaScript exception raises ``RuntimeError``.
         *timeout* bounds each CDP command (default: the session's, 30 s).
         """
         send = self._session.send
@@ -271,30 +280,20 @@ class Tab:
             raise LookupError(f"No element matching {selector!r}")
         node = {"nodeId": node_id, "objectGroup": self._handles.name}
         object_id = (await send("DOM.resolveNode", node, timeout=timeout))["object"]["objectId"]
-        head, arrow, body = expression.partition("=>")
-        asy = "async " if head.strip().startswith("async ") else ""
-        args = head.strip()[len(asy) :].strip()
-        if arrow and not args.startswith("function"):  # an arrow: rebind `this`
-            body = body.strip() if body.strip().startswith("{") else f"{{ return (\n{body}\n); }}"
-            expression = f"{asy}function{args if args.startswith('(') else f'({args})'} {body}"
-        try:
-            res = await self._session.send(
-                "Runtime.callFunctionOn",
-                {
-                    "functionDeclaration": expression,
-                    "objectId": object_id,
-                    "arguments": [{"objectId": object_id}],
-                    "returnByValue": True,
-                    "awaitPromise": True,
-                },
-                timeout=timeout,
-            )
+        call = {"objectId": object_id, "returnByValue": True, "awaitPromise": True}
+        try:  # as a function or an expression; else, if it does not compile, as a body
+            for source in (f"(\n{expression}\n)", f"function() {{\n{expression}\n}}"):
+                call["functionDeclaration"] = _EVAL_ON_JS % source
+                res = await send("Runtime.callFunctionOn", call, timeout=timeout)
+                if "exceptionDetails" not in res:  # it ran: the wrapper caught any throw
+                    break
         finally:
             self._handles.discard(object_id)
-        remote = res.get("result", {})
-        if remote.get("type") == "undefined":
-            return None
-        return remote.get("value")
+        out = res.get("result", {}).get("value") or {}
+        if not out.get("ok"):
+            error = out.get("error") or res.get("result", {}).get("description")
+            raise RuntimeError(f"eval_on({selector!r}) failed: {error}")
+        return out.get("value")
 
     async def add_script(self, source: str) -> str:
         """Add a script to evaluate on every new document.

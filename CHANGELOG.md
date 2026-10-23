@@ -127,9 +127,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   keeps the install Chrome may be running from. Filesystem errors while
   installing raise `DownloadError` with the reason.
 - `Tab.eval_on(selector, "el => el.id")` passes the element as the first
-  argument as well as `this`: arrow functions got `undefined` for `el`. Arrows
-  are still rewritten as functions, so `"() => this.id"` keeps working, and the
-  rewriting now handles `async` arrows and a trailing `//` comment.
+  argument as well as `this`: arrow functions got `undefined` for `el`. The
+  expression is no longer rewritten as text: it is evaluated inside a function
+  bound to the element, so `"() => this.id"`, `"async el => …"`,
+  `"(el => el.id)"`, plain expressions (`"this.id"`) and function bodies
+  (`"return this.id"`, as documented) all work, and a trailing `//` comment is
+  harmless. A JavaScript exception or a syntax error raises `RuntimeError`
+  instead of returning `None`.
 - `BrowserContext.get_cookies(domain)` matches the domain and its subdomains
   instead of any substring, like `Browser.get_cookies`.
 - `Browser.launch(stealth=True, proxy=...)` looks up the proxy exit IP and its
