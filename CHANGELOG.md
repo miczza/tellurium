@@ -109,6 +109,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Browser.launch(stealth=True, proxy=...)` looks up the proxy exit IP and its
+  GeoIP data in a worker thread: run on the event loop, the lookup through an
+  authenticated proxy starved the forwarder it was waiting for.
 - `Browser.launch` resolves the browser binary in a worker thread: with
   `browser="patched"` the daily update check (HTTP), an automatic security
   download and the binary hash no longer freeze the event loop.

@@ -276,9 +276,10 @@ class Browser:
                         from tellurium.stealth.geoip import resolve_exit_ip, resolve_geoip
 
                         forwarder_port = self._proc.forwarder.port if self._proc.forwarder else None
-                        exit_ip = resolve_exit_ip(proxy, forwarder_port)
+                        # Off the loop: the lookup goes through the forwarder on it.
+                        exit_ip = await asyncio.to_thread(resolve_exit_ip, proxy, forwarder_port)
                         logger.info("Proxy exit IP: %s", exit_ip)
-                        geo = resolve_geoip(exit_ip)
+                        geo = await asyncio.to_thread(resolve_geoip, exit_ip)
                         stealth_profile = dataclasses.replace(
                             stealth_profile,
                             languages=geo.languages,
