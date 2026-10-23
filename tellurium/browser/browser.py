@@ -22,47 +22,13 @@ from tellurium.browser.launcher import (
 from tellurium.browser.process import BrowserProcess
 from tellurium.browser.proxy import ProxyForwarder, parse_proxy_url
 from tellurium.browser.tab import Tab, url_matches
+from tellurium.cdp.transport._pipeline import CommandPipeline
 from tellurium.cdp.transport._session import SessionRouter
 from tellurium.cdp.types import TargetCrashedError
 from tellurium.stealth._grease import parse_grease_brands, parse_product_version
 from tellurium.stealth._webrtc import resolve_webrtc_ip
 
 logger = logging.getLogger("tellurium")
-
-
-class _CommandPipeline:
-    """Session stand-in that issues commands without awaiting their replies.
-
-    Every command reaches the transport in call order; :meth:`drain` then
-    collects the replies. Only for callers that ignore command results.
-    """
-
-    def __init__(self, session: Any):
-        self._session = session
-        self._pending: list[asyncio.Future] = []
-
-    async def send(self, method: str, params: dict | None = None, timeout: float | None = None):
-        self._pending.append(asyncio.ensure_future(self._session.send(method, params)))
-        await asyncio.sleep(0)  # let the command hit the transport before the next one
-        return {}
-
-    def on(self, event_name: str, handler: Any) -> None:
-        self._session.on(event_name, handler)
-
-    def off(self, event_name: str, handler: Any) -> None:
-        self._session.off(event_name, handler)
-
-    async def drain(self, target_id: str, timeout: float = 10) -> None:
-        try:
-            results = await asyncio.wait_for(
-                asyncio.gather(*self._pending, return_exceptions=True), timeout=timeout
-            )
-        except asyncio.TimeoutError:
-            logger.warning("Tab %s did not acknowledge its setup commands", target_id)
-            return
-        for result in results:
-            if isinstance(result, Exception):
-                logger.debug("Setup command failed on tab %s: %r", target_id, result)
 
 
 class Browser:
@@ -84,6 +50,7 @@ class Browser:
         self._adopted: dict[str, asyncio.Future] = {}
         self._contexts: dict[str, BrowserContext] = {}
         self._tabs_changed = asyncio.Event()
+        self._background: set[asyncio.Task] = set()
         self._user_data_dir: str | None = None
         self._stealth_engine = None
         self._stealth_profile = None
@@ -649,7 +616,7 @@ class Browser:
         # A frozen popup answers nothing until it is resumed, so the patches
         # are pipelined ahead of the resume instead of awaited one by one:
         # the target processes them in order, before its first script.
-        pipeline = _CommandPipeline(session)
+        pipeline = CommandPipeline(session)
         try:
             await self._prepare_page_session(pipeline)
         except Exception:  # noqa: BLE001 — never leave the page frozen
@@ -695,6 +662,16 @@ class Browser:
             reason = f"Renderer crashed ({params.get('status', 'unknown')}): {tab._target_id}"
             tab._session._close(reason, TargetCrashedError)
             self._forget_tab(tab._target_id)
+            # The dead tab stays open in Chrome (memory, a page in getTargets).
+            task = asyncio.get_running_loop().create_task(self._discard_target(tab._target_id))
+            self._background.add(task)
+            task.add_done_callback(self._background.discard)
+
+    async def _discard_target(self, target_id: str) -> None:
+        try:
+            await self._router.root.send("Target.closeTarget", {"targetId": target_id}, timeout=5)
+        except Exception:  # noqa: BLE001 — already gone, or the browser is closing
+            logger.debug("Could not close crashed target %s", target_id, exc_info=True)
 
     async def _close_tab(self, tab: Tab, timeout: float = 5) -> None:
         """Close *tab* and wait until Chrome reports its target destroyed."""
@@ -716,6 +693,8 @@ class Browser:
             return
         tab._closed = True
         self._tabs.remove(tab)
+        if tab is self._main_tab:  # never leave main_tab on a dead tab
+            self._main_tab = self._tabs[0] if self._tabs else None
         for context in self._contexts.values():
             if tab in context._tabs:
                 context._tabs.remove(tab)
@@ -728,8 +707,13 @@ class Browser:
         return self._main_tab
 
     async def get(self, url: str, **kwargs: Any) -> Tab:
-        """Navigate the main tab to *url* and return it."""
-        tab = self.main_tab
+        """Navigate the main tab to *url* and return it.
+
+        Opens a new main tab when there is none (all closed or crashed).
+        """
+        if self._main_tab is None:
+            self._main_tab = await self.new_tab("about:blank")
+        tab = self._main_tab
         await tab.get(url, **kwargs)
         return tab
 

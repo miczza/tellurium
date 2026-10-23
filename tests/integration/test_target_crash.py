@@ -75,3 +75,37 @@ async def test_browser_keeps_working_after_a_crash(browser, local_server):
 def test_target_crashed_error_is_a_connection_error():
     """Callers that already handle a closed session keep working."""
     assert issubclass(TargetCrashedError, ConnectionError)
+
+
+async def _page_target_ids(browser) -> set[str]:
+    result = await browser._router.root.send("Target.getTargets", {}, timeout=10)
+    return {t["targetId"] for t in result["targetInfos"] if t["type"] == "page"}
+
+
+async def test_crashed_target_is_closed_in_chrome(browser, local_server):
+    """A dead tab must not linger in Chrome (it holds memory, counts as a page)."""
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/basic.html")
+
+    await _kill_renderers(browser)
+    assert await _wait_until(lambda: tab.closed)
+    await tab.close()  # public API on a crashed tab: no error
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 10
+    while tab._target_id in await _page_target_ids(browser):
+        assert loop.time() < deadline, "the crashed target is still open in Chrome"
+        await asyncio.sleep(0.1)
+
+
+async def test_main_tab_does_not_stay_on_a_crashed_tab(browser, local_server):
+    dead = browser.main_tab
+    await dead.get(f"{local_server}/basic.html")
+
+    await _kill_renderers(browser)
+    assert await _wait_until(lambda: dead.closed)
+
+    fresh = await asyncio.wait_for(browser.get(f"{local_server}/basic.html"), timeout=30)
+    assert fresh is not dead
+    assert browser.main_tab is fresh
+    assert await asyncio.wait_for(fresh.eval("1 + 1"), timeout=10) == 2

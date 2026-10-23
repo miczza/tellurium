@@ -86,6 +86,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A crashed tab stayed open in Chrome and `main_tab` kept pointing at it, so
+  `browser.get()` failed for good. The crashed target is now closed, `main_tab`
+  moves to another open tab, and `browser.get()` opens a new main tab when
+  none is left.
 - A launch cancelled a second time while rolling back (or `asyncio.run`
   ending right after) skipped the remaining cleanup: the pipe, the proxy
   forwarder and the temporary profile were left behind. `Browser.close()` now
