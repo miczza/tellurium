@@ -213,8 +213,9 @@ class Browser:
             engine = StockEngine(executable=executable)
         self._engine = engine
 
-        # 2. Get executable
-        chrome_path = await engine.get_executable()
+        # 2. Get executable, off the loop: the patched engine checks for updates
+        # over HTTP, may download a release and hashes a ~300 MB binary.
+        chrome_path = await asyncio.to_thread(lambda: asyncio.run(engine.get_executable()))
 
         # 2a. Chrome 137+ branded check for extensions
         if extensions:

@@ -109,6 +109,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Browser.launch` resolves the browser binary in a worker thread: with
+  `browser="patched"` the daily update check (HTTP), an automatic security
+  download and the binary hash no longer freeze the event loop.
+- `tellurium.browser._cache.binary_sha256()` remembers a binary's SHA256 beside
+  it until the file changes (size, inode, mtime, ctime), so it need not be
+  rehashed on every launch.
 - The initial tab enables the `Page` domain at launch, so a dialog opened
   before its first `get()` (e.g. by `tab.eval("alert(1)")`) is answered
   instead of blocking the tab.

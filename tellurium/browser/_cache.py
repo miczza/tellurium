@@ -77,6 +77,33 @@ def binary_in(version_dir: Path) -> Path | None:
     return None
 
 
+def binary_sha256(binary: Path) -> str:
+    """SHA256 of *binary*, remembered beside it until the file changes.
+
+    Hashing the ~300 MB binary on every launch costs seconds. The record
+    (``.<name>.sha256``) is keyed on size, inode, mtime and ctime: rewriting
+    the file, or putting its mtime back afterwards, updates the ctime and
+    forces a new hash. An unreadable or unwritable record just means hashing.
+    """
+    from tellurium.browser import _manifest
+
+    st = binary.stat()
+    key = [st.st_size, st.st_ino, st.st_mtime_ns, st.st_ctime_ns]
+    record = binary.with_name(f".{binary.name}.sha256")
+    try:
+        cached = json.loads(record.read_text())
+        if cached["stat"] == key:
+            return str(cached["sha256"])
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    digest = _manifest._sha256_file(binary)
+    try:
+        record.write_text(json.dumps({"stat": key, "sha256": digest}))
+    except OSError:
+        pass
+    return digest
+
+
 @dataclass(frozen=True)
 class InstalledBrowser:
     version: str
