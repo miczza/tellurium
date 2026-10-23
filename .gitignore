@@ -24,3 +24,6 @@ examples/fingerprint_tests/diagnose_results.json
 examples/fingerprint_tests/results_seed_*.json
 examples/fingerprint_tests/results_patched_*.json
 examples/fingerprint_tests/screenshots/comparative/
+
+# Claude Code: impostazioni personali
+.claude/settings.local.json
