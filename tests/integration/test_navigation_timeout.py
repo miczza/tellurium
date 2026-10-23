@@ -12,6 +12,7 @@ import http.server
 import threading
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 
@@ -178,3 +179,37 @@ async def test_wait_for_navigation_waits_for_the_load_of_the_matching_document(
     await _guard(waiter)
     assert tab.url.endswith("/redirect_final.html")
     assert await tab.eval("document.readyState") == "complete"
+
+
+# ---------------------------------------------------------------------------
+# One deadline: cleanup and bookkeeping stay inside the caller's timeout
+# ---------------------------------------------------------------------------
+
+_DCL_ALERT = "data:text/html," + quote(
+    "<p>x</p><script>"
+    "addEventListener('DOMContentLoaded', () => setTimeout(() => alert('open'), 0));"
+    "</script>"
+)
+_LOAD_ALERT = "data:text/html," + quote(
+    "<p>x</p><script>addEventListener('load', () => alert('open'));</script>"
+)
+
+
+async def test_get_returns_within_timeout_when_the_page_freezes_after_commit(browser):
+    tab = browser.main_tab
+    tab._dialogs.policy = "manual"  # the alert stays open and freezes the page
+    start = time.monotonic()
+    await _guard(tab.get(_DCL_ALERT, wait_until="domcontentloaded", timeout=3))
+    assert time.monotonic() - start < 3.5
+    await tab._dialogs.last.dismiss()
+
+
+async def test_timeout_with_a_frozen_page_stays_within_the_deadline(browser):
+    tab = browser.main_tab
+    tab._dialogs.policy = "manual"
+    start = time.monotonic()
+    with pytest.raises(NavigationTimeoutError) as info:
+        await _guard(tab.get(_LOAD_ALERT, wait_until="load", timeout=2))
+    assert time.monotonic() - start < 2.5
+    assert "alert dialog is still open: 'open'" in str(info.value)
+    await tab._dialogs.last.dismiss()

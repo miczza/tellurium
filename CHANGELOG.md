@@ -108,8 +108,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the load is stopped and `NavigationTimeoutError` (a builtin `TimeoutError`,
   also on Python 3.10) names the URL and the phase (`commit`, `load`…). A
   refused navigation raises `NavigationError` (a `RuntimeError`) with the URL
-  and a hint for `net::ERR_ABORTED` (204 responses, downloads). Reading the
-  title after a navigation is bounded too.
+  and a hint for `net::ERR_ABORTED` (204 responses, downloads). Enabling the
+  lifecycle events, `Page.stopLoading` on expiry and reading the title all
+  stay inside the same deadline.
 - `Tab.wait_for_navigation()` ignores iframe navigations, waits for the `load`
   of the main-frame document that matches the pattern (not of an earlier page
   in a redirect chain), returns on a back/forward-cache restore, and no longer

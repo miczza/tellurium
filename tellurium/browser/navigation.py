@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import logging
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -28,6 +29,8 @@ WAIT_UNTIL_EVENTS: dict[str, str | None] = {
 
 # Bounds the cleanup and bookkeeping calls around a navigation.
 _SHORT_TIMEOUT = 5.0
+# Share of the deadline kept for Page.stopLoading once a navigation gives up.
+_STOP_RESERVE = 0.5
 
 # On Python 3.10 asyncio.TimeoutError is not the builtin TimeoutError: keep
 # both catchable there; on 3.11+ they are the same class.
@@ -105,12 +108,18 @@ async def navigate(
     wait_until: str,
     timeout: float,
     dialogs: DialogGuard | None = None,
-) -> None:
+    prepare: Callable[[], Awaitable[None]] | None = None,
+) -> tuple[str, str] | None:
     """Navigate the main frame to *url* and wait for *wait_until*, all within *timeout*.
 
-    Lifecycle events must already be enabled on *session*. On expiry the
-    load is stopped and :class:`NavigationTimeoutError` is raised.
+    *prepare* (enabling lifecycle events) runs first, inside the deadline. On
+    expiry the load is stopped, still within *timeout*, and
+    :class:`NavigationTimeoutError` is raised. Returns ``(title, href)`` of the
+    new document, or ``None`` when no time is left to read them.
     """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    reserve = min(_STOP_RESERVE, timeout / 10)
     event_name = check_wait_until(wait_until)
     events: list[dict] = []
     arrived = asyncio.Event()
@@ -122,6 +131,8 @@ async def navigate(
 
     async def _run() -> None:
         nonlocal phase
+        if prepare is not None:
+            await prepare()
         result = await session.send("Page.navigate", {"url": url})
         if result.get("errorText"):
             raise NavigationError(url, result["errorText"])
@@ -132,12 +143,14 @@ async def navigate(
 
     session.on("Page.lifecycleEvent", _on_lifecycle)
     try:
-        await asyncio.wait_for(_run(), timeout=timeout)
+        await asyncio.wait_for(_run(), timeout=timeout - reserve)
     except asyncio.TimeoutError:
-        await stop_loading(session)
+        await stop_loading(session, max(deadline - loop.time(), 0.01))
         raise NavigationTimeoutError(url, phase, timeout, _dialog_hint(dialogs)) from None
     finally:
         session.off("Page.lifecycleEvent", _on_lifecycle)
+    remaining = deadline - loop.time()
+    return await document_info(session, remaining) if remaining > 0 else None
 
 
 async def wait_for_main_frame(session: Session, pattern: str | None, *, timeout: float) -> str:
@@ -188,15 +201,17 @@ async def wait_for_main_frame(session: Session, pattern: str | None, *, timeout:
     return committed.get("url", "")
 
 
-async def stop_loading(session: Session) -> None:
+async def stop_loading(session: Session, timeout: float = _SHORT_TIMEOUT) -> None:
     """Best-effort ``Page.stopLoading`` after a navigation gave up."""
     try:
-        await session.send("Page.stopLoading", {}, timeout=_SHORT_TIMEOUT)
+        await session.send("Page.stopLoading", {}, timeout=timeout)
     except Exception:  # noqa: BLE001 — the timeout error matters, not this
         logger.debug("Page.stopLoading failed", exc_info=True)
 
 
-async def document_info(session: Session) -> tuple[str, str] | None:
+async def document_info(
+    session: Session, timeout: float = _SHORT_TIMEOUT
+) -> tuple[str, str] | None:
     """Return ``(title, href)`` of the current document, or ``None`` if unreadable.
 
     Bounded: a page that stopped answering must not stall the navigation that
@@ -206,7 +221,7 @@ async def document_info(session: Session) -> tuple[str, str] | None:
         result = await session.send(
             "Runtime.evaluate",
             {"expression": "[document.title, location.href]", "returnByValue": True},
-            timeout=_SHORT_TIMEOUT,
+            timeout=min(timeout, _SHORT_TIMEOUT),
         )
     except Exception:  # noqa: BLE001 — never worth failing a navigation
         logger.debug("Could not read document title/url", exc_info=True)

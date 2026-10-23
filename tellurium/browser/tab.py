@@ -14,7 +14,6 @@ from tellurium.browser.element import Element
 from tellurium.browser.handles import HandleGroup, elements_from_array
 from tellurium.browser.navigation import (
     check_wait_until,
-    document_info,
     navigate,
     url_matches,
     wait_for_main_frame,
@@ -140,12 +139,17 @@ class Tab:
         the URL and the phase. A refused navigation raises ``NavigationError``.
         """
         check_wait_until(wait_until)
-        await self._enable_lifecycle_events()
-        await navigate(
-            self._session, url, wait_until=wait_until, timeout=timeout, dialogs=self._dialogs
+        info = await navigate(
+            self._session,
+            url,
+            wait_until=wait_until,
+            timeout=timeout,
+            dialogs=self._dialogs,
+            prepare=self._enable_lifecycle_events,
         )
         self._url = url
-        await self._refresh_document_info()
+        if info is not None:
+            self._title, self._url = info[0], info[1] or url
         if self._action_timer is not None:
             # Design doc 05: navigate -> click / navigate -> type carry their
             # own (longer) transition delays.
@@ -157,13 +161,6 @@ class Tab:
         await self._session.send("Page.enable", {}, timeout=10)
         await self._session.send("Page.setLifecycleEventsEnabled", {"enabled": True}, timeout=10)
         self._lifecycle_enabled = True
-
-    async def _refresh_document_info(self) -> None:
-        """Read the title and the final URL (after redirects) of the document."""
-        info = await document_info(self._session)
-        if info is not None:
-            self._title = info[0]
-            self._url = info[1] or self._url
 
     async def close(self) -> None:
         """Close this tab. Further commands on it raise ``ConnectionError``."""
