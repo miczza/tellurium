@@ -166,8 +166,10 @@ class Tab:
         """Close this tab. Further commands on it raise ``ConnectionError``."""
         if not self._closed:
             self._dialogs.close()
-            await self._handles.close()
-            await self._browser._close_tab(self)
+            try:
+                await self._handles.close()
+            finally:
+                await self._browser._close_tab(self)
 
     @property
     def closed(self) -> bool:

@@ -95,7 +95,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Element handles no longer pin DOM nodes: every query resolves into the tab's
   `objectGroup`, an `Element` dropped by Python releases its handle (batched),
   result arrays are released right after use, and the group is released on
-  each main-frame navigation and on `Tab.close()`. Before, 20 rounds of
+  each main-frame navigation and on `Tab.close()` (bounded to 0.5 s, so a
+  frozen page does not delay the close). Before, 20 rounds of
   `select_all` over a 300-row feed kept ~12000 removed nodes alive.
 - Commands on an element are bounded (30 s): a page frozen by an open dialog
   raises `TimeoutError` instead of hanging.

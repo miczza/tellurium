@@ -126,3 +126,16 @@ async def test_element_call_is_bounded_while_a_dialog_is_open(browser, local_ser
         await asyncio.wait_for(heading.text(), timeout=10)
     await tab._dialogs.last.dismiss()
     assert await heading.tag() == "h1"
+
+
+async def test_close_is_not_delayed_by_a_frozen_page(browser, local_server):
+    tab = await browser.new_tab(f"{local_server}/basic.html")
+    tab._dialogs.policy = "manual"
+    await tab.select("h1")
+    await tab.eval("setTimeout(() => alert('stuck'), 0); 1")
+    await asyncio.sleep(0.3)
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    await asyncio.wait_for(tab.close(), timeout=15)
+    assert loop.time() - start < 2.5
+    assert tab.closed

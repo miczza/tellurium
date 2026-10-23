@@ -33,6 +33,8 @@ _RELEASE_TIMEOUT = 5.0
 # Bound of a command on an element (a page frozen by an open dialog, a hung
 # renderer); generous because callFunctionOn awaits the page's promises.
 HANDLE_TIMEOUT = 30.0
+# Closing the target frees its objects anyway: never wait long on a frozen page.
+_CLOSE_TIMEOUT = 0.5
 
 # Chrome's messages for a node or remote object that no longer exists.
 _STALE_MESSAGES = (
@@ -175,7 +177,9 @@ class HandleGroup:
         self._orphans.clear()
         for task in list(self._tasks):
             task.cancel()
-        await self._send("Runtime.releaseObjectGroup", {"objectGroup": self.name})
+        await self._send(
+            "Runtime.releaseObjectGroup", {"objectGroup": self.name}, timeout=_CLOSE_TIMEOUT
+        )
 
     # ------------------------------------------------------------------
 
@@ -212,8 +216,8 @@ class HandleGroup:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _send(self, method: str, params: dict) -> None:
+    async def _send(self, method: str, params: dict, timeout: float = _RELEASE_TIMEOUT) -> None:
         try:
-            await self._session.send(method, params, timeout=_RELEASE_TIMEOUT)
+            await self._session.send(method, params, timeout=timeout)
         except Exception:  # noqa: BLE001 — the object or the target is already gone
             logger.debug("%s failed", method, exc_info=True)
