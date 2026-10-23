@@ -1,3 +1,5 @@
+import pytest
+
 from tellurium.browser.cookie import Cookie
 
 
@@ -123,3 +125,29 @@ def test_matches_domain_is_not_a_substring_match():
     assert not matches_domain(".notexample.com", "example.com")
     assert not matches_domain("example.com.evil.net", "example.com")
     assert not matches_domain("example.com", "sub.example.com")
+
+
+def test_a_host_also_sees_the_parent_domain_cookies_it_receives():
+    from tellurium.browser.cookie import matches_domain
+
+    # ".example.com" is a domain cookie: sub.example.com receives it.
+    assert matches_domain(".example.com", "sub.example.com", received=True)
+    # A host-only cookie of example.com is not sent to sub.example.com.
+    assert not matches_domain("example.com", "sub.example.com", received=True)
+    assert not matches_domain(".other.example.com", "sub.example.com", received=True)
+    assert not matches_domain(".com", "sub.example.com", received=False)
+
+
+@pytest.mark.parametrize("domain", ["com", ".com", "uk", ""])
+def test_a_bare_tld_is_refused(domain):
+    from tellurium.browser.cookie import matches_domain
+
+    with pytest.raises(ValueError, match="domain"):
+        matches_domain(".example.com", domain)
+
+
+def test_localhost_and_ips_are_domains():
+    from tellurium.browser.cookie import matches_domain
+
+    assert matches_domain("localhost", "localhost")
+    assert matches_domain("127.0.0.1", "127.0.0.1")

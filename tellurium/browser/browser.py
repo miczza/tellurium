@@ -735,7 +735,8 @@ class Browser:
     # ------------------------------------------------------------------
 
     async def get_cookies(self, domain: str | None = None) -> list[Cookie]:
-        """Browser cookies; with *domain*, only its own and its subdomains'."""
+        """Browser cookies; with *domain*, its own, its subdomains' and the
+        parent-domain cookies it receives (``.example.com`` for ``sub.example.com``)."""
         return await read_jar(self._router.root, domain)
 
     async def set_cookies(self, cookies: list[Cookie]) -> None:

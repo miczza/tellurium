@@ -81,3 +81,20 @@ async def test_context_clear_cookies_stays_in_the_context(browser):
         assert _names(await browser.get_cookies()) == ["main"]
     finally:
         await context.close()
+
+
+async def test_get_cookies_for_a_subdomain_includes_what_it_receives(browser):
+    await browser.set_cookies(_JAR)
+    assert _names(await browser.get_cookies("sub.example.com")) == ["a", "b"]
+
+
+async def test_clear_cookies_for_a_subdomain_keeps_the_parent_domain(browser):
+    await browser.set_cookies(_JAR)
+    await browser.clear_cookies("sub.example.com")
+    assert _names(await browser.get_cookies()) == ["a", "c", "d"]
+
+
+async def test_a_public_suffix_does_not_return_everything(browser):
+    await browser.set_cookies(_JAR)
+    with pytest.raises(ValueError, match="domain"):
+        await browser.get_cookies("com")

@@ -51,7 +51,7 @@ class BrowserContext:
         return tab
 
     async def get_cookies(self, domain: str | None = None) -> list[Cookie]:
-        """This context's cookies; with *domain*, only its own and its subdomains'."""
+        """This context's cookies; with *domain*, as :meth:`Browser.get_cookies`."""
         return await read_jar(self._browser._router.root, domain, self._context_id)
 
     async def clear_cookies(self, domain: str | None = None) -> None:

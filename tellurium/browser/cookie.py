@@ -10,15 +10,23 @@ from typing import Any
 _HTTP_ONLY_PREFIX = "#HttpOnly_"
 
 
-def matches_domain(cookie_domain: str, domain: str) -> bool:
+def matches_domain(cookie_domain: str, domain: str, *, received: bool = False) -> bool:
     """Whether a cookie stored for *cookie_domain* belongs to *domain*.
 
     Equal hosts or subdomains match (``sub.example.com`` belongs to
-    ``example.com``); ``notexample.com`` does not. Leading dots are ignored.
+    ``example.com``); ``notexample.com`` does not. With *received*, also the
+    parent-domain cookies the host is sent: ``.example.com`` (a domain
+    cookie) for ``sub.example.com``, not a host-only ``example.com``.
+    *domain* must have a dot (or be ``localhost``): ``com`` would match
+    every ``.com`` site. Leading dots on *domain* are ignored.
     """
-    host = cookie_domain.lstrip(".").lower()
     wanted = domain.lstrip(".").lower()
-    return host == wanted or host.endswith("." + wanted)
+    if "." not in wanted and wanted != "localhost":
+        raise ValueError(f"Not a cookie domain: {domain!r} (a bare TLD matches every site)")
+    host = cookie_domain.lstrip(".").lower()
+    if host == wanted or host.endswith("." + wanted):
+        return True
+    return received and cookie_domain.startswith(".") and wanted.endswith("." + host)
 
 
 # CookieParam fields that identify a stored cookie (Storage.setCookies).
@@ -28,15 +36,19 @@ _IDENTITY = ("name", "domain", "path", "secure", "httpOnly", "sameSite", "partit
 async def read_jar(
     session: Any, domain: str | None = None, context_id: str | None = None
 ) -> list[Cookie]:
-    """Cookies of the browser (or of *context_id*), only *domain*'s when given."""
+    """Cookies of the browser (or of *context_id*); with *domain*, those of the
+    domain and its subdomains plus the parent-domain cookies it receives."""
     params = {"browserContextId": context_id} if context_id else {}
     result = await session.send("Storage.getCookies", params)
     cookies = [Cookie.from_json(c) for c in result.get("cookies", [])]
-    return [c for c in cookies if domain is None or matches_domain(c.domain, domain)]
+    return [c for c in cookies if domain is None or matches_domain(c.domain, domain, received=True)]
 
 
 async def clear_jar(session: Any, domain: str | None = None, context_id: str | None = None) -> None:
     """Delete every cookie of the browser (or of *context_id*), or only *domain*'s.
+
+    Only the domain's and its subdomains' cookies: a parent domain's
+    ``.example.com`` cookies stay, since sibling hosts receive them too.
 
     Runs on the browser session: ``Storage`` is there, ``Network`` is not.
     A domain's cookies are deleted by storing them again already expired.
