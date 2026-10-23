@@ -10,7 +10,8 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from tellurium.browser.dialog import DialogGuard, DialogHandler
-from tellurium.browser.element import Element, _elements_from_remote_array
+from tellurium.browser.element import Element
+from tellurium.browser.handles import HandleGroup, elements_from_array
 from tellurium.browser.navigation import (
     check_wait_until,
     document_info,
@@ -84,6 +85,7 @@ class Tab:
         self._typo_rng = None  # lazily seeded from the stealth profile
         self._session = session
         self._dialogs = DialogGuard(session, dialogs)
+        self._handles = HandleGroup(session)
         self._browser = browser
         self._target_id = target_id
         self._url: str = ""
@@ -114,6 +116,7 @@ class Tab:
                 # Track the main frame id (parentId absent means it's the main frame)
                 if not frame.get("parentId"):
                     self._frame_id = fid
+                    self._handles.rotate()  # the old document's handles are gone
 
         self._session.on("Page.frameNavigated", _on_frame_navigated)
 
@@ -165,6 +168,8 @@ class Tab:
     async def close(self) -> None:
         """Close this tab. Further commands on it raise ``ConnectionError``."""
         if not self._closed:
+            self._dialogs.close()
+            await self._handles.close()
             await self._browser._close_tab(self)
 
     @property
@@ -256,7 +261,9 @@ class Tab:
         node_id = query.get("nodeId", 0)
         if not node_id:
             raise LookupError(f"No element matching {selector!r}")
-        resolve = await self._session.send("DOM.resolveNode", {"nodeId": node_id})
+        resolve = await self._session.send(
+            "DOM.resolveNode", {"nodeId": node_id, "objectGroup": self._handles.name}
+        )
         object_id = resolve["object"]["objectId"]
         # Convert arrow functions
         fn = expression
@@ -269,15 +276,18 @@ class Tab:
             if not body.startswith("{"):
                 body = f"{{ return {body}; }}"
             fn = f"function{params} {body}"
-        res = await self._session.send(
-            "Runtime.callFunctionOn",
-            {
-                "functionDeclaration": fn,
-                "objectId": object_id,
-                "returnByValue": True,
-                "awaitPromise": True,
-            },
-        )
+        try:
+            res = await self._session.send(
+                "Runtime.callFunctionOn",
+                {
+                    "functionDeclaration": fn,
+                    "objectId": object_id,
+                    "returnByValue": True,
+                    "awaitPromise": True,
+                },
+            )
+        finally:
+            self._handles.discard(object_id)
         remote = res.get("result", {})
         if remote.get("type") == "undefined":
             return None
@@ -341,10 +351,8 @@ class Tab:
             result = await self._session.send(
                 "DOM.querySelectorAll", {"nodeId": root, "selector": selector}
             )
-            elements = [
-                await Element._from_node_id(self._session, self, nid)
-                for nid in result.get("nodeIds", [])
-            ]
+            found = [await self._element_or_none(nid) for nid in result.get("nodeIds", [])]
+            elements = [element for element in found if element is not None]
             if elements or asyncio.get_running_loop().time() >= deadline:
                 return elements
             await asyncio.sleep(0.2)
@@ -388,13 +396,14 @@ class Tab:
                 "expression": js,
                 "returnByValue": False,
                 "awaitPromise": False,
+                "objectGroup": self._handles.name,
             },
         )
         remote = result.get("result", {})
         if remote.get("type") != "object" or remote.get("subtype") != "array":
             return []
 
-        return await _elements_from_remote_array(self._session, self, remote["objectId"])
+        return await elements_from_array(self._session, self, remote["objectId"])
 
     async def xpath(self, expression: str, *, timeout: float = 10) -> Element | None:
         """Evaluate an XPath expression. Returns first match or *None*.
@@ -418,8 +427,9 @@ class Tab:
                         {"searchId": search_id, "fromIndex": 0, "toIndex": 1},
                     )
                     nids = nodes.get("nodeIds", [])
-                    if nids and nids[0]:
-                        return await Element._from_node_id(self._session, self, nids[0])
+                    element = await self._element_or_none(nids[0]) if nids and nids[0] else None
+                    if element is not None:
+                        return element
             finally:
                 if search_id:
                     try:
@@ -454,11 +464,8 @@ class Tab:
                         "DOM.getSearchResults",
                         {"searchId": search_id, "fromIndex": 0, "toIndex": count},
                     )
-                    elements = [
-                        await Element._from_node_id(self._session, self, nid)
-                        for nid in nodes.get("nodeIds", [])
-                        if nid
-                    ]
+                    found = [await self._element_or_none(n) for n in nodes.get("nodeIds", []) if n]
+                    elements = [element for element in found if element is not None]
             finally:
                 if search_id:
                     try:

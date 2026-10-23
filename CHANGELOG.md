@@ -7,6 +7,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Element.release()` frees an element's handle in the page; later calls on it
+  raise `StaleElementError`.
 - `Tab.on_dialog(handler)` and `tellurium.browser.dialog.Dialog` (`type`,
   `message`, `accept(text)`, `dismiss()`): every tab now answers JavaScript
   dialogs. Without a handler the tab policy applies (`"dismiss"` by default,
@@ -89,6 +91,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Element handles no longer pin DOM nodes: every query resolves into the tab's
+  `objectGroup`, an `Element` dropped by Python releases its handle (batched),
+  result arrays are released right after use, and the group is released on
+  each main-frame navigation and on `Tab.close()`. Before, 20 rounds of
+  `select_all` over a 300-row feed kept ~12000 removed nodes alive.
+- A stale element (its document navigated away, or it was released) raises
+  `StaleElementError` (a `CDPError`) instead of a bare
+  `CDP error -32000: Cannot find context with specified id`.
+- `Tab.select_all`, `xpath` and `xpath_all` skip a node removed between the
+  query and its resolution instead of raising `CDPError`.
 - `Tab.get(timeout=...)` now bounds the whole navigation, `Page.navigate`
   included: a server that holds the response raised nothing before. On expiry
   the load is stopped and `NavigationTimeoutError` (a builtin `TimeoutError`,
