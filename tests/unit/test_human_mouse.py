@@ -1,3 +1,5 @@
+import random
+
 from tellurium.stealth.human import MOUSE_PROFILES, apply_lognormal_velocity, wind_mouse
 
 
@@ -13,6 +15,8 @@ def test_wind_mouse_starts_near_origin():
 
 
 def test_wind_mouse_path_not_straight():
+    # Seeded: unseeded, about 1 path in 40 stays within 5 px of the diagonal.
+    random.seed(1234)
     path = wind_mouse(0, 0, 500, 500)
     max_deviation = 0
     for x, y in path:
