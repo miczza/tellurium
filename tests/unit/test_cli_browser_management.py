@@ -167,4 +167,23 @@ def test_cli_download_browser_patched_calls_installer(tmp_path):
             ],
         ):
             main()
-    inst.assert_called_once_with("146.0.7680.188")
+    inst.assert_called_once_with("146.0.7680.188", allow_unverified=False)
+
+
+@pytest.mark.parametrize("flag", [[], ["--allow-unverified"]])
+def test_cli_download_browser_allow_unverified_reaches_the_installer(tmp_path, flag):
+    from tellurium.browser import _patched_download
+
+    entry = _cache.InstalledBrowser(
+        version="146.0.7680.188",
+        path=tmp_path,
+        binary=tmp_path / "chrome",
+        manifest=None,
+        is_current=True,
+    )
+    with patch("tellurium.cli._cache_dir", return_value=tmp_path):
+        with patch.object(_patched_download, "download_patched", return_value=entry) as dl:
+            argv = ["tellurium", "download-browser", "--browser", "patched", *flag]
+            with patch("sys.argv", argv):
+                main()
+    assert dl.call_args.kwargs["allow_unverified"] is bool(flag)

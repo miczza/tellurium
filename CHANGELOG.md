@@ -7,6 +7,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `tellurium download-browser --browser patched --allow-unverified` installs a
+  release without a matching `SHA256SUMS` (mirrors, local builds).
 - `BrowserContext.clear_cookies(domain=None)` deletes the context's cookies
   (or one domain's) without touching the default context.
 - `Tab.eval_on(..., timeout=)`, `Tab.screenshot(..., timeout=)` and

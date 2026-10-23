@@ -46,6 +46,11 @@ def main():
     dl_parser.add_argument(
         "--version", default=None, help="Chromium version to download (default: latest release)"
     )
+    dl_parser.add_argument(
+        "--allow-unverified",
+        action="store_true",
+        help="Patched only: install a release without a matching SHA256SUMS (mirrors, local builds)",
+    )
 
     # download-geoip
     geo_parser = sub.add_parser(
@@ -89,7 +94,7 @@ def main():
     if args.command == "update-cdp":
         _update_cdp(args.chrome_version)
     elif args.command == "download-browser":
-        asyncio.run(_download_browser(args.browser, args.version))
+        asyncio.run(_download_browser(args.browser, args.version, args.allow_unverified))
     elif args.command == "download-geoip":
         _download_geoip(args.maxmind_license_key)
     elif args.command == "stealth-test":
@@ -199,7 +204,9 @@ def _progress_printer():
     return cb
 
 
-def _install_patched(version: str | None, *, reinstall: bool = False) -> bool:
+def _install_patched(
+    version: str | None, *, reinstall: bool = False, allow_unverified: bool = False
+) -> bool:
     """Download (or re-download) a patched release; print outcome; return success."""
     from tellurium.browser._patched_download import DownloadError, download_patched
     from tellurium.browser._patched_download import reinstall as _re
@@ -208,7 +215,12 @@ def _install_patched(version: str | None, *, reinstall: bool = False) -> bool:
         if reinstall and version:
             entry = _re(version, cache_root=_cache_dir(), progress=_progress_printer())
         else:
-            entry = download_patched(version, cache_root=_cache_dir(), progress=_progress_printer())
+            entry = download_patched(
+                version,
+                cache_root=_cache_dir(),
+                progress=_progress_printer(),
+                allow_unverified=allow_unverified,
+            )
     except DownloadError as e:
         print(f"\nError: {e}", file=sys.stderr)
         return False
@@ -221,7 +233,9 @@ def _install_patched(version: str | None, *, reinstall: bool = False) -> bool:
     return True
 
 
-async def _download_browser(browser_type: str, version: str | None = None) -> None:
+async def _download_browser(
+    browser_type: str, version: str | None = None, allow_unverified: bool = False
+) -> None:
     """Download a browser binary."""
     if browser_type == "stock":
         from tellurium.browser.launcher import download_cft
@@ -229,7 +243,7 @@ async def _download_browser(browser_type: str, version: str | None = None) -> No
         path = await download_cft(version or "latest")
         print(f"Chrome for Testing downloaded: {path}")
     elif browser_type == "patched":
-        if not _install_patched(version):
+        if not _install_patched(version, allow_unverified=allow_unverified):
             sys.exit(1)
 
 
