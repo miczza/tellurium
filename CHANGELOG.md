@@ -101,6 +101,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Tab.get(timeout=...)` longer than 30 s is no longer cut short by the new
+  per-command default: `Page.navigate` is bounded only by the navigation
+  deadline. `Tab.eval(expression, timeout=None)` takes an explicit timeout for
+  long promises (default: the session's 30 s).
 - A crashed tab stayed open in Chrome and `main_tab` kept pointing at it, so
   `browser.get()` failed for good. The crashed target is now closed, `main_tab`
   moves to another open tab, and `browser.get()` opens a new main tab when

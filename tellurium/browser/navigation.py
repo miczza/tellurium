@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import logging
+import math
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
@@ -133,7 +134,8 @@ async def navigate(
         nonlocal phase
         if prepare is not None:
             await prepare()
-        result = await session.send("Page.navigate", {"url": url})
+        # Bounded by the outer deadline, not by the session default (30 s).
+        result = await session.send("Page.navigate", {"url": url}, timeout=math.inf)
         if result.get("errorText"):
             raise NavigationError(url, result["errorText"])
         loader_id = result.get("loaderId")

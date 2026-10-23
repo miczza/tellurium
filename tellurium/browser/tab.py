@@ -231,19 +231,16 @@ class Tab:
     # JavaScript
     # ------------------------------------------------------------------
 
-    async def eval(self, expression: str) -> Any:
+    async def eval(self, expression: str, timeout: float | None = None) -> Any:
         """Evaluate *expression* in the page and return the result.
 
-        Uses ``Runtime.evaluate`` with ``returnByValue``/``awaitPromise``.
-        Does **not** call ``Runtime.enable`` (anti-detection critical).
+        Uses ``Runtime.evaluate`` with ``returnByValue``/``awaitPromise``; *timeout*
+        defaults to the session's (30 s). Never calls ``Runtime.enable``.
         """
         result = await self._session.send(
             "Runtime.evaluate",
-            {
-                "expression": expression,
-                "returnByValue": True,
-                "awaitPromise": True,
-            },
+            {"expression": expression, "returnByValue": True, "awaitPromise": True},
+            timeout=timeout,
         )
         remote = result.get("result", {})
         if remote.get("subtype") == "error":
