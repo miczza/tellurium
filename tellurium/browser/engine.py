@@ -129,7 +129,8 @@ class PatchedEngine(BrowserEngine):
                 f"or pass executable=/path/to/chrome."
             )
         if self._chromium_sha256:
-            actual = _cache.binary_sha256(binary)
+            # A pin comes from outside the cache: never taken from the record.
+            actual = _cache.binary_sha256(binary, trust_record=False)
             if actual != self._chromium_sha256:
                 raise BinaryCorruptedError(
                     f"SHA256 mismatch for {binary}: expected {self._chromium_sha256}, "

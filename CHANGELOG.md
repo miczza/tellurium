@@ -126,7 +126,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   download and the binary hash no longer freeze the event loop.
 - The patched binary is no longer rehashed (~300 MB) on every launch: its
   SHA256 is remembered beside it until the file changes (size, inode, mtime,
-  ctime) and reused by the MANIFEST and `chromium_sha256` checks.
+  ctime) and reused by the MANIFEST check. A `chromium_sha256` pin is always
+  checked against a full hash: the record sits beside the binary and could be
+  rewritten with it.
   `PatchedEngine.get_executable()` resolves the binary in a worker thread.
   `tellurium verify-browser` still hashes the file in full.
 - The initial tab enables the `Page` domain at launch, so a dialog opened

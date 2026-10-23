@@ -97,7 +97,18 @@ def test_verify_binary_hashes_once_per_file_version(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
-def test_engine_launches_reuse_the_hash(tmp_path, monkeypatch):
+def test_engine_launches_reuse_the_hash_for_the_manifest(tmp_path, monkeypatch):
+    from tellurium.browser.engine import PatchedEngine
+
+    root, binary = _install(tmp_path)
+    calls = _counting(monkeypatch)
+    for _ in range(3):
+        engine = PatchedEngine(cache_root=root, chromium_version="146.0.7680.188")
+        assert engine.resolve_binary_path() == binary
+    assert len(calls) == 1
+
+
+def test_a_pin_is_always_checked_against_a_full_hash(tmp_path, monkeypatch):
     from tellurium.browser.engine import PatchedEngine
 
     root, binary = _install(tmp_path)
@@ -108,7 +119,23 @@ def test_engine_launches_reuse_the_hash(tmp_path, monkeypatch):
             cache_root=root, chromium_version="146.0.7680.188", chromium_sha256=pin
         )
         assert engine.resolve_binary_path() == binary
-    assert len(calls) == 1  # pin and MANIFEST checks share one hash, across launches
+    assert len(calls) == 3  # one full hash per launch; the MANIFEST check reuses it
+
+
+def test_a_forged_record_does_not_defeat_the_pin(tmp_path):
+    from tellurium.browser.engine import BinaryCorruptedError, PatchedEngine
+
+    root, binary = _install(tmp_path)
+    pin = hashlib.sha256(b"binary-content").hexdigest()
+    time.sleep(0.05)
+    binary.write_bytes(b"evil-content!!")
+    st = binary.stat()
+    record = binary.with_name(f".{binary.name}.sha256")
+    key = [st.st_size, st.st_ino, st.st_mtime_ns, st.st_ctime_ns]
+    record.write_text(json.dumps({"stat": key, "sha256": pin}))
+    engine = PatchedEngine(cache_root=root, chromium_version="146.0.7680.188", chromium_sha256=pin)
+    with pytest.raises(BinaryCorruptedError, match="SHA256 mismatch"):
+        engine.resolve_binary_path()
 
 
 def test_a_tampered_binary_still_fails_verification(tmp_path, monkeypatch):

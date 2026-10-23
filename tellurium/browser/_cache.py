@@ -77,13 +77,20 @@ def binary_in(version_dir: Path) -> Path | None:
     return None
 
 
-def binary_sha256(binary: Path) -> str:
+def binary_sha256(binary: Path, *, trust_record: bool = True) -> str:
     """SHA256 of *binary*, remembered beside it until the file changes.
 
     Hashing the ~300 MB binary on every launch costs seconds. The record
     (``.<name>.sha256``) is keyed on size, inode, mtime and ctime: rewriting
     the file, or putting its mtime back afterwards, updates the ctime and
     forces a new hash. An unreadable or unwritable record just means hashing.
+
+    Trust boundary: the record lives in the version directory, next to the
+    binary and its MANIFEST.json. Whoever can replace the binary can also
+    rewrite both, so the record is good enough for the MANIFEST check and
+    nothing stronger. A hash the caller brings from outside (a
+    ``chromium_sha256`` pin) must use ``trust_record=False``: the file is
+    hashed in full and the record only refreshed.
     """
     from tellurium.browser import _manifest
 
@@ -92,7 +99,7 @@ def binary_sha256(binary: Path) -> str:
     record = binary.with_name(f".{binary.name}.sha256")
     try:
         cached = json.loads(record.read_text())
-        if cached["stat"] == key:
+        if trust_record and cached["stat"] == key:
             return str(cached["sha256"])
     except (OSError, ValueError, KeyError, TypeError):
         pass
