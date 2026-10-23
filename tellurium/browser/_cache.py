@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,21 @@ BINARY_NAME = "chrome.exe" if sys.platform == "win32" else "chrome"
 _LEGACY_BINARY_NAME = "tellurium-chromium"
 CURRENT_LINK = "current"
 MANIFEST_NAME = "MANIFEST.json"
+
+
+_VERSION_RE = re.compile(r"\d+(?:\.\d+){3}")
+
+
+def checked_version(version: str) -> str:
+    """Return *version* if it is a chromium version (``146.0.7680.188``).
+
+    Version names become directory names under the cache root, and some come
+    from downloaded manifests: anything else (``../..``, an absolute path)
+    could point outside the cache. Raises ValueError.
+    """
+    if not isinstance(version, str) or not _VERSION_RE.fullmatch(version):
+        raise ValueError(f"Not a chromium version: {version!r} (expected e.g. 146.0.7680.188)")
+    return version
 
 
 def tellurium_home() -> Path:
@@ -107,7 +123,7 @@ def current_version(root: Path | None = None) -> str | None:
 def set_current(version: str, root: Path | None = None) -> Path:
     """Point the ``current`` symlink at *version* (atomic replace)."""
     root = root if root is not None else cache_root()
-    target = root / version
+    target = root / checked_version(version)
     link = root / CURRENT_LINK
     tmp = root / f".{CURRENT_LINK}.tmp"
     if tmp.is_symlink() or tmp.exists():

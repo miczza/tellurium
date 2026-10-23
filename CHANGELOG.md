@@ -101,6 +101,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Installing a chromium-telluride release can no longer write or delete outside
+  the cache: the install directory named by the tarball's `MANIFEST.json` (and
+  the version given to `reinstall` / `set_current`) must be a chromium version
+  such as `146.0.7680.188`; `../../Documents` or an absolute path is refused
+  before anything is removed. Hardlinks inside the tarball install correctly
+  (their target kept the stripped top directory).
+- `download_patched` refuses a release whose `SHA256SUMS` is missing,
+  unreachable or does not list the tarball (`DownloadError`), since the MANIFEST
+  that checks the binary ships in the same tarball; `allow_unverified=True`
+  opts out.
 - The credential forwarder for authenticated proxies copies request bodies
   (a POST hung), serves every request of a keep-alive connection (the second
   one hung), replaces client-sent credentials, and passes a refused `CONNECT`

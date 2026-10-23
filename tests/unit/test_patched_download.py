@@ -253,3 +253,118 @@ def test_reinstall_keeps_current_flag(tmp_path):
         entry = dl.reinstall(VERSION, cache_root=root)
     assert entry.binary.read_bytes() == BINARY
     assert entry.is_current
+
+
+# --------------------------------------------------------------------------- #
+# Hostile releases (audit M9, m2)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "hostile", ["../../Documents", "{abs}/home/Documents", "146.0.7680.188/..", ""]
+)
+def test_install_refuses_a_hostile_install_dir(tmp_path, hostile):
+    hostile = hostile.format(abs=tmp_path)
+    home = tmp_path / "home"
+    victim = home / "Documents"
+    victim.mkdir(parents=True)
+    (victim / "thesis.docx").write_text("precious")
+    manifest = _manifest()
+    manifest["chromium_upstream"] = hostile
+    manifest["version"] = hostile
+    tar = _make_tarball(tmp_path / "evil.tar.gz", manifest=manifest)
+    root = home / ".tellurium" / "chromium"
+    with pytest.raises(dl.DownloadError, match="install dir"):
+        dl.install_from_tarball(tar, cache_root=root)
+    assert (victim / "thesis.docx").read_text() == "precious"
+    assert [p.name for p in root.iterdir()] == []  # staging removed too
+
+
+def test_reinstall_refuses_a_hostile_version(tmp_path):
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    root = tmp_path / "cache"
+    root.mkdir()
+    with pytest.raises(dl.DownloadError, match="version"):
+        dl.reinstall("../victim", cache_root=root)
+    assert victim.exists()
+
+
+def test_set_current_refuses_a_hostile_version(tmp_path):
+    with pytest.raises(ValueError, match="version"):
+        _cache.set_current("../../etc", tmp_path)
+
+
+def test_install_handles_hardlinks_under_the_top_dir(tmp_path):
+    tar = tmp_path / "hardlink.tar.gz"
+    manifest = json.dumps(_manifest()).encode()
+    with tarfile.open(tar, "w:gz") as tf:
+        for name, data in (("chrome", BINARY), ("MANIFEST.json", manifest), ("libfoo.so", b"lib")):
+            info = tarfile.TarInfo(f"chromium-telluride/{name}")
+            info.size = len(data)
+            info.mode = 0o755
+            tf.addfile(info, io.BytesIO(data))
+        link = tarfile.TarInfo("chromium-telluride/libbar.so")
+        link.type = tarfile.LNKTYPE
+        link.linkname = "chromium-telluride/libfoo.so"
+        tf.addfile(link)
+    entry = dl.install_from_tarball(tar, cache_root=tmp_path / "cache")
+    assert (entry.path / "libbar.so").read_bytes() == b"lib"
+
+
+def test_install_refuses_a_hardlink_out_of_the_top_dir(tmp_path):
+    tar = _make_tarball(tmp_path / "rel.tar.gz")
+    with tarfile.open(tar, "r:gz") as src:
+        members = [(m, src.extractfile(m).read() if m.isfile() else None) for m in src]
+    evil = tmp_path / "evil.tar.gz"
+    with tarfile.open(evil, "w:gz") as tf:
+        for m, data in members:
+            tf.addfile(m, io.BytesIO(data) if data is not None else None)
+        link = tarfile.TarInfo("chromium-telluride/escape")
+        link.type = tarfile.LNKTYPE
+        link.linkname = "etc/passwd"  # outside chromium-telluride/
+        tf.addfile(link)
+    with pytest.raises(dl.DownloadError, match="unsafe"):
+        dl.install_from_tarball(evil, cache_root=tmp_path / "cache")
+
+
+def test_download_without_sha256sums_is_refused(tmp_path):
+    tar = _make_tarball(tmp_path / "rel.tar.gz")
+    urlopen, _, _ = _fake_github(tmp_path, tar, with_sums=False)
+    root = tmp_path / "cache"
+    with patch("urllib.request.urlopen", urlopen):
+        with pytest.raises(dl.DownloadError, match="SHA256SUMS"):
+            dl.download_patched(cache_root=root)
+        assert _cache.installed_browsers(root) == []
+        entry = dl.download_patched(cache_root=root, allow_unverified=True)
+    assert entry.version == VERSION
+
+
+def test_download_with_unreachable_sha256sums_is_refused(tmp_path):
+    tar = _make_tarball(tmp_path / "rel.tar.gz")
+    urlopen, _, _ = _fake_github(tmp_path, tar)
+
+    def broken_sums(req, timeout=None):
+        url = req.full_url if hasattr(req, "full_url") else req
+        if url.endswith("SHA256SUMS"):
+            raise OSError("network down")
+        return urlopen(req, timeout)
+
+    with patch("urllib.request.urlopen", broken_sums):
+        with pytest.raises(dl.DownloadError, match="SHA256SUMS"):
+            dl.download_patched(cache_root=tmp_path / "cache")
+
+
+def test_download_with_tarball_missing_from_sha256sums_is_refused(tmp_path):
+    tar = _make_tarball(tmp_path / "rel.tar.gz")
+    urlopen, _, _ = _fake_github(tmp_path, tar)
+
+    def other_sums(req, timeout=None):
+        url = req.full_url if hasattr(req, "full_url") else req
+        if url.endswith("SHA256SUMS"):
+            return _Resp(f"{'ab' * 32}  something-else.tar.gz\n".encode())
+        return urlopen(req, timeout)
+
+    with patch("urllib.request.urlopen", other_sums):
+        with pytest.raises(dl.DownloadError, match="SHA256SUMS"):
+            dl.download_patched(cache_root=tmp_path / "cache")

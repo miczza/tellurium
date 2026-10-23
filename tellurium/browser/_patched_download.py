@@ -172,6 +172,24 @@ def _expected_tarball_sha(sums_text: str, tarball_name: str) -> str | None:
     return None
 
 
+def _checked(version: str, context: str = "Invalid version") -> str:
+    try:
+        return _cache.checked_version(version)
+    except ValueError as e:
+        raise DownloadError(f"{context}: {e}") from None
+
+
+def _release_tarball_sha(assets: ReleaseAssets) -> str | None:
+    """The tarball's SHA256 from the release's SHA256SUMS, or None if unavailable."""
+    if not assets.sha256sums_url:
+        return None
+    try:
+        return _expected_tarball_sha(_http_text(assets.sha256sums_url), assets.tarball_name)
+    except Exception as e:  # noqa: BLE001 — any failure means "not verified"
+        log.warning("Could not fetch SHA256SUMS: %s", e)
+        return None
+
+
 def _safe_extract(tar_path: Path, dest: Path) -> None:
     """Extract *tar_path* into *dest*, stripping the ``chromium-telluride/`` top dir."""
     dest.mkdir(parents=True, exist_ok=True)
@@ -188,6 +206,12 @@ def _safe_extract(tar_path: Path, dest: Path) -> None:
             p = Path(name)
             if p.is_absolute() or ".." in p.parts:
                 raise DownloadError(f"Refusing to extract unsafe path {m.name!r}")
+            if m.islnk():
+                # A hardlink names its target by archive path: strip the same
+                # top dir, or tarfile cannot find it after the rename.
+                if not m.linkname.startswith(f"{_TOP_DIR}/"):
+                    raise DownloadError(f"Refusing to extract unsafe link {m.name!r}")
+                m.linkname = m.linkname[len(_TOP_DIR) + 1 :]
             if m.issym() or m.islnk():
                 target = Path(m.linkname)
                 if target.is_absolute() or ".." in target.parts:
@@ -234,7 +258,9 @@ def install_from_tarball(
             sandbox.chmod(sandbox.stat().st_mode | 0o111)
 
         version = manifest.install_dir_name
-        final = root / version
+        final = root / _checked(version, "Refusing install dir from MANIFEST.json")
+        if final.resolve().parent != root.resolve():
+            raise DownloadError(f"Refusing install dir outside the cache: {final}")
         if final.exists():
             shutil.rmtree(final)
         staging.rename(final)
@@ -257,15 +283,24 @@ def download_patched(
     progress: ProgressCallback | None = None,
     api_url: str = RELEASES_API,
     set_current: bool = True,
+    allow_unverified: bool = False,
 ) -> _cache.InstalledBrowser:
-    """Download and install a chromium-telluride release (latest by default)."""
+    """Download and install a chromium-telluride release (latest by default).
+
+    The tarball must match the release's ``SHA256SUMS``: the MANIFEST that
+    checks the binary ships inside the same tarball, so it proves nothing
+    alone. A missing or unreadable ``SHA256SUMS`` is a :class:`DownloadError`
+    unless *allow_unverified* is set.
+    """
+    if version is not None:
+        _checked(version)
     assets = find_release(version, api_url=api_url)
-    expected = None
-    if assets.sha256sums_url:
-        try:
-            expected = _expected_tarball_sha(_http_text(assets.sha256sums_url), assets.tarball_name)
-        except Exception as e:  # noqa: BLE001
-            log.warning("Could not fetch SHA256SUMS (%s); relying on MANIFEST binary hash.", e)
+    expected = _release_tarball_sha(assets)
+    if expected is None and not allow_unverified:
+        raise DownloadError(
+            f"Release {assets.tag}: no SHA256SUMS entry for {assets.tarball_name}; "
+            "refusing an unverified download (allow_unverified=True to override)."
+        )
     root = cache_root if cache_root is not None else _cache.cache_root()
     root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".download-", dir=root) as tmp:
@@ -289,7 +324,7 @@ def reinstall(
 ) -> _cache.InstalledBrowser:
     """Remove *version* from the cache and download it again."""
     root = cache_root if cache_root is not None else _cache.cache_root()
-    target = root / version
+    target = root / _checked(version)
     was_current = _cache.current_version(root) == version
     if target.exists():
         shutil.rmtree(target)
