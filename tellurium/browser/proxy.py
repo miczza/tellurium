@@ -5,12 +5,17 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import ssl
 from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger("tellurium")
 
 #: Proxy schemes Chrome understands in ``--proxy-server``.
 _SCHEMES = ("http", "https", "socks4", "socks5")
+_CHUNK = 65536
+_MAX_HEADER_LINES = 200
+_CONNECT_TIMEOUT = 30.0
+_BAD_GATEWAY = b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 
 
 def parse_proxy_url(url: str) -> dict:
@@ -64,9 +69,14 @@ def forwarder_for(url: str) -> ProxyForwarder | None:
 
 
 class ProxyForwarder:
-    """HTTP proxy forwarder that adds Proxy-Authorization to upstream.
+    """Local HTTP proxy that adds ``Proxy-Authorization`` to every upstream request.
 
-    *tls* opens the upstream connection over TLS (an ``https://`` proxy).
+    Plain HTTP requests share one upstream connection per client connection
+    (keep-alive): each request head gets the credentials and its body is
+    copied by its own framing (``Content-Length`` or chunked). ``CONNECT``
+    tunnels are opened only when the upstream accepts them; any other answer
+    (407, 502…) reaches Chrome verbatim. *tls* opens the upstream connection
+    over TLS (an ``https://`` proxy).
     """
 
     def __init__(
@@ -84,6 +94,7 @@ class ProxyForwarder:
         self._password = password
         self._tls = tls
         self._server: asyncio.Server | None = None
+        self._clients: set[asyncio.Task] = set()
 
     @property
     def port(self) -> int:
@@ -95,95 +106,158 @@ class ProxyForwarder:
         self._server = await asyncio.start_server(self._handle_client, "127.0.0.1", 0)
 
     async def stop(self) -> None:
-        if self._server:
-            self._server.close()
-            await self._server.wait_closed()
-            self._server = None
+        """Stop listening and close every open connection (idempotent)."""
+        server, self._server = self._server, None
+        if server is None:
+            return
+        server.close()
+        for task in list(self._clients):
+            task.cancel()
+        await asyncio.gather(*self._clients, return_exceptions=True)
+        await server.wait_closed()
 
-    def _auth_header(self) -> str:
+    def _auth_line(self) -> bytes:
         creds = base64.b64encode(f"{self._username}:{self._password}".encode()).decode()
-        return f"Proxy-Authorization: Basic {creds}\r\n"
+        return f"Proxy-Authorization: Basic {creds}\r\n".encode()
+
+    def _with_auth(self, head: list[bytes]) -> bytes:
+        """The request head with our credentials in place of any the client sent."""
+        lines = [ln for ln in head if not ln.lower().startswith(b"proxy-authorization:")]
+        return b"".join(lines) + self._auth_line() + b"\r\n"
+
+    async def _open_upstream(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        tls = {}
+        if self._tls:
+            tls = {"ssl": ssl.create_default_context(), "server_hostname": self._upstream_host}
+        return await asyncio.wait_for(
+            asyncio.open_connection(self._upstream_host, self._upstream_port, **tls),
+            _CONNECT_TIMEOUT,
+        )
 
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        task = asyncio.current_task()
+        if task is not None:
+            self._clients.add(task)
+        up_writer: asyncio.StreamWriter | None = None
         try:
-            first_line = await reader.readline()
-            if not first_line:
-                writer.close()
+            head = await _read_head(reader)
+            if head is None:
                 return
-            if first_line.upper().startswith(b"CONNECT"):
-                await self._handle_connect(first_line, reader, writer)
+            try:
+                up_reader, up_writer = await self._open_upstream()
+            except (OSError, asyncio.TimeoutError) as exc:
+                logger.debug("ProxyForwarder cannot reach the upstream: %s", exc)
+                writer.write(_BAD_GATEWAY)
+                await writer.drain()
+                return
+            if head[0].upper().startswith(b"CONNECT"):
+                await self._tunnel(head, reader, writer, up_reader, up_writer)
             else:
-                await self._handle_forward(first_line, reader, writer)
-        except Exception:
+                await _race(self._requests(head, reader, up_writer), _pipe(up_reader, writer))
+        except Exception:  # noqa: BLE001 — one broken connection never stops the forwarder
             logger.debug("ProxyForwarder client error", exc_info=True)
         finally:
-            try:
-                writer.close()
-            except Exception:  # noqa: BLE001 - socket cleanup
-                pass
+            self._clients.discard(task)
+            for w in (writer, up_writer):
+                if w is not None:
+                    w.close()
 
-    async def _handle_connect(self, first_line, reader, writer):
-        # Read remaining headers from client
-        while True:
-            line = await reader.readline()
-            if line == b"\r\n" or not line:
-                break
-        # Connect to upstream
-        up_reader, up_writer = await asyncio.open_connection(
-            self._upstream_host, self._upstream_port
-        )
-        # Send CONNECT with auth
-        up_writer.write(first_line)
-        up_writer.write(self._auth_header().encode())
-        up_writer.write(b"\r\n")
+    async def _requests(
+        self, head: list[bytes] | None, reader: asyncio.StreamReader, up: asyncio.StreamWriter
+    ) -> None:
+        """Copy every request of a keep-alive connection, credentials added."""
+        while head is not None:
+            up.write(self._with_auth(head))
+            await up.drain()
+            await _copy_body(head, reader, up)
+            head = await _read_head(reader)
+
+    async def _tunnel(self, head, reader, writer, up_reader, up_writer) -> None:
+        up_writer.write(self._with_auth(head))
         await up_writer.drain()
-        # Read upstream response
-        await up_reader.readline()
-        while True:
-            line = await up_reader.readline()
-            if line == b"\r\n" or not line:
-                break
-        # Tell client tunnel is up
-        writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        answer = await _read_head(up_reader)
+        if answer is None:
+            raise ConnectionError("upstream closed before answering CONNECT")
+        writer.write(b"".join(answer) + b"\r\n")
+        parts = answer[0].split()
+        if len(parts) < 2 or not parts[1].startswith(b"2"):
+            length = _header(answer, b"content-length")
+            if length is not None and length.isdigit():
+                writer.write(await up_reader.readexactly(int(length)))
+            await writer.drain()
+            return
         await writer.drain()
-        # Bidirectional relay
-        await self._relay(reader, writer, up_reader, up_writer)
+        await _race(_pipe(reader, up_writer), _pipe(up_reader, writer))
 
-    async def _handle_forward(self, first_line, reader, writer):
-        up_reader, up_writer = await asyncio.open_connection(
-            self._upstream_host, self._upstream_port
-        )
-        up_writer.write(first_line)
-        up_writer.write(self._auth_header().encode())
+
+async def _read_head(reader: asyncio.StreamReader) -> list[bytes] | None:
+    """Start line and header lines (CRLF kept, blank line dropped); None on EOF."""
+    lines: list[bytes] = []
+    while True:
+        line = await reader.readline()
+        if not line:
+            if lines:
+                raise asyncio.IncompleteReadError(b"".join(lines), None)
+            return None
+        if line in (b"\r\n", b"\n"):
+            if lines:
+                return lines
+            continue  # stray CRLF between keep-alive requests
+        lines.append(line)
+        if len(lines) > _MAX_HEADER_LINES:
+            raise ValueError("HTTP head too long")
+
+
+def _header(head: list[bytes], name: bytes) -> bytes | None:
+    for line in head[1:]:
+        key, sep, value = line.partition(b":")
+        if sep and key.strip().lower() == name:
+            return value.strip()
+    return None
+
+
+async def _copy_body(
+    head: list[bytes], reader: asyncio.StreamReader, up: asyncio.StreamWriter
+) -> None:
+    """Copy one request body, framed by ``Transfer-Encoding`` or ``Content-Length``."""
+    if (_header(head, b"transfer-encoding") or b"").lower().endswith(b"chunked"):
         while True:
-            line = await reader.readline()
-            up_writer.write(line)
-            if line == b"\r\n" or not line:
+            size_line = await reader.readline()
+            up.write(size_line)
+            size = int(size_line.split(b";")[0].strip() or b"0", 16)
+            if size == 0:
+                while (trailer := await reader.readline()) not in (b"\r\n", b"\n", b""):
+                    up.write(trailer)
+                up.write(b"\r\n")
                 break
-        await up_writer.drain()
-        # Relay response
-        try:
-            while True:
-                data = await up_reader.read(65536)
-                if not data:
-                    break
-                writer.write(data)
-                await writer.drain()
-        except (ConnectionError, asyncio.CancelledError):
-            pass
+            up.write(await reader.readexactly(size + 2))  # data + CRLF
+            await up.drain()
+    else:
+        remaining = int(_header(head, b"content-length") or b"0")
+        while remaining > 0:
+            data = await reader.readexactly(min(remaining, _CHUNK))
+            up.write(data)
+            await up.drain()
+            remaining -= len(data)
+    await up.drain()
 
-    async def _relay(self, r1, w1, r2, w2):
-        async def _pipe(src, dst):
-            try:
-                while True:
-                    data = await src.read(65536)
-                    if not data:
-                        break
-                    dst.write(data)
-                    await dst.drain()
-            except (ConnectionError, asyncio.CancelledError):
-                pass
 
-        await asyncio.gather(_pipe(r1, w2), _pipe(r2, w1), return_exceptions=True)
+async def _pipe(src: asyncio.StreamReader, dst: asyncio.StreamWriter) -> None:
+    while data := await src.read(_CHUNK):
+        dst.write(data)
+        await dst.drain()
+
+
+async def _race(*coros) -> None:
+    """Run *coros* until the first ends (one side closed); cancel the rest."""
+    tasks = [asyncio.ensure_future(c) for c in coros]
+    try:
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    for t in done:
+        t.result()  # surface a protocol error to the caller's handler

@@ -101,6 +101,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The credential forwarder for authenticated proxies copies request bodies
+  (a POST hung), serves every request of a keep-alive connection (the second
+  one hung), replaces client-sent credentials, and passes a refused `CONNECT`
+  (407, 502…) through to Chrome instead of claiming the tunnel was up (Chrome
+  reported an SSL error). An unreachable upstream answers 502, and `stop()`
+  closes the connections still open.
 - `Browser.launch(proxy=...)` keeps the scheme: `socks5://`, `socks4://` and
   `https://` proxies were passed to Chrome as plain HTTP proxies. IPv6 hosts are
   bracketed, a bare `host:port` means HTTP, unknown schemes and SOCKS URLs with
