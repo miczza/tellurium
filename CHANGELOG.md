@@ -89,6 +89,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Tab.get(timeout=...)` now bounds the whole navigation, `Page.navigate`
+  included: a server that holds the response raised nothing before. On expiry
+  the load is stopped and `NavigationTimeoutError` (a builtin `TimeoutError`,
+  also on Python 3.10) names the URL and the phase (`commit`, `load`…). A
+  refused navigation raises `NavigationError` (a `RuntimeError`) with the URL
+  and a hint for `net::ERR_ABORTED` (204 responses, downloads). Reading the
+  title after a navigation is bounded too.
+- `Tab.wait_for_navigation()` ignores iframe navigations, waits for the main
+  frame's `load`, and no longer sets `tab.url` to an iframe URL.
 - Elements went stale after any later query: every `select`/`xpath`/`find`
   refreshes the DOM agent (`DOM.getDocument`), voiding all earlier nodeIds,
   so `h1 = select("h1"); select("p"); h1.text()` raised "No node with given
