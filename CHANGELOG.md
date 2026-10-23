@@ -70,6 +70,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `Session.send()` without `timeout` now waits at most
+  `SessionRouter.default_timeout` (30 s) instead of forever; pass
+  `timeout=math.inf` to wait indefinitely. The `asyncio.TimeoutError` names
+  the CDP method. This also bounds every setup command of `Browser.launch()`.
 - Single cache layout shared by engine, CLI and installer:
   `~/.tellurium/chromium/<chromium-version>/chrome` (+ `MANIFEST.json`,
   `current` symlink). CLI previously looked in `chromium-patched-<v>/`.

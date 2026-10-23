@@ -53,11 +53,33 @@ async def test_send_timeout_cleans_pending(router):
     assert router.root._pending == {}
 
 
-async def test_send_no_timeout_waits_indefinitely(router, transport):
-    """Without timeout (default None), send must not raise TimeoutError."""
-    task = asyncio.create_task(router.root.send("Page.navigate", {}))
-    await asyncio.sleep(0.1)  # definitely longer than any implicit timeout
-    assert not task.done(), "Default timeout=None must wait indefinitely"
+async def test_send_without_timeout_uses_the_router_default(router):
+    """No reply never means waiting forever: every command has a deadline."""
+    assert SessionRouter.default_timeout == 30.0
+    router.default_timeout = 0.05
+    with pytest.raises(asyncio.TimeoutError, match=r"Page\.navigate .*0\.05"):
+        await router.root.send("Page.navigate", {})
+    assert router.root._pending == {}
+
+
+async def test_the_timeout_error_names_the_method(router):
+    with pytest.raises(asyncio.TimeoutError, match="DOM.getDocument"):
+        await router.root.send("DOM.getDocument", {}, timeout=0.05)
+
+
+async def test_an_explicit_timeout_overrides_the_default(router):
+    router.default_timeout = 0.05
+    task = asyncio.create_task(router.root.send("Page.navigate", {}, timeout=10))
+    await asyncio.sleep(0.2)
+    assert not task.done()
+    task.cancel()
+
+
+async def test_infinite_timeout_waits_indefinitely(router):
+    router.default_timeout = 0.05
+    task = asyncio.create_task(router.root.send("Page.navigate", {}, timeout=float("inf")))
+    await asyncio.sleep(0.2)
+    assert not task.done(), "timeout=inf must wait indefinitely"
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task

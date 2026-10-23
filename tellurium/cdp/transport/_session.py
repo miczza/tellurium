@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 
 from tellurium.cdp.transport._base import CDPTransport
 from tellurium.cdp.types import CDPError
@@ -29,6 +30,12 @@ class Session:
         params: dict | None = None,
         timeout: float | None = None,
     ) -> dict:
+        """Send *method* and return its result.
+
+        *timeout* defaults to the router's :attr:`SessionRouter.default_timeout`
+        (``math.inf`` waits forever). On expiry ``asyncio.TimeoutError`` names
+        the method; a reply arriving later is dropped.
+        """
         if method in self._router._FORBIDDEN_METHODS:
             raise RuntimeError(
                 f"{method} is forbidden — it exposes CDP via Inspector "
@@ -45,10 +52,11 @@ class Session:
             future: asyncio.Future = asyncio.get_running_loop().create_future()
             self._pending[msg_id] = future
             await self._router._transport.send(json.dumps(msg).encode() + b"\0")
+        limit = self._router.default_timeout if timeout is None else timeout
         try:
-            if timeout is None:
+            if limit == math.inf:
                 return await future
-            return await asyncio.wait_for(future, timeout=timeout)
+            return await asyncio.wait_for(future, timeout=limit)
         except asyncio.TimeoutError:
             # asyncio.wait_for cancels its internal waiter but leaves the
             # future pending. Remove msg_id from _pending so a late reply
@@ -57,7 +65,7 @@ class Session:
             # If the reply races the timeout, set_result may still fire
             # on the now-orphan future — benign: no awaiter, no leak.
             self._pending.pop(msg_id, None)
-            raise
+            raise asyncio.TimeoutError(f"{method} got no reply within {limit:g}s") from None
 
     def on(self, event_name: str, handler: callable) -> None:
         self._event_handlers.setdefault(event_name, []).append(handler)
@@ -101,6 +109,11 @@ class SessionRouter:
     """Multiplexer: one pipe transport -> N sessions."""
 
     _FORBIDDEN_METHODS: frozenset[str] = frozenset({"Runtime.enable"})
+
+    #: Deadline of a command sent without an explicit ``timeout``: a renderer
+    #: that hangs (rather than crashing) or a mute Chrome never answers.
+    #: Set it on the class to change it everywhere.
+    default_timeout: float = 30.0
 
     def __init__(self, transport: CDPTransport):
         self._transport = transport

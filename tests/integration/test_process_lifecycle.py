@@ -127,6 +127,23 @@ async def test_failed_launch_reports_chrome_error_and_cleans_up(tmp_path):
     assert _temp_profiles() <= profiles, "the temporary profile was left behind"
 
 
+async def test_a_mute_chrome_times_out_naming_the_command(tmp_path, monkeypatch):
+    """Chrome alive but never answering: launch() fails by itself, no wait_for needed."""
+    from tellurium.cdp.transport._session import SessionRouter
+
+    script = tmp_path / "mute-chrome"
+    script.write_text("#!/bin/sh\nexec sleep 60\n")
+    script.chmod(0o755)
+    monkeypatch.setattr(SessionRouter, "default_timeout", 0.5)
+    children, profiles = _children(), _temp_profiles()
+
+    with pytest.raises(asyncio.TimeoutError, match=r"Target\.\w+ got no reply"):
+        await asyncio.wait_for(Browser.launch(headless=True, executable=str(script)), 20)
+
+    assert _children() <= children, "the mute process was not reaped"
+    assert _temp_profiles() <= profiles
+
+
 async def test_profile_already_in_use_says_so(tmp_path):
     profile = str(tmp_path / "profile")
     first = await Browser.launch(headless=True, user_data_dir=profile)
