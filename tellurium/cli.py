@@ -46,7 +46,6 @@ def main():
     dl_parser.add_argument(
         "--version", default=None, help="Chromium version to download (default: latest release)"
     )
-    dl_parser.add_argument("--allow-unverified", action="store_true", help="Skip SHA256SUMS")
 
     # download-geoip
     geo_parser = sub.add_parser(
@@ -84,6 +83,8 @@ def main():
     # verify-browser
     verify_parser = sub.add_parser("verify-browser", help="Verify browser binary integrity")
     verify_parser.add_argument("--reinstall", action="store_true", help="Reinstall if corrupt")
+    for p in (dl_parser, upd_parser, verify_parser):
+        p.add_argument("--allow-unverified", action="store_true", help="Skip SHA256SUMS")
 
     args = parser.parse_args()
 
@@ -100,11 +101,11 @@ def main():
     elif args.command == "list-browsers":
         _list_browsers()
     elif args.command == "update-browser":
-        _update_browser(args.check, args.security_only)
+        _update_browser(args.check, args.security_only, args.allow_unverified)
     elif args.command == "prune-browsers":
         _prune_browsers(args.keep)
     elif args.command == "verify-browser":
-        _verify_browser(args.reinstall)
+        _verify_browser(args.reinstall, args.allow_unverified)
     else:
         parser.print_help()
 
@@ -210,7 +211,7 @@ def _install_patched(
     where = {"cache_root": _cache_dir(), "progress": _progress_printer()}
     try:
         if reinstall and version:
-            entry = _re(version, **where)
+            entry = _re(version, allow_unverified=allow_unverified, **where)
         else:
             entry = download_patched(version, allow_unverified=allow_unverified, **where)
     except DownloadError as e:
@@ -389,7 +390,7 @@ def _list_browsers() -> None:
         print()
 
 
-def _update_browser(check_only: bool, security_only: bool) -> None:
+def _update_browser(check_only: bool, security_only: bool, unverified: bool = False) -> None:
     """Check for and optionally install browser updates."""
     from tellurium.browser import _update_check
 
@@ -407,7 +408,7 @@ def _update_browser(check_only: bool, security_only: bool) -> None:
         print(f"Latest available: {latest}")
         if check_only:
             return
-        if not _install_patched(latest):
+        if not _install_patched(latest, allow_unverified=unverified):
             sys.exit(1)
         return
 
@@ -425,7 +426,7 @@ def _update_browser(check_only: bool, security_only: bool) -> None:
     if security_only and not is_security:
         print("\nNot a security release; skipping (--security-only).")
         return
-    if not _install_patched(latest):
+    if not _install_patched(latest, allow_unverified=unverified):
         sys.exit(1)
 
 
@@ -454,7 +455,7 @@ def _prune_browsers(keep: int) -> None:
     print("\nDone.")
 
 
-def _verify_browser(reinstall: bool) -> None:
+def _verify_browser(reinstall: bool, unverified: bool = False) -> None:
     """Verify browser binary integrity using SHA256 from MANIFEST.json."""
     from tellurium.browser._manifest import _sha256_file
 
@@ -489,7 +490,7 @@ def _verify_browser(reinstall: bool) -> None:
         print(f"    Actual:   {actual_hash[:16]}...")
         if reinstall:
             print(f"    Reinstalling {b.version}...")
-            if _install_patched(b.version, reinstall=True):
+            if _install_patched(b.version, reinstall=True, allow_unverified=unverified):
                 continue
             print("    Reinstall failed; remove the directory manually and retry:")
             print(f"      {b.path}")

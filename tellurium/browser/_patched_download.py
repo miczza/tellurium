@@ -319,6 +319,7 @@ def download_patched(
     api_url: str = RELEASES_API,
     set_current: bool = True,
     allow_unverified: bool = False,
+    force: bool = False,
 ) -> _cache.InstalledBrowser:
     """Download and install a chromium-telluride release (latest by default).
 
@@ -347,6 +348,7 @@ def download_patched(
             cache_root=root,
             expected_tarball_sha256=expected,
             set_current=set_current,
+            force=force,
         )
 
 
@@ -356,13 +358,21 @@ def reinstall(
     cache_root: Path | None = None,
     progress: ProgressCallback | None = None,
     api_url: str = RELEASES_API,
+    allow_unverified: bool = False,
 ) -> _cache.InstalledBrowser:
-    """Remove *version* from the cache and download it again."""
+    """Download *version* again and swap it in place of the installed copy.
+
+    The installed copy is replaced only once the new one is downloaded and
+    verified: a failed reinstall leaves it as it was.
+    """
     root = cache_root if cache_root is not None else _cache.cache_root()
-    target = root / _checked(version)
-    was_current = _cache.current_version(root) == version
-    if target.exists():
-        shutil.rmtree(target)
+    _checked(version)
     return download_patched(
-        version, cache_root=root, progress=progress, api_url=api_url, set_current=was_current
+        version,
+        cache_root=root,
+        progress=progress,
+        api_url=api_url,
+        set_current=_cache.current_version(root) == version,
+        allow_unverified=allow_unverified,
+        force=True,
     )

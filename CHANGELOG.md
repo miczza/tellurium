@@ -8,7 +8,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `tellurium download-browser --browser patched --allow-unverified` installs a
-  release without a matching `SHA256SUMS` (mirrors, local builds).
+  release without a matching `SHA256SUMS` (mirrors, local builds); the same
+  flag on `update-browser` and `verify-browser --reinstall`, and
+  `reinstall(..., allow_unverified=True)`.
 - `BrowserContext.clear_cookies(domain=None)` deletes the context's cookies
   (or one domain's) without touching the default context.
 - `Tab.eval_on(..., timeout=)`, `Tab.screenshot(..., timeout=)` and
@@ -113,6 +115,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `reinstall()` (and `tellurium verify-browser --reinstall`) no longer deletes
+  the installed version before the new copy is downloaded and verified: a failed
+  download leaves the install usable.
 - Concurrent chromium-telluride installs (two launches with
   `auto_security_update`, the CLI next to a launch) no longer break each
   other: the swap into place and the `current` switch run under a file lock

@@ -438,3 +438,29 @@ def test_install_filesystem_errors_become_download_errors(tmp_path, monkeypatch)
     monkeypatch.setattr(dl, "_safe_extract", no_space)
     with pytest.raises(dl.DownloadError, match="No space left"):
         dl.install_from_tarball(tar, cache_root=tmp_path / "cache")
+
+
+def test_a_failed_reinstall_keeps_the_installed_version(tmp_path):
+    tar = _make_tarball(tmp_path / "rel.tar.gz")
+    root = tmp_path / "cache"
+    dl.install_from_tarball(tar, cache_root=root)
+    urlopen, _, _ = _fake_github(tmp_path, tar, with_sums=False)
+    with patch("urllib.request.urlopen", urlopen):
+        with pytest.raises(dl.DownloadError, match="SHA256SUMS"):
+            dl.reinstall(VERSION, cache_root=root)
+        assert (root / VERSION / "chrome").read_bytes() == BINARY  # still usable
+        assert _cache.current_version(root) == VERSION
+        (root / VERSION / "chrome").write_bytes(b"corrupted")
+        entry = dl.reinstall(VERSION, cache_root=root, allow_unverified=True)
+    assert entry.binary.read_bytes() == BINARY
+
+
+def test_reinstall_replaces_even_an_identical_binary(tmp_path):
+    tar = _make_tarball(tmp_path / "rel.tar.gz")
+    root = tmp_path / "cache"
+    dl.install_from_tarball(tar, cache_root=root)
+    (root / VERSION / "locales" / "en-US.pak").write_bytes(b"broken")
+    urlopen, _, _ = _fake_github(tmp_path, tar)
+    with patch("urllib.request.urlopen", urlopen):
+        dl.reinstall(VERSION, cache_root=root)
+    assert (root / VERSION / "locales" / "en-US.pak").read_bytes() == b"pak"

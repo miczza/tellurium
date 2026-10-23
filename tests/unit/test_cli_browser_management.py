@@ -91,7 +91,40 @@ def test_cli_update_browser_installs(capsys, tmp_path):
                 with patch("tellurium.cli._install_patched", return_value=True) as inst:
                     with patch("sys.argv", ["tellurium", "update-browser"]):
                         main()
-    inst.assert_called_once_with("147.0.7700.100")
+    inst.assert_called_once_with("147.0.7700.100", allow_unverified=False)
+
+
+def test_cli_update_browser_allow_unverified(tmp_path):
+    from tellurium.browser._update_check import UpdateInfo
+
+    info = UpdateInfo(installed=None, latest="147.0.7700.100", manifest={})
+    with patch("tellurium.cli._cache_dir", return_value=tmp_path):
+        with patch("tellurium.cli._get_installed_version", return_value=None):
+            with patch("tellurium.browser._update_check.check_for_update", return_value=info):
+                with patch("tellurium.cli._install_patched", return_value=True) as inst:
+                    argv = ["tellurium", "update-browser", "--allow-unverified"]
+                    with patch("sys.argv", argv):
+                        main()
+    inst.assert_called_once_with("147.0.7700.100", allow_unverified=True)
+
+
+def test_cli_verify_browser_reinstall_allow_unverified(tmp_path):
+    from tellurium.browser import _patched_download
+
+    _install(tmp_path, "146.0.7680.188", sha="00" * 32)
+    entry = _cache.InstalledBrowser(
+        version="146.0.7680.188",
+        path=tmp_path,
+        binary=tmp_path / "chrome",
+        manifest=None,
+        is_current=True,
+    )
+    argv = ["tellurium", "verify-browser", "--reinstall", "--allow-unverified"]
+    with patch("tellurium.cli._cache_dir", return_value=tmp_path):
+        with patch.object(_patched_download, "reinstall", return_value=entry) as re:
+            with patch("sys.argv", argv):
+                main()
+    assert re.call_args.kwargs["allow_unverified"] is True
 
 
 def test_cli_update_browser_security_only_skips_non_security(capsys, tmp_path):
@@ -150,7 +183,7 @@ def test_cli_verify_browser_reinstall_calls_download(capsys, tmp_path):
         with patch("tellurium.cli._install_patched", return_value=True) as inst:
             with patch("sys.argv", ["tellurium", "verify-browser", "--reinstall"]):
                 main()  # reinstall succeeded -> exit 0
-    inst.assert_called_once_with("146.0.7680.188", reinstall=True)
+    inst.assert_called_once_with("146.0.7680.188", reinstall=True, allow_unverified=False)
 
 
 def test_cli_download_browser_patched_calls_installer(tmp_path):
