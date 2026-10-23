@@ -230,3 +230,107 @@ async def test_https_upstream_is_reached_over_tls(monkeypatch):
         await forwarder._open_upstream()
     assert seen["host"] == "proxy.test" and seen["ssl"] is not None
     assert seen.get("server_hostname") == "proxy.test"
+
+
+# --- review round: limits, timeouts, shutdown -------------------------------
+
+
+async def test_stop_does_not_hang_on_a_connection_not_yet_handled():
+    async with FakeUpstream() as up:
+        forwarder = ProxyForwarder("127.0.0.1", up.port, USER, PASSWORD)
+        await forwarder.start()
+        server = forwarder._server
+        _, writer = await asyncio.open_connection("127.0.0.1", forwarder.port)
+        for _ in range(1000):  # accepted by the server, handler not started yet
+            if getattr(server, "_clients", None):
+                break
+            await asyncio.sleep(0)
+        await asyncio.wait_for(forwarder.stop(), STEP)
+        writer.close()
+
+
+async def test_oversized_request_head_is_refused():
+    async with FakeUpstream() as up, _forwarder(up) as fwd:
+        reader, writer = await asyncio.open_connection("127.0.0.1", fwd.port)
+        writer.write(b"GET http://site.test/ HTTP/1.1\r\n")
+        for i in range(100):  # ~70 KiB in lines well under the per-line limit
+            writer.write(b"X-Filler-%d: %s\r\n" % (i, b"a" * 700))
+        writer.write(b"\r\n")
+        await writer.drain()
+        assert await asyncio.wait_for(reader.read(), STEP) == b""
+        writer.close()
+    assert up.requests == []
+
+
+async def test_a_huge_chunk_is_streamed_not_buffered():
+    received = asyncio.Event()
+    got: list[bytes] = []
+
+    async def upstream(reader, writer):
+        got.append(await reader.readuntil(b"\r\n\r\n"))
+        data = b""
+        while len(data) < 70_000:
+            data += await reader.read(65536)
+        received.set()
+        writer.close()
+
+    server = await asyncio.start_server(upstream, "127.0.0.1", 0)
+    forwarder = ProxyForwarder("127.0.0.1", server.sockets[0].getsockname()[1], USER, PASSWORD)
+    await forwarder.start()
+    try:
+        _, writer = await asyncio.open_connection("127.0.0.1", forwarder.port)
+        writer.write(
+            b"POST http://site.test/ HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n"
+            b"6400000\r\n"  # a 100 MiB chunk, only its start is sent
+        )
+        writer.write(b"x" * 80_000)
+        await writer.drain()
+        await asyncio.wait_for(received.wait(), STEP)
+        writer.close()
+    finally:
+        await forwarder.stop()
+        server.close()
+
+
+async def test_connect_without_an_upstream_answer_times_out():
+    async def silent(reader, writer):
+        await reader.read()  # accepts, never answers
+
+    server = await asyncio.start_server(silent, "127.0.0.1", 0)
+    forwarder = ProxyForwarder("127.0.0.1", server.sockets[0].getsockname()[1], USER, PASSWORD)
+    forwarder.answer_timeout = 0.3
+    await forwarder.start()
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", forwarder.port)
+        writer.write(b"CONNECT site.test:443 HTTP/1.1\r\n\r\n")
+        status, _ = await asyncio.wait_for(_read_head(reader), STEP)
+        writer.close()
+    finally:
+        await forwarder.stop()
+        server.close()
+    assert status.startswith(b"HTTP/1.1 504")
+
+
+async def test_chunked_connect_rejection_body_is_passed_through():
+    async def refusing(reader, writer):
+        await _read_head(reader)
+        writer.write(
+            b"HTTP/1.1 407 Proxy Authentication Required\r\n"
+            b"Transfer-Encoding: chunked\r\n\r\n5\r\nauth \r\n8\r\nrequired\r\n0\r\n\r\n"
+        )
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(refusing, "127.0.0.1", 0)
+    forwarder = ProxyForwarder("127.0.0.1", server.sockets[0].getsockname()[1], USER, PASSWORD)
+    await forwarder.start()
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", forwarder.port)
+        writer.write(b"CONNECT site.test:443 HTTP/1.1\r\n\r\n")
+        status, body = await _response(reader)
+        writer.close()
+    finally:
+        await forwarder.stop()
+        server.close()
+    assert status.startswith(b"HTTP/1.1 407")
+    assert body == b"auth required"

@@ -14,8 +14,10 @@ logger = logging.getLogger("tellurium")
 _SCHEMES = ("http", "https", "socks4", "socks5")
 _CHUNK = 65536
 _MAX_HEADER_LINES = 200
+_MAX_HEAD_BYTES = 64 * 1024
 _CONNECT_TIMEOUT = 30.0
 _BAD_GATEWAY = b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+_GATEWAY_TIMEOUT = b"HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 
 
 def parse_proxy_url(url: str) -> dict:
@@ -95,6 +97,8 @@ class ProxyForwarder:
         self._tls = tls
         self._server: asyncio.Server | None = None
         self._clients: set[asyncio.Task] = set()
+        #: Seconds the upstream has to answer a CONNECT before Chrome gets a 504.
+        self.answer_timeout = _CONNECT_TIMEOUT
 
     @property
     def port(self) -> int:
@@ -111,10 +115,21 @@ class ProxyForwarder:
         if server is None:
             return
         server.close()
-        for task in list(self._clients):
-            task.cancel()
-        await asyncio.gather(*self._clients, return_exceptions=True)
-        await server.wait_closed()
+        if hasattr(server, "close_clients"):  # Python 3.13+
+            server.close_clients()
+        closed = asyncio.ensure_future(server.wait_closed())
+        try:
+            # A connection accepted just now gets its handler a moment later:
+            # sweep again until the server reports every connection closed.
+            for _ in range(100):
+                for task in list(self._clients):
+                    task.cancel()
+                await asyncio.gather(*self._clients, return_exceptions=True)
+                if (await asyncio.wait({closed}, timeout=0.05))[0]:
+                    return
+            logger.debug("ProxyForwarder: connections still open after stop()")
+        finally:
+            closed.cancel()
 
     def _auth_line(self) -> bytes:
         creds = base64.b64encode(f"{self._username}:{self._password}".encode()).decode()
@@ -177,16 +192,18 @@ class ProxyForwarder:
     async def _tunnel(self, head, reader, writer, up_reader, up_writer) -> None:
         up_writer.write(self._with_auth(head))
         await up_writer.drain()
-        answer = await _read_head(up_reader)
+        try:
+            answer = await asyncio.wait_for(_read_head(up_reader), self.answer_timeout)
+        except asyncio.TimeoutError:
+            writer.write(_GATEWAY_TIMEOUT)
+            await writer.drain()
+            return
         if answer is None:
             raise ConnectionError("upstream closed before answering CONNECT")
         writer.write(b"".join(answer) + b"\r\n")
         parts = answer[0].split()
         if len(parts) < 2 or not parts[1].startswith(b"2"):
-            length = _header(answer, b"content-length")
-            if length is not None and length.isdigit():
-                writer.write(await up_reader.readexactly(int(length)))
-            await writer.drain()
+            await _copy_body(answer, up_reader, writer)  # the refusal, verbatim
             return
         await writer.drain()
         await _race(_pipe(reader, up_writer), _pipe(up_reader, writer))
@@ -206,7 +223,7 @@ async def _read_head(reader: asyncio.StreamReader) -> list[bytes] | None:
                 return lines
             continue  # stray CRLF between keep-alive requests
         lines.append(line)
-        if len(lines) > _MAX_HEADER_LINES:
+        if len(lines) > _MAX_HEADER_LINES or sum(map(len, lines)) > _MAX_HEAD_BYTES:
             raise ValueError("HTTP head too long")
 
 
@@ -221,7 +238,10 @@ def _header(head: list[bytes], name: bytes) -> bytes | None:
 async def _copy_body(
     head: list[bytes], reader: asyncio.StreamReader, up: asyncio.StreamWriter
 ) -> None:
-    """Copy one request body, framed by ``Transfer-Encoding`` or ``Content-Length``."""
+    """Copy one message body, framed by ``Transfer-Encoding`` or ``Content-Length``.
+
+    Streamed in pieces of at most 64 KiB: a declared size is never buffered.
+    """
     if (_header(head, b"transfer-encoding") or b"").lower().endswith(b"chunked"):
         while True:
             size_line = await reader.readline()
@@ -232,16 +252,20 @@ async def _copy_body(
                     up.write(trailer)
                 up.write(b"\r\n")
                 break
-            up.write(await reader.readexactly(size + 2))  # data + CRLF
-            await up.drain()
+            await _copy_exact(reader, up, size + 2)  # data + CRLF
     else:
-        remaining = int(_header(head, b"content-length") or b"0")
-        while remaining > 0:
-            data = await reader.readexactly(min(remaining, _CHUNK))
-            up.write(data)
-            await up.drain()
-            remaining -= len(data)
+        await _copy_exact(reader, up, int(_header(head, b"content-length") or b"0"))
     await up.drain()
+
+
+async def _copy_exact(reader: asyncio.StreamReader, up: asyncio.StreamWriter, n: int) -> None:
+    while n > 0:
+        data = await reader.read(min(n, _CHUNK))
+        if not data:
+            raise asyncio.IncompleteReadError(b"", n)
+        up.write(data)
+        await up.drain()
+        n -= len(data)
 
 
 async def _pipe(src: asyncio.StreamReader, dst: asyncio.StreamWriter) -> None:
