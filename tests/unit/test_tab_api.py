@@ -16,7 +16,7 @@ def _fake_tab(*, responses=None, mouse_profile="normal"):
     root_sent: list[tuple[str, dict]] = []
     responses = responses or {}
 
-    async def _send(method, params=None):
+    async def _send(method, params=None, timeout=None):
         sent.append((method, params or {}))
         value = responses.get(method, {})
         return value(params or {}) if callable(value) else value

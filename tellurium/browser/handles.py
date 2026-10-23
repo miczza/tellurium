@@ -30,6 +30,9 @@ logger = logging.getLogger("tellurium")
 
 # Release calls are housekeeping: never let one stall the caller for long.
 _RELEASE_TIMEOUT = 5.0
+# Bound of a command on an element (a page frozen by an open dialog, a hung
+# renderer); generous because callFunctionOn awaits the page's promises.
+HANDLE_TIMEOUT = 30.0
 
 # Chrome's messages for a node or remote object that no longer exists.
 _STALE_MESSAGES = (
@@ -62,11 +65,16 @@ def as_stale(error: CDPError) -> CDPError:
 
 
 async def send_on_handle(session: Session, method: str, params: dict) -> dict:
-    """``session.send`` for a command on an element handle; stale errors are typed."""
+    """``session.send`` for a command on an element handle, bounded by ``HANDLE_TIMEOUT``.
+
+    Stale errors are typed; expiry raises the builtin ``TimeoutError``.
+    """
     try:
-        return await session.send(method, params)
+        return await session.send(method, params, timeout=HANDLE_TIMEOUT)
     except CDPError as exc:
         raise as_stale(exc) from exc
+    except asyncio.TimeoutError:
+        raise TimeoutError(f"{method} got no answer within {HANDLE_TIMEOUT}s") from None
 
 
 def handles_of(tab: Tab | Any) -> HandleGroup | None:

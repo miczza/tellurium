@@ -110,3 +110,19 @@ async def test_kept_elements_stay_usable(browser, local_server):
         await tab.select_all("p")
     await _settle(tab)
     assert await heading.tag() == "h1"
+
+
+async def test_element_call_is_bounded_while_a_dialog_is_open(browser, local_server, monkeypatch):
+    from tellurium.browser import handles
+
+    monkeypatch.setattr(handles, "HANDLE_TIMEOUT", 1.0, raising=False)
+    tab = browser.main_tab
+    tab._dialogs.policy = "manual"
+    await tab.get(f"{local_server}/basic.html")
+    heading = await tab.select("h1")
+    await tab.eval("setTimeout(() => alert('stuck'), 0); 1")
+    await asyncio.sleep(0.3)
+    with pytest.raises(TimeoutError, match="Runtime.callFunctionOn"):
+        await asyncio.wait_for(heading.text(), timeout=10)
+    await tab._dialogs.last.dismiss()
+    assert await heading.tag() == "h1"
