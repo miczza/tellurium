@@ -70,6 +70,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `launch_chrome` and `launch_chrome_posix` moved from
+  `tellurium.browser.launcher` to `tellurium.browser.process` (with the Chrome
+  process lifecycle); the old import path still works.
 - `Session.send()` without `timeout` now waits at most
   `SessionRouter.default_timeout` (30 s) instead of forever; pass
   `timeout=math.inf` to wait indefinitely. The `asyncio.TimeoutError` names
@@ -107,8 +110,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   so `chrome-99…` beat `chrome-140…`; they are ranked by version now.
 - `download_cft` extracted with `zipfile.extractall`, losing exec bits
   (`chrome_crashpad_handler`) and symlinks (macOS framework links); modes and
-  links are kept now, and entries outside the install dir are refused. The
-  download and extraction run off the event loop.
+  links are kept now; entries and symlinks pointing outside the install dir
+  are refused. The archive is extracted in a hidden staging dir and renamed
+  into place, so a failed download never leaves a half-extracted install.
+  Download and extraction run off the event loop.
 - Windows: the Chrome version (used to refuse extensions on branded Chrome
   137+) is read from the install layout; `chrome.exe --version` prints
   nothing there, so the check silently passed.

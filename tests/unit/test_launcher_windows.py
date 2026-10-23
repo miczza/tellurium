@@ -207,3 +207,11 @@ def test_windows_transport_exposes_start():
         Path(launcher.__file__).parent.parent.joinpath("cdp/transport/_pipe_win.py").read_text()
     )
     assert "async def start(self)" in source
+
+
+def test_moved_spawn_functions_keep_their_old_import_path():
+    from tellurium.browser.launcher import launch_chrome as old_dispatch
+    from tellurium.browser.launcher import launch_chrome_posix as old_posix
+
+    assert old_dispatch is process.launch_chrome
+    assert old_posix is process.launch_chrome_posix

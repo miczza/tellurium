@@ -11,6 +11,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -42,9 +43,8 @@ _VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)\.(\d+)")
 def _detect_chrome_version(executable: str) -> tuple[int, ...] | None:
     """Run *executable* --version and return a 4-tuple of ints, or None on failure.
 
-    On Windows ``chrome.exe --version`` opens a window and prints nothing, so
-    the version is read from the install layout instead: the executable sits
-    next to a directory named after its version.
+    On Windows ``chrome.exe --version`` opens a window and prints nothing: the
+    version is the name of the directory next to the executable.
     """
     if sys.platform == "win32":
         versions = [
@@ -102,7 +102,7 @@ def _find_cft_managed() -> list[tuple[str, str]]:
         return _version_key(entry.name.removeprefix("chrome-"))
 
     for entry in sorted(base.iterdir(), key=version, reverse=True):  # newest first
-        if not entry.is_dir():
+        if not entry.is_dir() or entry.name.startswith("."):  # skip staging dirs
             continue
         # Linux / macOS binary names
         for candidate in (
@@ -300,7 +300,8 @@ def _extract_zip(zip_path: Path, dest: Path) -> None:
     ``zipfile.extractall`` drops both: helpers such as
     ``chrome_crashpad_handler`` lose their exec bit and the macOS framework
     links become text files. Entries that would land outside *dest*
-    (``..``, absolute paths, paths through a symlink) are refused.
+    (``..``, absolute paths, paths through a symlink) and symlinks pointing
+    outside it are refused.
     """
     root = dest.resolve()
     with zipfile.ZipFile(zip_path) as zf:
@@ -318,7 +319,11 @@ def _extract_zip(zip_path: Path, dest: Path) -> None:
             if os.path.lexists(target):
                 target.unlink()
             if stat.S_ISLNK(mode):
-                os.symlink(zf.read(info).decode(), target)
+                link = zf.read(info).decode()
+                pointee = os.path.normpath(os.path.join(parent, link))
+                if os.path.isabs(link) or not Path(pointee).is_relative_to(root):
+                    raise ValueError(f"Archive link outside the install dir: {info.filename}")
+                os.symlink(link, target)
                 continue
             with zf.open(info) as src, open(target, "wb") as out:
                 shutil.copyfileobj(src, out)
@@ -377,39 +382,37 @@ def _download_cft_sync(version: str) -> str:
             f"No Chrome for Testing download found for platform={plat}, version={version}"
         )
 
-    dest_dir = _tellurium_browsers_dir() / f"chrome-{version}"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-
-    zip_path = dest_dir / f"chrome-{plat}.zip"
-    logger.info("Downloading %s -> %s", download_url, zip_path)
-    urllib.request.urlretrieve(download_url, zip_path)  # noqa: S310
-
-    logger.info("Extracting %s", zip_path)
+    base = _tellurium_browsers_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    dest_dir = base / f"chrome-{version}"
+    # Download and extract in a hidden staging dir, then rename: a failure
+    # never leaves a half-extracted install for _find_cft_managed to pick.
+    staging = Path(tempfile.mkdtemp(prefix=f".chrome-{version}-", dir=base))
     try:
-        _extract_zip(zip_path, dest_dir)
+        zip_path = staging / f"chrome-{plat}.zip"
+        logger.info("Downloading %s -> %s", download_url, zip_path)
+        urllib.request.urlretrieve(download_url, zip_path)  # noqa: S310
+        tree = staging / "tree"
+        _extract_zip(zip_path, tree)
+        app = Path(f"chrome-{plat}", "Google Chrome for Testing.app", "Contents", "MacOS")
+        for rel in (
+            Path("chrome"),
+            Path(f"chrome-{plat}", "chrome"),
+            app / "Google Chrome for Testing",
+            Path(f"chrome-{plat}", "chrome.exe"),
+        ):
+            if (tree / rel).is_file():
+                (tree / rel).chmod((tree / rel).stat().st_mode | 0o111)
+                break
+        else:
+            raise FileNotFoundError(f"No Chrome binary in the archive from {download_url}")
+        if dest_dir.exists():
+            shutil.rmtree(dest_dir)
+        os.replace(tree, dest_dir)
     finally:
-        zip_path.unlink(missing_ok=True)
-
-    # Locate the extracted binary
-    for candidate in (
-        dest_dir / "chrome",
-        dest_dir / f"chrome-{plat}" / "chrome",
-        dest_dir
-        / f"chrome-{plat}"
-        / "Google Chrome for Testing.app"
-        / "Contents"
-        / "MacOS"
-        / "Google Chrome for Testing",
-        dest_dir / f"chrome-{plat}" / "chrome.exe",
-    ):
-        if candidate.is_file():
-            candidate.chmod(candidate.stat().st_mode | 0o111)
-            logger.info("Chrome for Testing ready at %s", candidate)
-            return str(candidate)
-
-    raise FileNotFoundError(
-        f"Could not locate Chrome binary inside extracted archive at {dest_dir}"
-    )
+        shutil.rmtree(staging, ignore_errors=True)
+    logger.info("Chrome for Testing ready at %s", dest_dir / rel)
+    return str(dest_dir / rel)
 
 
 def build_chrome_flags(
@@ -663,3 +666,12 @@ class _WindowsProcess:
             ctypes.windll.kernel32.TerminateProcess(self._handle, 1)
 
     kill = terminate
+
+
+def __getattr__(name: str):
+    """Old import paths: process spawning moved to :mod:`tellurium.browser.process`."""
+    if name in ("launch_chrome", "launch_chrome_posix"):
+        from tellurium.browser import process
+
+        return getattr(process, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -100,6 +100,25 @@ async def test_download_keeps_exec_bits_and_symlinks(fake_download):
 )
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
 async def test_download_refuses_entries_outside_the_install_dir(fake_download, tmp_path, entries):
+    await _assert_refused(fake_download, tmp_path, entries)
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        [("chrome-linux64/abs", b"/etc", stat.S_IFLNK | 0o777)],
+        [("chrome-linux64/up", b"../../outside", stat.S_IFLNK | 0o777)],
+        [("chrome-linux64/deep/up", b"../../../x", stat.S_IFLNK | 0o777)],
+    ],
+    ids=["absolute", "relative-escape", "nested-escape"],
+)
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
+async def test_download_refuses_symlinks_pointing_outside(fake_download, tmp_path, entries):
+    """A link to /etc (or ../..) would later be followed by chmod or by Chrome."""
+    await _assert_refused(fake_download, tmp_path, entries)
+
+
+async def _assert_refused(fake_download, tmp_path, entries):
     archive, browsers = fake_download
     archive["path"] = _cft_zip(tmp_path / "evil.zip", entries)
 
@@ -107,6 +126,22 @@ async def test_download_refuses_entries_outside_the_install_dir(fake_download, t
         await launcher.download_cft("140.0.7339.80")
     assert not (tmp_path / "escape").exists()
     assert not (browsers / "escape").exists()
+    # Nothing half-extracted is left for _find_cft_managed to pick up.
+    assert not (browsers / "chrome-140.0.7339.80").exists()
+    assert list(browsers.iterdir()) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
+async def test_a_failed_reinstall_keeps_the_previous_install(fake_download, tmp_path):
+    archive, browsers = fake_download
+    good = Path(await launcher.download_cft("140.0.7339.80"))
+    archive["path"] = _cft_zip(tmp_path / "evil.zip", [("../escape", b"x", stat.S_IFREG)])
+
+    with pytest.raises(ValueError):
+        await launcher.download_cft("140.0.7339.80")
+
+    assert good.is_file()
+    assert [p.name for p in browsers.iterdir()] == ["chrome-140.0.7339.80"]
 
 
 def test_windows_version_comes_from_the_install_layout(tmp_path, monkeypatch):
