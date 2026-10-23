@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import random
 import time
@@ -253,8 +254,9 @@ class Tab:
     async def eval_on(self, selector: str, expression: str, timeout: float | None = None) -> Any:
         """Run JS on the first element matching *selector*.
 
-        *expression* is a function (``"el => el.id"``, ``"function() { return
-        this.id; }"``) called with the element as ``this`` and as its argument.
+        *expression* is a function (``"el => el.id"``, ``"() => this.id"``,
+        ``"function() { return this.id; }"``) called with the element as ``this``
+        and as its argument; arrows are rewritten as functions to bind ``this``.
         *timeout* bounds each CDP command (default: the session's, 30 s).
         """
         send = self._session.send
@@ -269,6 +271,12 @@ class Tab:
             raise LookupError(f"No element matching {selector!r}")
         node = {"nodeId": node_id, "objectGroup": self._handles.name}
         object_id = (await send("DOM.resolveNode", node, timeout=timeout))["object"]["objectId"]
+        head, arrow, body = expression.partition("=>")
+        asy = "async " if head.strip().startswith("async ") else ""
+        args = head.strip()[len(asy) :].strip()
+        if arrow and not args.startswith("function"):  # an arrow: rebind `this`
+            body = body.strip() if body.strip().startswith("{") else f"{{ return (\n{body}\n); }}"
+            expression = f"{asy}function{args if args.startswith('(') else f'({args})'} {body}"
         try:
             res = await self._session.send(
                 "Runtime.callFunctionOn",
@@ -936,8 +944,6 @@ class Tab:
 
         Raises ValueError if iframe_selector matches no element.
         """
-        import json
-
         from tellurium.stealth._isolated import get_hsim_world
 
         ctx = await get_hsim_world(self, frame_id=self._frame_id)
@@ -1272,6 +1278,4 @@ class Tab:
 
 def _json_escape(s: str) -> str:
     """Return a JS string literal for *s*, properly escaped."""
-    import json
-
     return json.dumps(s)

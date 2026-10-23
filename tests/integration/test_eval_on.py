@@ -18,6 +18,11 @@ async def page(browser, local_server):
         "(el) => { return el.id; }",
         "function(el) { return el.id; }",
         "function() { return this.id; }",
+        "() => this.id",  # worked through the old arrow rewriting: kept
+        "async () => this.id",
+        "async el => el.id",
+        "el => el.id // trailing comment",
+        "el => ({id: el.id}).id",
     ],
 )
 async def test_eval_on_gets_the_element(page, expression):
