@@ -117,3 +117,15 @@ async def test_beforeunload_is_accepted_so_navigation_proceeds(browser):
     await _guard(tab.get(_page("<p id='next'>next</p>"), timeout=8))
     assert seen == ["beforeunload"]
     assert await _guard(tab.eval("document.getElementById('next') !== null")) is True
+
+
+async def test_handler_that_never_decides_times_out_to_the_policy(browser):
+    tab = browser.main_tab
+    tab._dialogs.handler_timeout = 0.5
+
+    async def handler(dialog):
+        await asyncio.sleep(3600)
+
+    tab.on_dialog(handler)
+    await _guard(tab.get(_page("<p>x</p>")))
+    assert await asyncio.wait_for(tab.eval("confirm('ok?')"), timeout=5) is False

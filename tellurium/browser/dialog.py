@@ -27,6 +27,8 @@ DialogHandler = Callable[["Dialog"], Awaitable[None] | None]
 # Page.handleJavaScriptDialog is answered at once; the bound only guards a
 # renderer that died with the dialog open.
 _RESPOND_TIMEOUT = 5.0
+# An on_dialog handler that has not decided by then yields to the policy.
+HANDLER_TIMEOUT = 10.0
 
 
 def check_policy(policy: str) -> str:
@@ -86,7 +88,7 @@ class DialogGuard:
     """Answers every dialog of one tab session so that none can freeze it.
 
     The handler runs first; a dialog it leaves undecided (or that it fails
-    on) gets the policy: ``"dismiss"`` (``beforeunload`` is accepted, so a
+    on, or that runs past ``handler_timeout``) gets the policy: ``"dismiss"`` (``beforeunload`` is accepted, so a
     navigation is never cancelled), ``"accept"``, or ``"manual"`` (left open
     for the caller).
     """
@@ -97,6 +99,7 @@ class DialogGuard:
         self._handler: DialogHandler | None = None
         self._tasks: set[asyncio.Task] = set()
         self.last: Dialog | None = None
+        self.handler_timeout = HANDLER_TIMEOUT
         session.on("Page.javascriptDialogOpening", self._on_opening)
 
     @property
@@ -123,7 +126,11 @@ class DialogGuard:
             try:
                 result = handler(dialog)
                 if inspect.isawaitable(result):
-                    await result
+                    await asyncio.wait_for(result, timeout=self.handler_timeout)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "on_dialog handler undecided after %ss: %r", self.handler_timeout, dialog
+                )
             except Exception:  # noqa: BLE001 — the dialog must still be closed
                 logger.exception("on_dialog handler failed for %r", dialog)
         if dialog.handled or self._policy == "manual":

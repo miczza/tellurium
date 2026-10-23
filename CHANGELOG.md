@@ -11,7 +11,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   raise `StaleElementError`.
 - `Tab.on_dialog(handler)` and `tellurium.browser.dialog.Dialog` (`type`,
   `message`, `accept(text)`, `dismiss()`): every tab now answers JavaScript
-  dialogs. Without a handler the tab policy applies (`"dismiss"` by default,
+  dialogs. A handler that has not decided within 10 s, or that raises, yields
+  to the policy. Without a handler the tab policy applies (`"dismiss"` by default,
   `beforeunload` accepted so navigations are never cancelled); before, an
   `alert()` froze every later command on the tab.
 - Patched-binary auto-install: `tellurium download-browser --browser patched
