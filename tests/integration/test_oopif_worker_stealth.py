@@ -149,7 +149,7 @@ async def test_oopif_and_worker_are_patched(oopif_site):
 
 @pytest.mark.asyncio
 async def test_freezing_targets_does_not_slow_navigation(oopif_site):
-    """waitForDebuggerOnStart must not cost more than 10% on new_tab+get.
+    """waitForDebuggerOnStart must not cost more than 10% (+15 ms) on new_tab+get.
 
     The comparison is stealth-with-freeze vs stealth-without-freeze (the
     pre-T7.7 auto-attach configuration), so it isolates the cost of the
@@ -195,21 +195,24 @@ async def test_freezing_targets_does_not_slow_navigation(oopif_site):
         finally:
             await browser.close()
 
+    # Interleave the two configurations to even out machine drift, and judge
+    # the median over several rounds: a single pair of runs flips on a loaded
+    # machine (parallel test runs), where a few ms of jitter exceed 10%.
+    baselines: list[float] = []
+    freezes: list[float] = []
     try:
-        # Interleave the two configurations to even out machine drift.
-        StealthEngine.setup_auto_attach = unfrozen
-        base_a = await _measure()
-        StealthEngine.setup_auto_attach = frozen
-        freeze_a = await _measure()
-        StealthEngine.setup_auto_attach = unfrozen
-        base_b = await _measure()
-        StealthEngine.setup_auto_attach = frozen
-        freeze_b = await _measure()
+        for _ in range(3):
+            StealthEngine.setup_auto_attach = unfrozen
+            baselines.append(await _measure())
+            StealthEngine.setup_auto_attach = frozen
+            freezes.append(await _measure())
     finally:
         StealthEngine.setup_auto_attach = frozen
 
-    baseline = min(base_a, base_b)
-    stealthy = min(freeze_a, freeze_b)
-    assert stealthy <= baseline * 1.10, (
+    baseline = statistics.median(baselines)
+    stealthy = statistics.median(freezes)
+    # 10% plus an absolute 15 ms floor: below that the difference is noise,
+    # while a freeze that stalls the target costs far more.
+    assert stealthy <= baseline * 1.10 + 0.015, (
         f"freeze regressed new_tab+navigate: {stealthy * 1000:.1f}ms vs {baseline * 1000:.1f}ms"
     )
