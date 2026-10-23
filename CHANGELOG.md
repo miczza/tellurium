@@ -84,6 +84,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A crashed renderer (OOM, killed process) left its tab in `browser.tabs` and
+  every command on it waiting forever. `Target.targetCrashed` now fails the
+  tab's pending and future commands with `TargetCrashedError` (a
+  `ConnectionError`, in `tellurium.cdp.types`) and drops the tab.
 - The pipe transport re-scanned its whole receive buffer for the message
   terminator on every chunk, so one large reply (full-page screenshot, big
   response body) cost quadratic time with the event loop blocked: 64 MB took

@@ -25,6 +25,7 @@ from tellurium.browser.proxy import ProxyForwarder, parse_proxy_url
 from tellurium.browser.tab import Tab, url_matches
 from tellurium.cdp.transport import create_transport
 from tellurium.cdp.transport._session import SessionRouter
+from tellurium.cdp.types import TargetCrashedError
 from tellurium.stealth._grease import parse_grease_brands, parse_product_version
 from tellurium.stealth._webrtc import resolve_webrtc_ip
 
@@ -507,6 +508,7 @@ class Browser:
         root.on("Target.attachedToTarget", self._on_attached_to_target)
         root.on("Target.targetInfoChanged", self._on_target_info_changed)
         root.on("Target.targetDestroyed", self._on_target_destroyed)
+        root.on("Target.targetCrashed", self._on_target_crashed)
         if stealth_engine is not None:
             await stealth_engine.wire_session(root, include_pages=True)
             if self._main_tab is not None:
@@ -673,6 +675,15 @@ class Browser:
 
     def _on_target_destroyed(self, params: dict) -> None:
         self._forget_tab(params.get("targetId", ""))
+
+    def _on_target_crashed(self, params: dict) -> None:
+        # Reported to every client with target discovery on. Without it a
+        # crashed renderer leaves each command on the tab waiting forever.
+        tab = self._find_tab(params.get("targetId", ""))
+        if tab is not None:
+            reason = f"Renderer crashed ({params.get('status', 'unknown')}): {tab._target_id}"
+            tab._session._close(reason, TargetCrashedError)
+            self._forget_tab(tab._target_id)
 
     async def _close_tab(self, tab: Tab, timeout: float = 5) -> None:
         """Close *tab* and wait until Chrome reports its target destroyed."""
