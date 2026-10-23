@@ -108,8 +108,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   refused navigation raises `NavigationError` (a `RuntimeError`) with the URL
   and a hint for `net::ERR_ABORTED` (204 responses, downloads). Reading the
   title after a navigation is bounded too.
-- `Tab.wait_for_navigation()` ignores iframe navigations, waits for the main
-  frame's `load`, and no longer sets `tab.url` to an iframe URL.
+- `Tab.wait_for_navigation()` ignores iframe navigations, waits for the `load`
+  of the main-frame document that matches the pattern (not of an earlier page
+  in a redirect chain), returns on a back/forward-cache restore, and no longer
+  sets `tab.url` to an iframe URL.
 - Elements went stale after any later query: every `select`/`xpath`/`find`
   refreshes the DOM agent (`DOM.getDocument`), voiding all earlier nodeIds,
   so `h1 = select("h1"); select("p"); h1.text()` raised "No node with given

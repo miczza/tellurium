@@ -141,35 +141,40 @@ async def navigate(
 
 
 async def wait_for_main_frame(session: Session, pattern: str | None, *, timeout: float) -> str:
-    """Wait for the main frame to navigate (to a URL matching *pattern*) and load.
+    """Wait for the main frame to commit a document (matching *pattern*) and load it.
 
-    Iframe navigations are ignored. Returns the new URL. Lifecycle events
-    must already be enabled on *session*.
+    Iframe navigations are ignored. The wait is bound to the ``loaderId`` of
+    the latest matching commit, so the ``load`` of an earlier document in a
+    redirect chain does not end it. A back/forward-cache restore fires no
+    ``load`` (the page was never unloaded): its commit ends the wait. Returns
+    the new URL. Lifecycle events must already be enabled on *session*.
     """
-    events: list[dict] = []
+    loads: set[str] = set()
     arrived = asyncio.Event()
     committed: dict = {}
     phase = "navigation"
 
     def _on_navigated(params: dict) -> None:
         frame = params.get("frame", {})
-        if committed or frame.get("parentId"):
+        if frame.get("parentId"):
             return
         if pattern is None or url_matches(pattern, frame.get("url", "")):
-            committed.update(frame)
+            committed.clear()
+            committed.update(frame, restored=params.get("type") == "BackForwardCacheRestore")
             arrived.set()
 
     def _on_lifecycle(params: dict) -> None:
-        events.append(params)
-        arrived.set()
+        if params.get("name") == "load" and params.get("loaderId"):
+            loads.add(params["loaderId"])
+            arrived.set()
 
     async def _run() -> None:
         nonlocal phase
-        while not committed:
+        while not committed or not (committed["restored"] or committed.get("loaderId") in loads):
+            if committed:
+                phase = "load"
             arrived.clear()
             await arrived.wait()
-        phase = "load"
-        await wait_lifecycle(events, arrived, committed.get("id"), committed["loaderId"], "load")
 
     session.on("Page.frameNavigated", _on_navigated)
     session.on("Page.lifecycleEvent", _on_lifecycle)

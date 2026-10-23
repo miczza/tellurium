@@ -156,3 +156,25 @@ async def test_wait_for_navigation_timeout_is_a_builtin_timeout_error(browser, s
         await _guard(tab.wait_for_navigation("*/never*", timeout=0.5))
     assert isinstance(info.value, TimeoutError)
     assert "*/never*" in str(info.value)
+
+
+async def test_wait_for_navigation_returns_on_a_back_forward_cache_restore(browser, server):
+    tab = await _guard(browser.new_tab(f"{server}/basic.html"))
+    await _guard(tab.get(f"{server}/tree.html"))
+    waiter = asyncio.ensure_future(tab.wait_for_navigation(timeout=8))
+    await asyncio.sleep(0.1)
+    await tab.back()
+    await _guard(waiter)
+    assert tab.url == f"{server}/basic.html"
+
+
+async def test_wait_for_navigation_waits_for_the_load_of_the_matching_document(
+    browser, local_server
+):
+    tab = browser.main_tab
+    await _guard(tab.get(f"{local_server}/basic.html"))
+    waiter = asyncio.ensure_future(tab.wait_for_navigation("*redirect_final*", timeout=10))
+    await tab.eval("location.href = '/redirect_step.html'; 1")
+    await _guard(waiter)
+    assert tab.url.endswith("/redirect_final.html")
+    assert await tab.eval("document.readyState") == "complete"
