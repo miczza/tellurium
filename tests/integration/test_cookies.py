@@ -96,5 +96,11 @@ async def test_clear_cookies_for_a_subdomain_keeps_the_parent_domain(browser):
 
 async def test_a_public_suffix_does_not_return_everything(browser):
     await browser.set_cookies(_JAR)
-    with pytest.raises(ValueError, match="domain"):
-        await browser.get_cookies("com")
+    assert await browser.get_cookies("com") == []
+    await browser.clear_cookies("com")
+    assert _names(await browser.get_cookies()) == ["a", "b", "c", "d"]
+
+
+async def test_an_intranet_host_without_a_dot(browser):
+    await browser.set_cookies([*_JAR, Cookie(name="i", value="1", domain="intranet")])
+    assert _names(await browser.get_cookies("intranet")) == ["i"]

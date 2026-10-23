@@ -1,5 +1,3 @@
-import pytest
-
 from tellurium.browser.cookie import Cookie
 
 
@@ -138,12 +136,17 @@ def test_a_host_also_sees_the_parent_domain_cookies_it_receives():
     assert not matches_domain(".com", "sub.example.com", received=False)
 
 
-@pytest.mark.parametrize("domain", ["com", ".com", "uk", ""])
-def test_a_bare_tld_is_refused(domain):
+def test_a_dotless_domain_matches_only_itself():
     from tellurium.browser.cookie import matches_domain
 
-    with pytest.raises(ValueError, match="domain"):
-        matches_domain(".example.com", domain)
+    # An intranet host works...
+    assert matches_domain("intranet", "intranet", received=True)
+    assert matches_domain(".intranet", "intranet")
+    # ...but never expands: "com" is not every .com site, nor their parent.
+    assert not matches_domain(".example.com", "com", received=True)
+    assert not matches_domain("example.com", "com")
+    assert not matches_domain("wiki.intranet", "intranet")
+    assert not matches_domain(".com", "example.com", received=True)
 
 
 def test_localhost_and_ips_are_domains():

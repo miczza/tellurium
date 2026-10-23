@@ -16,15 +16,18 @@ def matches_domain(cookie_domain: str, domain: str, *, received: bool = False) -
     Equal hosts or subdomains match (``sub.example.com`` belongs to
     ``example.com``); ``notexample.com`` does not. With *received*, also the
     parent-domain cookies the host is sent: ``.example.com`` (a domain
-    cookie) for ``sub.example.com``, not a host-only ``example.com``.
-    *domain* must have a dot (or be ``localhost``): ``com`` would match
-    every ``.com`` site. Leading dots on *domain* are ignored.
+    cookie) for ``sub.example.com``, not a host-only ``example.com``. A
+    domain without a dot (``intranet``, ``com``) matches only itself, never
+    its subdomains or parents: ``com`` is not every ``.com`` site. Leading
+    dots are ignored.
     """
     wanted = domain.lstrip(".").lower()
-    if "." not in wanted and wanted != "localhost":
-        raise ValueError(f"Not a cookie domain: {domain!r} (a bare TLD matches every site)")
     host = cookie_domain.lstrip(".").lower()
-    if host == wanted or host.endswith("." + wanted):
+    if host == wanted:
+        return True
+    if "." not in wanted or "." not in host:
+        return False
+    if host.endswith("." + wanted):
         return True
     return received and cookie_domain.startswith(".") and wanted.endswith("." + host)
 

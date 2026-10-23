@@ -193,8 +193,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   domain and its subdomains instead of any substring: `"example.com"` no longer
   returns `notexample.com` cookies. A subdomain also gets the parent-domain
   cookies it receives (`.example.com` for `sub.example.com`); a domain without
-  a dot (`"com"`, except `localhost`) raises `ValueError` instead of matching
-  every site. `clear_cookies(domain)` keeps the parent domain's cookies.
+  a dot (`"intranet"`, `"com"`) matches only itself, so `"com"` no longer
+  returns every site. `clear_cookies(domain)` keeps the parent domain's cookies.
 - Netscape cookie files keep `#HttpOnly_` lines on import (they were skipped as
   comments, dropping the session cookies) and write the prefix on export.
 - `save_cookies` / `load_cookies` read and write the file off the event loop.
