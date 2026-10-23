@@ -8,7 +8,7 @@ import logging
 import math
 
 from tellurium.cdp.transport._base import CDPTransport
-from tellurium.cdp.types import CDPError
+from tellurium.cdp.types import CDPError, TargetCrashedError
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,12 @@ class Session:
 
     def _close(self, reason: str, error: type[ConnectionError] = ConnectionError) -> None:
         """Fail every pending command and reject future ones with *error*."""
-        if self._closed_error is None:
+        # The first reason wins, except that a crash is more telling than the
+        # detach Chrome may report just before it.
+        if self._closed_error is None or (
+            issubclass(error, TargetCrashedError)
+            and not isinstance(self._closed_error, TargetCrashedError)
+        ):
             self._closed_error = error(reason)
         for future in self._pending.values():
             if not future.done():

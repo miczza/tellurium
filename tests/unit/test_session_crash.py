@@ -52,3 +52,13 @@ async def test_plain_close_still_raises_connection_error():
     with pytest.raises(ConnectionError) as info:
         await session.send("Page.reload")
     assert type(info.value) is ConnectionError
+
+
+async def test_a_crash_reported_after_the_detach_still_wins():
+    """Chrome may detach the session before reporting the crash."""
+    session = SessionRouter(_SilentTransport()).register("S1")
+    session._close("Target detached")
+    session._close("Renderer crashed", TargetCrashedError)
+
+    with pytest.raises(TargetCrashedError):
+        await session.send("Page.reload")
