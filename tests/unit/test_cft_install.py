@@ -109,8 +109,16 @@ async def test_download_refuses_entries_outside_the_install_dir(fake_download, t
         [("chrome-linux64/abs", b"/etc", stat.S_IFLNK | 0o777)],
         [("chrome-linux64/up", b"../../outside", stat.S_IFLNK | 0o777)],
         [("chrome-linux64/deep/up", b"../../../x", stat.S_IFLNK | 0o777)],
+        [  # lexically inside, but the kernel resolves s1 before the '..'
+            ("chrome-linux64/a/b/s1", b"../..", stat.S_IFLNK | 0o777),
+            ("chrome-linux64/a/b/l", b"s1/../../../../escape", stat.S_IFLNK | 0o777),
+        ],
+        [  # same chain, the link written before the link it climbs through
+            ("chrome-linux64/a/b/l", b"s1/../../../../escape", stat.S_IFLNK | 0o777),
+            ("chrome-linux64/a/b/s1", b"../..", stat.S_IFLNK | 0o777),
+        ],
     ],
-    ids=["absolute", "relative-escape", "nested-escape"],
+    ids=["absolute", "relative-escape", "nested-escape", "link-chain", "link-chain-reversed"],
 )
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
 async def test_download_refuses_symlinks_pointing_outside(fake_download, tmp_path, entries):

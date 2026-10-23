@@ -304,6 +304,7 @@ def _extract_zip(zip_path: Path, dest: Path) -> None:
     outside it are refused.
     """
     root = dest.resolve()
+    links: list[Path] = []
     with zipfile.ZipFile(zip_path) as zf:
         for info in zf.infolist():
             name = Path(info.filename)
@@ -320,42 +321,35 @@ def _extract_zip(zip_path: Path, dest: Path) -> None:
                 target.unlink()
             if stat.S_ISLNK(mode):
                 link = zf.read(info).decode()
-                pointee = os.path.normpath(os.path.join(parent, link))
-                if os.path.isabs(link) or not Path(pointee).is_relative_to(root):
+                if os.path.isabs(link):
                     raise ValueError(f"Archive link outside the install dir: {info.filename}")
                 os.symlink(link, target)
+                links.append(target)
                 continue
             with zf.open(info) as src, open(target, "wb") as out:
                 shutil.copyfileobj(src, out)
             if mode & 0o777:
                 target.chmod(mode & 0o777)
+    # Checked once every link exists: the kernel resolves a link before a
+    # following '..', so a chain of links can climb out of a lexical check.
+    for target in links:
+        if not Path(os.path.realpath(target)).is_relative_to(root):
+            raise ValueError(f"Archive link outside the install dir: {target.relative_to(root)}")
 
 
 async def download_cft(version: str = "latest") -> str:
     """Download Chrome for Testing and return the path to its executable.
 
-    The archive is extracted to ``~/.tellurium/browsers/chrome-{version}/``.
-
-    Parameters
-    ----------
-    version:
-        A specific version string (e.g. ``"124.0.6367.60"``) or ``"latest"``.
-
-    Returns
-    -------
-    str
-        Absolute path to the extracted Chrome executable.
+    *version* is a version string (e.g. ``"124.0.6367.60"``) or ``"latest"``;
+    the archive is extracted to ``~/.tellurium/browsers/chrome-{version}/``.
     """
     # Network, unzip and chmod: all blocking, so off the event loop.
     return await asyncio.to_thread(_download_cft_sync, version)
 
 
 def _download_cft_sync(version: str) -> str:
-    try:
-        import json as _json
-        import urllib.request
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError("stdlib urllib is unavailable") from exc
+    import json as _json
+    import urllib.request
 
     plat = _determine_platform()
     logger.info("Downloading Chrome for Testing (platform=%s, version=%s)", plat, version)

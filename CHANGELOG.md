@@ -101,6 +101,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Chrome for Testing extraction checks every symlink once the archive is
+  unpacked, resolving it as the kernel does: a chain of links (`s1 -> ../..`,
+  `l -> s1/../../../x`) that looked inside the install dir lexically but led
+  out of it was accepted.
 - Installing a chromium-telluride release can no longer write or delete outside
   the cache: the install directory named by the tarball's `MANIFEST.json` (and
   the version given to `reinstall` / `set_current`) must be a chromium version
