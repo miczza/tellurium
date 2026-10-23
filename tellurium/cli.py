@@ -46,11 +46,7 @@ def main():
     dl_parser.add_argument(
         "--version", default=None, help="Chromium version to download (default: latest release)"
     )
-    dl_parser.add_argument(
-        "--allow-unverified",
-        action="store_true",
-        help="Patched only: install a release without a matching SHA256SUMS (mirrors, local builds)",
-    )
+    dl_parser.add_argument("--allow-unverified", action="store_true", help="Skip SHA256SUMS")
 
     # download-geoip
     geo_parser = sub.add_parser(
@@ -211,16 +207,12 @@ def _install_patched(
     from tellurium.browser._patched_download import DownloadError, download_patched
     from tellurium.browser._patched_download import reinstall as _re
 
+    where = {"cache_root": _cache_dir(), "progress": _progress_printer()}
     try:
         if reinstall and version:
-            entry = _re(version, cache_root=_cache_dir(), progress=_progress_printer())
+            entry = _re(version, **where)
         else:
-            entry = download_patched(
-                version,
-                cache_root=_cache_dir(),
-                progress=_progress_printer(),
-                allow_unverified=allow_unverified,
-            )
+            entry = download_patched(version, allow_unverified=allow_unverified, **where)
     except DownloadError as e:
         print(f"\nError: {e}", file=sys.stderr)
         return False
@@ -233,17 +225,15 @@ def _install_patched(
     return True
 
 
-async def _download_browser(
-    browser_type: str, version: str | None = None, allow_unverified: bool = False
-) -> None:
-    """Download a browser binary."""
-    if browser_type == "stock":
+async def _download_browser(kind: str, version: str | None, unverified: bool) -> None:
+    """Download a browser binary (*unverified*: patched release without SHA256SUMS)."""
+    if kind == "stock":
         from tellurium.browser.launcher import download_cft
 
         path = await download_cft(version or "latest")
         print(f"Chrome for Testing downloaded: {path}")
-    elif browser_type == "patched":
-        if not _install_patched(version, allow_unverified=allow_unverified):
+    elif kind == "patched":
+        if not _install_patched(version, allow_unverified=unverified):
             sys.exit(1)
 
 
