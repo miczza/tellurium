@@ -35,7 +35,7 @@ def test_launch_chrome_uses_the_posix_launcher_on_linux(monkeypatch):
     monkeypatch.setattr(
         process,
         "launch_chrome_posix",
-        lambda p, a, out: calls.append(("posix", p, a)) or ("P", 3, 4),
+        lambda p, a, out, env: calls.append(("posix", p, a)) or ("P", 3, 4),
     )
     monkeypatch.setattr(
         process,
@@ -55,7 +55,7 @@ def test_launch_chrome_uses_the_windows_launcher_on_win32(monkeypatch):
     monkeypatch.setattr(
         process,
         "launch_chrome_posix",
-        lambda p, a, out: pytest.fail("posix launcher used on win32"),
+        lambda p, a, out, env: pytest.fail("posix launcher used on win32"),
     )
     assert launch_chrome(r"C:\chrome.exe", ["--y"]) == ("W", 5, 6)
     assert calls == [("win", r"C:\chrome.exe", ["--y"])]
@@ -70,7 +70,7 @@ def test_browser_launch_goes_through_the_dispatcher():
     """Chrome is spawned through the platform dispatcher, never the POSIX path directly."""
     from tellurium.browser import browser as browser_mod
 
-    assert "launch_chrome(chrome_path, flags, output)" in Path(process.__file__).read_text()
+    assert "launch_chrome(chrome_path, flags, output, env)" in Path(process.__file__).read_text()
     assert "launch_chrome_posix" not in Path(browser_mod.__file__).read_text()
 
 

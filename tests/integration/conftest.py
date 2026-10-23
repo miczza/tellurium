@@ -64,3 +64,18 @@ async def stealth_browser():
     b = await Browser.launch(headless=True, stealth=True)
     yield b
     await b.close()
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "slow: soak tests, run only with TELLURIUM_SLOW=1")
+
+
+def pytest_collection_modifyitems(config, items):
+    import os
+
+    if os.environ.get("TELLURIUM_SLOW") == "1":
+        return
+    skip = pytest.mark.skip(reason="soak test: set TELLURIUM_SLOW=1 to run it")
+    for item in items:
+        if "slow" in item.keywords:
+            item.add_marker(skip)

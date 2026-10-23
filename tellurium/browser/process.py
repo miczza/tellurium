@@ -35,6 +35,7 @@ def launch_chrome_posix(
     chrome_path: str,
     args: list[str],
     output: int = subprocess.DEVNULL,
+    env: dict[str, str] | None = None,
 ) -> tuple[subprocess.Popen, int, int]:
     """Launch Chrome with CDP pipe FDs (POSIX only).
 
@@ -42,7 +43,8 @@ def launch_chrome_posix(
     by Chrome) and 4 (written by Chrome) in the child, as
     ``--remote-debugging-pipe`` expects. Chrome's stdout and stderr go to
     *output* (an fd, or ``subprocess.DEVNULL``): never to a pipe nobody reads,
-    which freezes Chrome once 64 KiB of log pile up.
+    which freezes Chrome once 64 KiB of log pile up. *env* replaces the
+    environment when given.
 
     Returns ``(process, parent_write_fd, parent_read_fd)``.
     """
@@ -75,6 +77,7 @@ def launch_chrome_posix(
             stdin=subprocess.DEVNULL,
             stdout=output,
             stderr=output,
+            env=env,
         )
     except BaseException:
         for fd in (chrome_read_fd, chrome_write_fd, parent_read_fd, parent_write_fd):
@@ -90,15 +93,17 @@ def launch_chrome(
     chrome_path: str,
     args: list[str],
     output: int = subprocess.DEVNULL,
+    env: dict[str, str] | None = None,
 ) -> tuple[Any, int, int]:
     """Launch Chrome with CDP pipes using the current platform's mechanism.
 
-    Returns ``(process, parent_write_fd, parent_read_fd)``. *output* is not
-    supported on Windows yet: Chrome keeps the parent's standard handles.
+    Returns ``(process, parent_write_fd, parent_read_fd)``. *output* and
+    *env* are not supported on Windows yet: Chrome keeps the parent's
+    standard handles and environment.
     """
     if sys.platform == "win32":
         return launch_chrome_windows(chrome_path, args)
-    return launch_chrome_posix(chrome_path, args, output)
+    return launch_chrome_posix(chrome_path, args, output, env)
 
 
 class OutputTail:
@@ -155,9 +160,11 @@ class BrowserProcess:
 
     def __init__(self) -> None:
         self.process: Any = None
+        self.reader: asyncio.Task | None = None  # the task dispatching CDP messages
         self.transport: CDPTransport | None = None
         self.forwarder: Any = None
         self.temp_profile: str | None = None
+        self.chrome_tmp: str | None = None  # Chrome's TMPDIR
         self._output: OutputTail | None = None
         self._log_path: Path | None = None
         self._log_file: Any = None
@@ -177,7 +184,11 @@ class BrowserProcess:
 
         Chrome's output goes to *chrome_log* when given; otherwise it is
         drained and only its tail is kept, to explain a failed launch.
+        Chrome's TMPDIR is a directory of ours, removed by :meth:`close`:
+        it leaves shared-memory files and its singleton socket there.
         """
+        self.chrome_tmp = tempfile.mkdtemp(prefix="tellurium_tmp_")
+        env = {**os.environ, "TMPDIR": self.chrome_tmp}
         output, tail_fd = subprocess.DEVNULL, None
         if chrome_log is not None:
             if sys.platform == "win32":
@@ -189,17 +200,18 @@ class BrowserProcess:
         elif sys.platform != "win32":
             tail_fd, output = os.pipe()
         try:
-            self.process, write_fd, read_fd = launch_chrome(chrome_path, flags, output)
-        except BaseException:
+            self.process, write_fd, read_fd = launch_chrome(chrome_path, flags, output, env)
+            # The transport owns both pipe ends from here on.
+            self.transport = create_transport(read_fd, write_fd)
             if tail_fd is not None:
+                self._output = OutputTail(tail_fd)
+        except BaseException:
+            if tail_fd is not None and self._output is None:
                 os.close(tail_fd)
             raise
         finally:
             if tail_fd is not None:
                 os.close(output)
-        if tail_fd is not None:
-            self._output = OutputTail(tail_fd)
-        self.transport = create_transport(read_fd, write_fd)
         await self.transport.start()
         return self.transport
 
@@ -238,37 +250,58 @@ class BrowserProcess:
 
         Chrome is stopped *before* its pipe is closed: on Windows, closing a
         pipe handle with a read pending on it can block until Chrome exits.
-        Never raises; safe to call more than once.
+        Every step runs, even when an earlier one fails or the caller is
+        cancelled (again and again, e.g. during a launch rollback); each is
+        bounded by a timeout. A cancellation is re-raised once all are done.
+        Safe to call more than once.
         """
+        cancelled = False
+        if self.reader is not None:
+            reader, self.reader = self.reader, None
+            reader.cancel()
+            cancelled |= await _settle("stop the CDP reader", asyncio.wait([reader]))
         if self.process is not None:
-            await self._step("stop Chrome", asyncio.to_thread(_stop, self.process))
+            cancelled |= await _settle("stop Chrome", asyncio.to_thread(_stop, self.process))
         if self.transport is not None:
             transport, self.transport = self.transport, None
-            await self._step("close the CDP pipe", transport.close())
+            cancelled |= await _settle("close the CDP pipe", transport.close())
         if self._output is not None:
             output, self._output = self._output, None
-            await self._step("drain Chrome output", asyncio.to_thread(output.join, 5.0))
+            cancelled |= await _settle("drain Chrome output", asyncio.to_thread(output.join, 5.0))
         if self._log_file is not None:
             self._log_file.close()
             self._log_file = None
         if self.forwarder is not None:
             forwarder, self.forwarder = self.forwarder, None
-            await self._step("stop the proxy forwarder", forwarder.stop())
-        if self.temp_profile is not None:
-            profile, self.temp_profile = self.temp_profile, None
-            await self._step(
-                "remove the temporary profile",
-                asyncio.to_thread(shutil.rmtree, profile, ignore_errors=True),
-            )
+            cancelled |= await _settle("stop the proxy forwarder", forwarder.stop())
+        for attr in ("temp_profile", "chrome_tmp"):
+            path = getattr(self, attr)
+            if path is not None:
+                setattr(self, attr, None)
+                removal = asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
+                cancelled |= await _settle(f"remove {path}", removal)
+        if cancelled:
+            raise asyncio.CancelledError
 
-    @staticmethod
-    async def _step(what: str, awaitable: Any, timeout: float = 15.0) -> None:
+
+async def _settle(what: str, awaitable: Any, timeout: float = 15.0) -> bool:
+    """Drive *awaitable* to its end (bounded by *timeout*) across cancellations.
+
+    Returns whether the caller was cancelled meanwhile, so it can finish its
+    other cleanup steps first and re-raise afterwards. Failures are logged.
+    """
+    step = asyncio.ensure_future(asyncio.wait_for(awaitable, timeout))
+    cancelled = False
+    while not step.done():
         try:
-            await asyncio.wait_for(awaitable, timeout)
+            await asyncio.shield(step)
         except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001 - shutdown must not raise
-            logger.warning("Could not %s", what, exc_info=True)
+            cancelled = True
+        except Exception:  # noqa: BLE001 - logged below
+            break
+    if not step.cancelled() and step.exception() is not None:
+        logger.warning("Could not %s", what, exc_info=step.exception())
+    return cancelled
 
 
 def _stop(process: Any) -> None:

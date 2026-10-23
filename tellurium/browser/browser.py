@@ -418,6 +418,7 @@ class Browser:
             transport = await self._proc.spawn(chrome_path, flags, chrome_log)
             self._router = SessionRouter(transport)
             self._dispatch_task = asyncio.create_task(self._router.run())
+            self._proc.reader = self._dispatch_task
 
             # 11. Wire stealth engine to router
             if stealth_engine is not None:
@@ -533,16 +534,17 @@ class Browser:
                     logger.warning("Could not apply viewport %r: %s", viewport, exc)
 
         except BaseException as exc:
-            error = await asyncio.shield(self._abort_launch(exc))
+            error = await self._abort_launch(exc)
             if error is not None:
                 raise error from exc
             raise
         return self
 
     async def _abort_launch(self, cause: BaseException) -> Exception | None:
-        error = await self._proc.launch_error(cause)
-        await self.close()
-        return error
+        try:
+            return await self._proc.launch_error(cause)
+        finally:
+            await self.close()  # runs every step even if cancelled again
 
     async def _apply_manual_overrides(self, session: Any) -> None:
         """Apply non-stealth manual overrides to a freshly attached session."""
@@ -796,15 +798,12 @@ class Browser:
     # ------------------------------------------------------------------
 
     async def close(self) -> None:
-        """Terminate the browser process and clean up resources."""
-        if self._dispatch_task and not self._dispatch_task.done():
-            self._dispatch_task.cancel()
-            try:
-                await self._dispatch_task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - shutdown must not raise
-                pass
-        # Shielded: a cancelled close() still releases everything.
-        await asyncio.shield(self._proc.close())
+        """Terminate the browser process and clean up resources.
+
+        Every resource is released even if this call is cancelled meanwhile;
+        the cancellation is re-raised afterwards.
+        """
+        await self._proc.close()
 
     async def __aenter__(self) -> Browser:
         return self

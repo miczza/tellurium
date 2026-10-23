@@ -11,8 +11,10 @@ from __future__ import annotations
 import asyncio
 import glob
 import os
+import shutil
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -39,12 +41,17 @@ def _children() -> set[int]:
 
 
 @pytest.fixture(autouse=True)
-def private_tempdir(tmp_path, monkeypatch):
-    """Temp profiles go to a directory of this test alone: other tellurium
-    runs on the machine create ``tellurium_*`` dirs in /tmp concurrently."""
-    root = tmp_path / "tempdir"
-    root.mkdir()
+def private_tempdir(monkeypatch, tmp_path_factory):
+    """Temp files go to a directory of this test alone: other tellurium
+    runs on the machine create ``tellurium_*`` dirs in /tmp concurrently.
+    TMPDIR too, so whatever Chrome would leave in the system temp dir shows.
+    Short on purpose: Chrome's singleton socket path must fit in 108 bytes."""
+    tmp_path_factory.getbasetemp()  # pytest's own temp root, fixed before the patch
+    root = Path(tempfile.mkdtemp(prefix="tlr", dir="/tmp"))
     monkeypatch.setattr(tempfile, "tempdir", str(root))
+    monkeypatch.setenv("TMPDIR", str(root))
+    yield root
+    shutil.rmtree(root, ignore_errors=True)
 
 
 def _temp_profiles() -> set[str]:
@@ -159,21 +166,72 @@ async def test_cancelled_launch_leaves_nothing_behind(monkeypatch):
     assert stopped, "the proxy forwarder was left running"
 
 
+@pytest.mark.parametrize("second_cancel_after", [0.0, 0.02, 0.08])
+def test_cancelling_the_rollback_again_still_releases_everything(monkeypatch, second_cancel_after):
+    """A second cancel lands while the first one is being rolled back, and
+    the event loop ends right after (``asyncio.run`` cancels what is left):
+    no cleanup step may be skipped or left to an orphaned task."""
+    from tellurium.browser import proxy as proxy_mod
+
+    stopped: list[object] = []
+    real_stop = proxy_mod.ProxyForwarder.stop
+
+    async def spy_stop(self):
+        stopped.append(self)
+        await real_stop(self)
+
+    monkeypatch.setattr(proxy_mod.ProxyForwarder, "stop", spy_stop)
+    children, profiles = _children(), _temp_profiles()
+
+    async def scenario() -> None:
+        task = asyncio.ensure_future(
+            Browser.launch(headless=True, proxy="http://user:secret@127.0.0.1:9")
+        )
+        assert await _wait_until(lambda: _children() - children, timeout=15), "no Chrome"
+        task.cancel()
+        await asyncio.sleep(second_cancel_after)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+
+    assert _children() <= children, "Chrome survived the cancel"
+    assert _temp_profiles() <= profiles, "the temporary profile was left behind"
+    assert stopped, "the proxy forwarder was left running"
+
+
 # ---------------------------------------------------------------------------
 # M10 — launch/close cycles leak no fds, processes or profiles
 # ---------------------------------------------------------------------------
 
 
-async def test_launch_close_cycles_leak_nothing():
+def _output_threads() -> list[threading.Thread]:
+    return [t for t in threading.enumerate() if t.name == "tellurium-chrome-output"]
+
+
+async def _assert_cycles_leak_nothing(tempdir: Path, cycles: int) -> None:
     async def cycle() -> None:
         browser = await Browser.launch(headless=True)
         await browser.close()
 
     await cycle()  # warm-up: lazily created loop resources
-    children, profiles, fds = _children(), _temp_profiles(), _open_fds()
-    for _ in range(3):
+    children, fds = _children(), _open_fds()
+    for i in range(cycles):
         await cycle()
+        assert not _output_threads(), f"output thread still running after cycle {i}"
 
-    assert _open_fds() == fds, f"fds leaked: {fds} -> {_open_fds()}"
+    assert _open_fds() <= fds, f"fds leaked: {fds} -> {_open_fds()}"
     assert _children() <= children
-    assert _temp_profiles() <= profiles
+    assert not list(tempdir.iterdir()), f"left in TMPDIR: {sorted(tempdir.iterdir())[:5]}"
+
+
+async def test_launch_close_cycles_leak_nothing(private_tempdir):
+    """fds, processes, output threads, profiles and Chrome's own temp files."""
+    await _assert_cycles_leak_nothing(private_tempdir, cycles=20)
+
+
+@pytest.mark.slow
+async def test_soak_500_launch_close_cycles(private_tempdir):
+    """Spec R1, outcome 2. Out of the gate: ``TELLURIUM_SLOW=1 pytest -m slow``."""
+    await _assert_cycles_leak_nothing(private_tempdir, cycles=500)

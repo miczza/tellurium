@@ -86,6 +86,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A launch cancelled a second time while rolling back (or `asyncio.run`
+  ending right after) skipped the remaining cleanup: the pipe, the proxy
+  forwarder and the temporary profile were left behind. `Browser.close()` now
+  runs every step, each bounded by a timeout, and re-raises the cancellation
+  at the end.
+- Every launch/close cycle left Chrome's shared-memory files and singleton
+  socket dir (`.com.google.Chrome.*`, about 400 KB, RAM on tmpfs) in the
+  system temp dir. Chrome now gets a private `TMPDIR`, removed on close
+  (POSIX).
 - Tellurium-managed Chrome for Testing installs were ranked by directory name,
   so `chrome-99…` beat `chrome-140…`; they are ranked by version now.
 - `download_cft` extracted with `zipfile.extractall`, losing exec bits
