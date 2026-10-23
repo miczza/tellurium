@@ -220,3 +220,14 @@ def test_cli_download_browser_allow_unverified_reaches_the_installer(tmp_path, f
             with patch("sys.argv", argv):
                 main()
     assert dl.call_args.kwargs["allow_unverified"] is bool(flag)
+
+
+def test_cli_prune_browsers_removes_orphaned_old_installs(tmp_path):
+    _install(tmp_path, "146.0.7680.188", current=True)
+    orphan = tmp_path / ".old-146.0.7680.188-deadbeef"
+    orphan.mkdir()
+    with patch("tellurium.cli._cache_dir", return_value=tmp_path):
+        with patch("sys.argv", ["tellurium", "prune-browsers"]):
+            main()
+    assert not orphan.exists()
+    assert (tmp_path / "146.0.7680.188" / "chrome").is_file()

@@ -283,16 +283,19 @@ def _install(
         if final.resolve().parent != root.resolve():
             raise DownloadError(f"Refusing install dir outside the cache: {final}")
         with _cache.install_lock(root):
+            _cache.sweep_orphans(root)
             _swap_in(staging, final, manifest, force)
             if set_current or _cache.current_version(root) is None:
                 if sys.platform != "win32":
                     _cache.point_current(version, root)
+            # Read under the lock: another install may swap the directory next.
+            entry = {b.version: b for b in _cache.installed_browsers(root)}.get(version)
     finally:
         shutil.rmtree(staging, ignore_errors=True)  # gone already once swapped in
-
-    entries = {b.version: b for b in _cache.installed_browsers(root)}
+    if entry is None:
+        raise DownloadError(f"chromium-telluride {version} is not in the cache after installing")
     log.info("chromium-telluride %s installed at %s", version, final)
-    return entries[version]
+    return entry
 
 
 def _swap_in(staging: Path, final: Path, manifest: ReleaseManifest, force: bool) -> None:
@@ -305,9 +308,13 @@ def _swap_in(staging: Path, final: Path, manifest: ReleaseManifest, force: bool)
     if not (final.exists() or final.is_symlink()):
         staging.rename(final)
         return
-    old = final.with_name(f".old-{final.name}-{uuid.uuid4().hex}")
+    old = final.with_name(f"{_cache.OLD_PREFIX}{final.name}-{uuid.uuid4().hex}")
     final.rename(old)  # never a moment with a half-deleted install in place
-    staging.rename(final)
+    try:
+        staging.rename(final)
+    except BaseException:
+        old.rename(final)  # the previous install goes back where it was
+        raise
     shutil.rmtree(old, ignore_errors=True)
 
 

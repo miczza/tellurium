@@ -24,6 +24,7 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import sys
 import uuid
 from collections.abc import Iterator
@@ -36,6 +37,8 @@ BINARY_NAME = "chrome.exe" if sys.platform == "win32" else "chrome"
 _LEGACY_BINARY_NAME = "tellurium-chromium"
 CURRENT_LINK = "current"
 LOCK_NAME = ".install.lock"
+#: An install moved aside during a swap; one outside the lock is an orphan.
+OLD_PREFIX = ".old-"
 MANIFEST_NAME = "MANIFEST.json"
 
 
@@ -192,6 +195,29 @@ def install_lock(root: Path | None = None) -> Iterator[None]:
                 yield
             finally:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def remove_orphans(root: Path | None = None) -> list[Path]:
+    """Delete the moved-aside installs an interrupted swap left (under the lock)."""
+    root = root if root is not None else cache_root()
+    if not root.is_dir():
+        return []
+    with install_lock(root):
+        return sweep_orphans(root)
+
+
+def sweep_orphans(root: Path) -> list[Path]:
+    """:func:`remove_orphans` for a caller already holding :func:`install_lock`."""
+    orphans = sorted(p for p in root.glob(f"{OLD_PREFIX}*") if p.is_dir())
+    for path in orphans:
+        shutil.rmtree(path, ignore_errors=True)
+    return orphans
+
+
+def remove_installed(path: Path) -> None:
+    """Delete an installed version directory under the install lock."""
+    with install_lock(path.parent):
+        shutil.rmtree(path)
 
 
 def set_current(version: str, root: Path | None = None) -> Path:

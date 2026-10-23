@@ -464,3 +464,43 @@ def test_reinstall_replaces_even_an_identical_binary(tmp_path):
     with patch("urllib.request.urlopen", urlopen):
         dl.reinstall(VERSION, cache_root=root)
     assert (root / VERSION / "locales" / "en-US.pak").read_bytes() == b"pak"
+
+
+def test_concurrent_forced_installs_all_return_the_entry(tmp_path):
+    tar = _make_tarball(tmp_path / "rel.tar.gz")
+    root = tmp_path / "cache"
+    errors = _hammer(4, 6, lambda: dl.install_from_tarball(tar, cache_root=root, force=True))
+    assert errors == []
+    assert (root / VERSION / "chrome").read_bytes() == BINARY
+
+
+def test_a_failed_swap_puts_the_old_install_back(tmp_path, monkeypatch):
+    tar = _make_tarball(tmp_path / "rel.tar.gz")
+    root = tmp_path / "cache"
+    dl.install_from_tarball(tar, cache_root=root)
+    real_rename = Path.rename
+
+    def failing_rename(self, target):
+        if self.name.startswith(".install-"):
+            raise OSError(28, "No space left on device")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", failing_rename)
+    with pytest.raises(dl.DownloadError, match="No space left"):
+        dl.install_from_tarball(tar, cache_root=root, force=True)
+    assert (root / VERSION / "chrome").read_bytes() == BINARY
+    assert [b.version for b in _cache.installed_browsers(root)] == [VERSION]
+    assert not list(root.glob(".old-*"))
+
+
+def test_orphaned_old_installs_are_cleaned(tmp_path):
+    tar = _make_tarball(tmp_path / "rel.tar.gz")
+    root = tmp_path / "cache"
+    orphan = root / f".old-{VERSION}-deadbeef"
+    orphan.mkdir(parents=True)
+    (orphan / "chrome").write_bytes(b"x")
+    assert _cache.remove_orphans(root) == [orphan]
+    assert not orphan.exists()
+    orphan.mkdir()
+    dl.install_from_tarball(tar, cache_root=root)  # an install sweeps them too
+    assert not orphan.exists()

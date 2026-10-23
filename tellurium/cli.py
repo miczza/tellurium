@@ -432,8 +432,7 @@ def _update_browser(check_only: bool, security_only: bool, unverified: bool = Fa
 
 def _prune_browsers(keep: int) -> None:
     """Remove old browser versions, keeping the N most recent (never 'current')."""
-    import shutil
-
+    _cache.remove_orphans(_cache_dir())  # installs an interrupted swap moved aside
     browsers = _cache.installed_browsers(_cache_dir())
     if len(browsers) <= keep:
         print(f"Only {len(browsers)} browser(s) installed, keeping all.")
@@ -450,7 +449,7 @@ def _prune_browsers(keep: int) -> None:
     print(f"\nRemoving {len(to_remove)} old version(s):")
     for b in to_remove:
         print(f"  {b.version}")
-        shutil.rmtree(b.path)
+        _cache.remove_installed(b.path)
 
     print("\nDone.")
 

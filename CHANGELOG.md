@@ -125,7 +125,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   link is written through a uniquely named temporary, the old install is moved
   aside before the new one takes its place, and reinstalling the same binary
   keeps the install Chrome may be running from. Filesystem errors while
-  installing raise `DownloadError` with the reason.
+  installing raise `DownloadError` with the reason. The returned entry is read
+  under the lock (concurrent forced installs raised `KeyError`); if the new
+  copy cannot be moved in, the old one is put back; installs moved aside by an
+  interrupted swap are deleted by the next install and by `prune-browsers`,
+  which also removes versions under the lock.
 - `Tab.eval_on(selector, "el => el.id")` passes the element as the first
   argument as well as `this`: arrow functions got `undefined` for `el`. The
   expression is no longer rewritten as text: it is evaluated inside a function
