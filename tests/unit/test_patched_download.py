@@ -70,7 +70,8 @@ def test_install_from_tarball_layout(tmp_path):
     assert _cache.current_version(root) == VERSION
     assert entry.is_current
     # No staging leftovers
-    assert [p.name for p in root.iterdir() if p.name.startswith(".")] == []
+    leftovers = [p.name for p in root.iterdir() if p.name.startswith(".")]
+    assert leftovers in ([], [_cache.LOCK_NAME])
 
 
 def test_install_from_tarball_matches_engine_resolution(tmp_path):
@@ -368,3 +369,72 @@ def test_download_with_tarball_missing_from_sha256sums_is_refused(tmp_path):
     with patch("urllib.request.urlopen", other_sums):
         with pytest.raises(dl.DownloadError, match="SHA256SUMS"):
             dl.download_patched(cache_root=tmp_path / "cache")
+
+
+# --------------------------------------------------------------------------- #
+# Concurrent installs (two launches with auto_security_update, CLI + launch)
+# --------------------------------------------------------------------------- #
+
+
+def _hammer(n_threads: int, rounds: int, job) -> list[BaseException]:
+    import threading
+
+    errors: list[BaseException] = []
+    start = threading.Barrier(n_threads)
+
+    def run() -> None:
+        start.wait()
+        for _ in range(rounds):
+            try:
+                job()
+            except BaseException as e:  # noqa: BLE001 — collected for the assert
+                errors.append(e)
+
+    threads = [threading.Thread(target=run) for _ in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return errors
+
+
+def test_concurrent_installs_of_one_release_all_succeed(tmp_path):
+    tar = _make_tarball(tmp_path / "rel.tar.gz")
+    root = tmp_path / "cache"
+    errors = _hammer(3, 8, lambda: dl.install_from_tarball(tar, cache_root=root))
+    assert errors == []
+    assert (root / VERSION / "chrome").read_bytes() == BINARY
+    assert _cache.current_version(root) == VERSION
+    assert [p.name for p in root.iterdir() if p.is_dir() and p.name != "current"] == [VERSION]
+
+
+def test_reinstalling_the_same_release_keeps_the_running_install(tmp_path):
+    tar = _make_tarball(tmp_path / "rel.tar.gz")
+    root = tmp_path / "cache"
+    first = dl.install_from_tarball(tar, cache_root=root)
+    inode = first.binary.stat().st_ino
+    dl.install_from_tarball(tar, cache_root=root)
+    assert (root / VERSION / "chrome").stat().st_ino == inode  # not yanked from under Chrome
+
+
+def test_concurrent_set_current_never_fails(tmp_path):
+    for v in ("146.0.7680.188", "147.0.7700.10"):
+        (tmp_path / v).mkdir()
+    flip = iter(range(10**9))
+
+    def job() -> None:
+        _cache.set_current(("146.0.7680.188", "147.0.7700.10")[next(flip) % 2], tmp_path)
+
+    assert _hammer(2, 300, job) == []
+    assert _cache.current_version(tmp_path) in ("146.0.7680.188", "147.0.7700.10")
+
+
+def test_install_filesystem_errors_become_download_errors(tmp_path, monkeypatch):
+    tar = _make_tarball(tmp_path / "rel.tar.gz")
+
+    def no_space(*a, **kw):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(dl, "_safe_extract", no_space)
+    with pytest.raises(dl.DownloadError, match="No space left"):
+        dl.install_from_tarball(tar, cache_root=tmp_path / "cache")

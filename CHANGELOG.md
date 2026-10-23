@@ -113,6 +113,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Concurrent chromium-telluride installs (two launches with
+  `auto_security_update`, the CLI next to a launch) no longer break each
+  other: the swap into place and the `current` switch run under a file lock
+  (`<cache>/.install.lock`, `fcntl.flock` / `msvcrt.locking`), the `current`
+  link is written through a uniquely named temporary, the old install is moved
+  aside before the new one takes its place, and reinstalling the same binary
+  keeps the install Chrome may be running from. Filesystem errors while
+  installing raise `DownloadError` with the reason.
 - `Tab.eval_on(selector, "el => el.id")` passes the element as the first
   argument as well as `this`: arrow functions (which have no `this`) got
   `undefined`, and `async el => …` was mangled by the old arrow rewriting.

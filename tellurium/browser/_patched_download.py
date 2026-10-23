@@ -21,6 +21,7 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -230,8 +231,28 @@ def install_from_tarball(
     cache_root: Path | None = None,
     expected_tarball_sha256: str | None = None,
     set_current: bool = True,
+    force: bool = False,
 ) -> _cache.InstalledBrowser:
-    """Install a local release tarball into the cache and return the entry."""
+    """Install a local release tarball into the cache and return the entry.
+
+    The swap into place and the ``current`` switch run under the cache's
+    install lock; an install of the same binary that is already there is
+    kept (Chrome may be running from it) unless *force*. Filesystem errors
+    are raised as :class:`DownloadError`.
+    """
+    try:
+        return _install(tar_path, cache_root, expected_tarball_sha256, set_current, force)
+    except OSError as e:
+        raise DownloadError(f"Could not install chromium-telluride: {e}") from e
+
+
+def _install(
+    tar_path: Path,
+    cache_root: Path | None,
+    expected_tarball_sha256: str | None,
+    set_current: bool,
+    force: bool,
+) -> _cache.InstalledBrowser:
     root = cache_root if cache_root is not None else _cache.cache_root()
     root.mkdir(parents=True, exist_ok=True)
     if expected_tarball_sha256:
@@ -261,19 +282,33 @@ def install_from_tarball(
         final = root / _checked(version, "Refusing install dir from MANIFEST.json")
         if final.resolve().parent != root.resolve():
             raise DownloadError(f"Refusing install dir outside the cache: {final}")
-        if final.exists():
-            shutil.rmtree(final)
-        staging.rename(final)
-    except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
+        with _cache.install_lock(root):
+            _swap_in(staging, final, manifest, force)
+            if set_current or _cache.current_version(root) is None:
+                if sys.platform != "win32":
+                    _cache.point_current(version, root)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)  # gone already once swapped in
 
-    if set_current or _cache.current_version(root) is None:
-        if sys.platform != "win32":
-            _cache.set_current(version, root)
     entries = {b.version: b for b in _cache.installed_browsers(root)}
     log.info("chromium-telluride %s installed at %s", version, final)
     return entries[version]
+
+
+def _swap_in(staging: Path, final: Path, manifest: ReleaseManifest, force: bool) -> None:
+    """Move *staging* to *final*; the caller holds the install lock."""
+    present = _cache.binary_in(final) if final.is_dir() else None
+    expected = manifest.binary_sha256.get(current_platform())
+    if not force and present is not None and _cache.binary_sha256(present) == expected:
+        log.info("chromium-telluride %s already installed; kept", final.name)
+        return
+    if not (final.exists() or final.is_symlink()):
+        staging.rename(final)
+        return
+    old = final.with_name(f".old-{final.name}-{uuid.uuid4().hex}")
+    final.rename(old)  # never a moment with a half-deleted install in place
+    staging.rename(final)
+    shutil.rmtree(old, ignore_errors=True)
 
 
 def download_patched(

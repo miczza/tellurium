@@ -20,10 +20,13 @@ Override the root with the ``TELLURIUM_CACHE_DIR`` environment variable.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import sys
+import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -32,6 +35,7 @@ BINARY_NAME = "chrome.exe" if sys.platform == "win32" else "chrome"
 #: Legacy name used by tellurium <= 0.1.0 docs; still accepted when found.
 _LEGACY_BINARY_NAME = "tellurium-chromium"
 CURRENT_LINK = "current"
+LOCK_NAME = ".install.lock"
 MANIFEST_NAME = "MANIFEST.json"
 
 
@@ -154,16 +158,60 @@ def current_version(root: Path | None = None) -> str | None:
     return None
 
 
-def set_current(version: str, root: Path | None = None) -> Path:
-    """Point the ``current`` symlink at *version* (atomic replace)."""
+@contextlib.contextmanager
+def install_lock(root: Path | None = None) -> Iterator[None]:
+    """Hold the cache's install lock: one install or ``current`` switch at a time.
+
+    Excludes other processes and other threads (each holder opens its own
+    descriptor). POSIX uses ``fcntl.flock``; Windows ``msvcrt.locking`` on the
+    lock file's first byte, retried until it is free.
+    """
     root = root if root is not None else cache_root()
+    root.mkdir(parents=True, exist_ok=True)
+    with open(root / LOCK_NAME, "a+b") as fh:
+        if sys.platform == "win32":
+            import msvcrt
+
+            while True:
+                fh.seek(0)
+                try:
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:  # LK_LOCK gives up after ~10 s: keep waiting
+                    continue
+            try:
+                yield
+            finally:
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def set_current(version: str, root: Path | None = None) -> Path:
+    """Point the ``current`` symlink at *version* (atomic replace, under the install lock)."""
+    root = root if root is not None else cache_root()
+    with install_lock(root):
+        return point_current(version, root)
+
+
+def point_current(version: str, root: Path) -> Path:
+    """:func:`set_current` for a caller already holding :func:`install_lock`."""
     target = root / checked_version(version)
     link = root / CURRENT_LINK
-    tmp = root / f".{CURRENT_LINK}.tmp"
-    if tmp.is_symlink() or tmp.exists():
-        tmp.unlink()
+    tmp = root / f".{CURRENT_LINK}.{uuid.uuid4().hex}.tmp"
     tmp.symlink_to(target.name, target_is_directory=True)
-    os.replace(tmp, link)
+    try:
+        os.replace(tmp, link)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return link
 
 
