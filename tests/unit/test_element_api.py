@@ -14,7 +14,7 @@ def _fake_element(*, call_result=None, array_items=(), node_ids=None):
     sent: list[tuple[str, dict]] = []
     node_ids = list(node_ids or [])
 
-    async def _send(method, params=None):
+    async def _send(method, params=None, timeout=None):
         params = params or {}
         sent.append((method, params))
         if method == "DOM.resolveNode":

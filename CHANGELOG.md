@@ -9,6 +9,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `Browser.launch(chrome_log=path)` appends Chrome's stdout and stderr to a
   file. By default the output is discarded, keeping only its tail in memory.
+- `Element.release()` frees an element's handle in the page; later calls on it
+  raise `StaleElementError`.
+- `Tab.on_dialog(handler)` and `tellurium.browser.dialog.Dialog` (`type`,
+  `message`, `accept(text)`, `dismiss()`): every tab now answers JavaScript
+  dialogs. A handler that has not decided within 10 s, or that raises, yields
+  to the policy. Without a handler the tab policy applies (`"dismiss"` by default,
+  `beforeunload` accepted so navigations are never cancelled); before, an
+  `alert()` froze every later command on the tab.
 - Patched-binary auto-install: `tellurium download-browser --browser patched
   [--version]`, `update-browser` (installs; `--security-only`), `verify-browser
   --reinstall` now wired. Releases are fetched from GitHub Releases of
@@ -143,6 +151,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   about 1.5 s. Only new bytes are scanned now.
 - `PipePosixTransport.close()` left the read end of the CDP pipe open: one fd
   leaked per launch/close cycle.
+- Element handles no longer pin DOM nodes: every query resolves into the tab's
+  `objectGroup`, an `Element` dropped by Python releases its handle (batched),
+  result arrays are released right after use, and the group is released on
+  each main-frame navigation and on `Tab.close()` (bounded to 0.5 s, so a
+  frozen page does not delay the close). Before, 20 rounds of
+  `select_all` over a 300-row feed kept ~12000 removed nodes alive.
+- Commands on an element are bounded (30 s): a page frozen by an open dialog
+  raises `TimeoutError` instead of hanging.
+- A stale element (its document navigated away, or it was released) raises
+  `StaleElementError` (a `CDPError`) instead of a bare
+  `CDP error -32000: Cannot find context with specified id`.
+- `Tab.select` and `wait_for` keep polling when a navigation replaces the
+  document between `DOM.getDocument` and `DOM.querySelector` (a popup swapping
+  `about:blank` for its page) instead of raising `CDPError`.
+- `Tab.select_all`, `xpath` and `xpath_all` skip a node removed between the
+  query and its resolution instead of raising `CDPError`.
+- `Tab.get(timeout=...)` now bounds the whole navigation, `Page.navigate`
+  included: a server that holds the response raised nothing before. On expiry
+  the load is stopped and `NavigationTimeoutError` (a builtin `TimeoutError`,
+  also on Python 3.10) names the URL and the phase (`commit`, `load`…). A
+  refused navigation raises `NavigationError` (a `RuntimeError`) with the URL
+  and a hint for `net::ERR_ABORTED` (204 responses, downloads). Enabling the
+  lifecycle events, `Page.stopLoading` on expiry and reading the title all
+  stay inside the same deadline.
+- `Tab.wait_for_navigation()` ignores iframe navigations, waits for the `load`
+  of the main-frame document that matches the pattern (not of an earlier page
+  in a redirect chain), returns on a back/forward-cache restore, and no longer
+  sets `tab.url` to an iframe URL.
 - Elements went stale after any later query: every `select`/`xpath`/`find`
   refreshes the DOM agent (`DOM.getDocument`), voiding all earlier nodeIds,
   so `h1 = select("h1"); select("p"); h1.text()` raised "No node with given

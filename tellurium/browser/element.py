@@ -6,6 +6,8 @@ import asyncio
 import random
 from typing import TYPE_CHECKING, Any
 
+from tellurium.browser.handles import elements_from_array, handles_of, resolve_node, send_on_handle
+
 if TYPE_CHECKING:
     from tellurium.browser.tab import Tab
     from tellurium.cdp.transport._session import Session
@@ -40,32 +42,6 @@ function(expr) {
 """
 
 
-async def _elements_from_remote_array(
-    session: Session, tab: Tab, array_object_id: str
-) -> list[Element]:
-    """Map a remote JS array of DOM nodes to a list of :class:`Element`.
-
-    Each element keeps the node's ``objectId`` directly: no ``DOM.requestNode``
-    round trip, and no nodeId that the next ``DOM.getDocument`` would void.
-    """
-    props = await session.send(
-        "Runtime.getProperties",
-        {
-            "objectId": array_object_id,
-            "ownProperties": True,
-        },
-    )
-    elements: list[Element] = []
-    for prop in props.get("result", []):
-        if not prop.get("name", "").isdigit():
-            continue
-        obj = prop.get("value", {})
-        object_id = obj.get("objectId")
-        if object_id:
-            elements.append(Element(session, tab, object_id=object_id))
-    return elements
-
-
 class Element:
     """Represents a DOM element backed by a CDP remote object.
 
@@ -76,6 +52,8 @@ class Element:
 
     All property accessors are async because they issue CDP calls.
     """
+
+    _released, _finalizer = False, None  # also for Element.__new__ test doubles
 
     def __init__(
         self,
@@ -88,7 +66,9 @@ class Element:
         self._session = session
         self._tab = tab
         self._node_id = node_id
-        self._object_id: str | None = object_id
+        self._object_id: str | None = None
+        if object_id:
+            self._bind(object_id)
         self._selector: str | None = (
             None  # CSS selector used to locate this element (for isolated-world queries)
         )
@@ -110,12 +90,24 @@ class Element:
         await element._resolve()
         return element
 
+    def _bind(self, object_id: str) -> None:
+        self._object_id = object_id
+        handles = handles_of(self._tab)
+        self._finalizer = handles.adopt(self, object_id) if handles else None
+
     async def _resolve(self) -> str:
-        """Resolve *nodeId* to a remote *objectId* (cached)."""
+        """Resolve *nodeId* to a remote *objectId* (cached) in the tab's group."""
         if self._object_id is None:
-            result = await self._session.send("DOM.resolveNode", {"nodeId": self._node_id})
-            self._object_id = result["object"]["objectId"]
+            self._bind(await resolve_node(self._session, self._tab, self._node_id, self._released))
         return self._object_id
+
+    async def release(self) -> None:
+        """Free this element's handle in the page; later calls raise ``StaleElementError``."""
+        object_id, self._object_id, self._released = self._object_id, None, True
+        if self._finalizer is not None:
+            self._finalizer.detach()
+        if object_id and (handles := handles_of(self._tab)):
+            await handles.release(object_id)
 
     async def _call_raw(
         self, function_declaration: str, arguments: list | None = None, return_by_value: bool = True
@@ -130,7 +122,7 @@ class Element:
         }
         if arguments:
             params["arguments"] = arguments
-        result = await self._session.send("Runtime.callFunctionOn", params)
+        result = await send_on_handle(self._session, "Runtime.callFunctionOn", params)
         remote = result.get("result", {})
         if remote.get("subtype") == "error":
             raise RuntimeError(remote.get("description", "callFunctionOn failed"))
@@ -153,7 +145,7 @@ class Element:
         array_id = remote.get("objectId")
         if not array_id or remote.get("subtype") != "array":
             return []
-        return await _elements_from_remote_array(self._session, self._tab, array_id)
+        return await elements_from_array(self._session, self._tab, array_id)
 
     async def _call_element(
         self, function_declaration: str, arguments: list | None = None
@@ -213,7 +205,7 @@ class Element:
     async def html(self) -> str:
         """Return the outer HTML of this element."""
         object_id = await self._resolve()
-        result = await self._session.send("DOM.getOuterHTML", {"objectId": object_id})
+        result = await send_on_handle(self._session, "DOM.getOuterHTML", {"objectId": object_id})
         return result.get("outerHTML", "")
 
     async def attr(self, name: str) -> str | None:
@@ -226,7 +218,7 @@ class Element:
     async def attributes(self) -> dict[str, str]:
         """Return all attributes as a dict."""
         object_id = await self._resolve()
-        result = await self._session.send("DOM.describeNode", {"objectId": object_id})
+        result = await send_on_handle(self._session, "DOM.describeNode", {"objectId": object_id})
         flat = result.get("node", {}).get("attributes", [])
         return dict(zip(flat[::2], flat[1::2], strict=False))
 
@@ -365,7 +357,8 @@ class Element:
     async def upload(self, *files: str) -> None:
         """Set files on an ``<input type="file">`` element."""
         object_id = await self._resolve()
-        await self._session.send(
+        await send_on_handle(
+            self._session,
             "DOM.setFileInputFiles",
             {"objectId": object_id, "files": list(files)},
         )
@@ -402,7 +395,7 @@ class Element:
 
     async def focus(self) -> None:
         object_id = await self._resolve()
-        await self._session.send("DOM.focus", {"objectId": object_id})
+        await send_on_handle(self._session, "DOM.focus", {"objectId": object_id})
 
     async def drag_to(self, target: Element, steps: int = 10) -> None:
         """Drag this element to *target* with intermediate mouse-move steps."""

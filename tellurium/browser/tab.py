@@ -4,13 +4,25 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import fnmatch
 import logging
 import random
 import time
 from typing import TYPE_CHECKING, Any
 
-from tellurium.browser.element import Element, _elements_from_remote_array
+from tellurium.browser.dialog import DialogGuard, DialogHandler
+from tellurium.browser.element import Element
+from tellurium.browser.handles import (
+    HandleGroup,
+    StaleElementError,
+    as_stale,
+    elements_from_array,
+)
+from tellurium.browser.navigation import (
+    check_wait_until,
+    navigate,
+    url_matches,
+    wait_for_main_frame,
+)
 from tellurium.cdp.types import CDPError
 
 logger = logging.getLogger("tellurium")
@@ -41,28 +53,7 @@ _TEXT_WALKER_JS = """
 """
 
 
-# Tab.get(wait_until=...) -> Page.lifecycleEvent name (None: return on commit).
-_WAIT_UNTIL_EVENTS: dict[str, str | None] = {
-    "commit": None,
-    "domcontentloaded": "DOMContentLoaded",
-    "load": "load",
-    "networkidle": "networkIdle",
-}
-
-
-def url_matches(pattern: str, url: str) -> bool:
-    """Match *url* against *pattern*.
-
-    Design doc 03 specifies glob patterns for ``wait_for_url`` /
-    ``wait_for_navigation``.  A pattern containing ``*`` or ``?`` is matched
-    with :func:`fnmatch.fnmatchcase`; anything else falls back to the historical
-    substring match, so ``wait_for_url("/dashboard")`` keeps working.
-    """
-    if not url:
-        return False
-    if "*" in pattern or "?" in pattern:
-        return fnmatch.fnmatchcase(url, pattern)
-    return pattern in url
+__all__ = ["Tab", "url_matches"]
 
 
 class Tab:
@@ -86,6 +77,7 @@ class Tab:
         *,
         stealth_idle: bool = False,
         mouse_profile: str = "normal",
+        dialogs: str = "dismiss",
     ):
         from tellurium.stealth.human import MOUSE_PROFILES
 
@@ -96,6 +88,8 @@ class Tab:
         self._mouse_profile = mouse_profile
         self._typo_rng = None  # lazily seeded from the stealth profile
         self._session = session
+        self._dialogs = DialogGuard(session, dialogs)
+        self._handles = HandleGroup(session)
         self._browser = browser
         self._target_id = target_id
         self._url: str = ""
@@ -126,6 +120,7 @@ class Tab:
                 # Track the main frame id (parentId absent means it's the main frame)
                 if not frame.get("parentId"):
                     self._frame_id = fid
+                    self._handles.rotate()  # the old document's handles are gone
 
         self._session.on("Page.frameNavigated", _on_frame_navigated)
 
@@ -144,36 +139,22 @@ class Tab:
         * ``"networkidle"`` — no network activity for 500 ms after load
 
         A same-document navigation (``#fragment``) returns right away: there
-        is no new document to wait for.
+        is no new document to wait for. *timeout* covers the whole navigation;
+        on expiry :class:`NavigationTimeoutError` (a ``TimeoutError``) names
+        the URL and the phase. A refused navigation raises ``NavigationError``.
         """
-        if wait_until not in _WAIT_UNTIL_EVENTS:
-            raise ValueError(
-                f"Unknown wait_until {wait_until!r}; expected one of {sorted(_WAIT_UNTIL_EVENTS)}"
-            )
-        await self._enable_lifecycle_events()
-        event_name = _WAIT_UNTIL_EVENTS[wait_until]
-        events: list[dict] = []
-        arrived = asyncio.Event()
-
-        def _on_lifecycle(params: dict) -> None:
-            events.append(params)
-            arrived.set()
-
-        self._session.on("Page.lifecycleEvent", _on_lifecycle)
-        try:
-            result = await self._session.send("Page.navigate", {"url": url})
-            if result.get("errorText"):
-                raise RuntimeError(f"Navigation failed: {result['errorText']}")
-            loader_id = result.get("loaderId")
-            if event_name is not None and loader_id:
-                await asyncio.wait_for(
-                    _wait_lifecycle(events, arrived, result.get("frameId"), loader_id, event_name),
-                    timeout=timeout,
-                )
-        finally:
-            self._session.off("Page.lifecycleEvent", _on_lifecycle)
+        check_wait_until(wait_until)
+        info = await navigate(
+            self._session,
+            url,
+            wait_until=wait_until,
+            timeout=timeout,
+            dialogs=self._dialogs,
+            prepare=self._enable_lifecycle_events,
+        )
         self._url = url
-        await self._refresh_document_info()
+        if info is not None:
+            self._title, self._url = info[0], info[1] or url
         if self._action_timer is not None:
             # Design doc 05: navigate -> click / navigate -> type carry their
             # own (longer) transition delays.
@@ -182,29 +163,31 @@ class Tab:
     async def _enable_lifecycle_events(self) -> None:
         if self._lifecycle_enabled:
             return
-        await self._session.send("Page.enable", {})
-        await self._session.send("Page.setLifecycleEventsEnabled", {"enabled": True})
+        await self._session.send("Page.enable", {}, timeout=10)
+        await self._session.send("Page.setLifecycleEventsEnabled", {"enabled": True}, timeout=10)
         self._lifecycle_enabled = True
-
-    async def _refresh_document_info(self) -> None:
-        """Read the title and the final URL (after redirects) of the document."""
-        try:
-            info = await self.eval("[document.title, location.href]") or ["", ""]
-        except Exception:  # noqa: BLE001 — never worth failing a navigation
-            logger.debug("Could not read document title/url", exc_info=True)
-            return
-        self._title = info[0] or ""
-        if info[1]:
-            self._url = info[1]
 
     async def close(self) -> None:
         """Close this tab. Further commands on it raise ``ConnectionError``."""
         if not self._closed:
-            await self._browser._close_tab(self)
+            self._dialogs.close()
+            try:
+                await self._handles.close()
+            finally:
+                await self._browser._close_tab(self)
 
     @property
     def closed(self) -> bool:
         return self._closed
+
+    def on_dialog(self, handler: DialogHandler | None) -> None:
+        """Call *handler* (sync or async) with each :class:`Dialog` the page opens.
+
+        The handler decides with ``dialog.accept(text)`` / ``dialog.dismiss()``;
+        an undecided dialog gets the tab policy (``Browser.launch(dialogs=...)``,
+        default ``"dismiss"``). ``None`` removes the handler.
+        """
+        self._dialogs.set_handler(handler)
 
     async def back(self) -> None:
         """Go back in history."""
@@ -235,27 +218,14 @@ class Tab:
         return self._title
 
     async def wait_for_navigation(self, url: str | None = None, timeout: float = 30) -> None:
-        """Wait for a navigation (frame-stopped-loading) event.
+        """Wait for the main frame to navigate and fire ``load``.
 
-        If *url* is given, wait until the frame URL matches it — glob pattern
-        when it contains ``*`` or ``?``, substring match otherwise.
+        If *url* is given, wait until the new URL matches it — glob pattern
+        when it contains ``*`` or ``?``, substring match otherwise. Iframe
+        navigations are ignored. Raises :class:`NavigationTimeoutError`.
         """
-        done = asyncio.get_running_loop().create_future()
-
-        def _on_navigated(params: dict) -> None:
-            if done.done():
-                return
-            new_url = params.get("url", params.get("frame", {}).get("url", ""))
-            if url is None or url_matches(url, new_url):
-                done.set_result(new_url)
-
-        await self._session.send("Page.enable", {})
-        self._session.on("Page.frameNavigated", _on_navigated)
-        try:
-            result_url = await asyncio.wait_for(done, timeout=timeout)
-            self._url = result_url
-        finally:
-            self._session.off("Page.frameNavigated", _on_navigated)
+        await self._enable_lifecycle_events()
+        self._url = await wait_for_main_frame(self._session, url, timeout=timeout)
 
     # ------------------------------------------------------------------
     # JavaScript
@@ -295,7 +265,9 @@ class Tab:
         node_id = query.get("nodeId", 0)
         if not node_id:
             raise LookupError(f"No element matching {selector!r}")
-        resolve = await self._session.send("DOM.resolveNode", {"nodeId": node_id})
+        resolve = await self._session.send(
+            "DOM.resolveNode", {"nodeId": node_id, "objectGroup": self._handles.name}
+        )
         object_id = resolve["object"]["objectId"]
         # Convert arrow functions
         fn = expression
@@ -308,15 +280,18 @@ class Tab:
             if not body.startswith("{"):
                 body = f"{{ return {body}; }}"
             fn = f"function{params} {body}"
-        res = await self._session.send(
-            "Runtime.callFunctionOn",
-            {
-                "functionDeclaration": fn,
-                "objectId": object_id,
-                "returnByValue": True,
-                "awaitPromise": True,
-            },
-        )
+        try:
+            res = await self._session.send(
+                "Runtime.callFunctionOn",
+                {
+                    "functionDeclaration": fn,
+                    "objectId": object_id,
+                    "returnByValue": True,
+                    "awaitPromise": True,
+                },
+            )
+        finally:
+            self._handles.discard(object_id)
         remote = res.get("result", {})
         if remote.get("type") == "undefined":
             return None
@@ -347,16 +322,25 @@ class Tab:
         except CDPError:
             return None
 
-    async def select(self, selector: str, *, timeout: float = 10) -> Element:
-        """Wait for a CSS-matching element and return it."""
-        deadline = asyncio.get_running_loop().time() + timeout
-        while True:
+    async def _query_selector(self, selector: str) -> Element | None:
+        """First match of *selector*; ``None`` also when the document was swapped mid-query."""
+        try:
             root = await self._get_document_root()
             result = await self._session.send(
                 "DOM.querySelector", {"nodeId": root, "selector": selector}
             )
-            nid = result.get("nodeId", 0)
-            element = await self._element_or_none(nid, selector) if nid else None
+        except CDPError as exc:  # a navigation replaced the root between the two calls
+            if not isinstance(as_stale(exc), StaleElementError):
+                raise  # e.g. an invalid selector
+            return None
+        nid = result.get("nodeId", 0)
+        return await self._element_or_none(nid, selector) if nid else None
+
+    async def select(self, selector: str, *, timeout: float = 10) -> Element:
+        """Wait for a CSS-matching element and return it."""
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            element = await self._query_selector(selector)
             if element is not None:
                 return element
             if asyncio.get_running_loop().time() >= deadline:
@@ -380,10 +364,8 @@ class Tab:
             result = await self._session.send(
                 "DOM.querySelectorAll", {"nodeId": root, "selector": selector}
             )
-            elements = [
-                await Element._from_node_id(self._session, self, nid)
-                for nid in result.get("nodeIds", [])
-            ]
+            found = [await self._element_or_none(nid) for nid in result.get("nodeIds", [])]
+            elements = [element for element in found if element is not None]
             if elements or asyncio.get_running_loop().time() >= deadline:
                 return elements
             await asyncio.sleep(0.2)
@@ -427,13 +409,14 @@ class Tab:
                 "expression": js,
                 "returnByValue": False,
                 "awaitPromise": False,
+                "objectGroup": self._handles.name,
             },
         )
         remote = result.get("result", {})
         if remote.get("type") != "object" or remote.get("subtype") != "array":
             return []
 
-        return await _elements_from_remote_array(self._session, self, remote["objectId"])
+        return await elements_from_array(self._session, self, remote["objectId"])
 
     async def xpath(self, expression: str, *, timeout: float = 10) -> Element | None:
         """Evaluate an XPath expression. Returns first match or *None*.
@@ -457,8 +440,9 @@ class Tab:
                         {"searchId": search_id, "fromIndex": 0, "toIndex": 1},
                     )
                     nids = nodes.get("nodeIds", [])
-                    if nids and nids[0]:
-                        return await Element._from_node_id(self._session, self, nids[0])
+                    element = await self._element_or_none(nids[0]) if nids and nids[0] else None
+                    if element is not None:
+                        return element
             finally:
                 if search_id:
                     try:
@@ -493,11 +477,8 @@ class Tab:
                         "DOM.getSearchResults",
                         {"searchId": search_id, "fromIndex": 0, "toIndex": count},
                     )
-                    elements = [
-                        await Element._from_node_id(self._session, self, nid)
-                        for nid in nodes.get("nodeIds", [])
-                        if nid
-                    ]
+                    found = [await self._element_or_none(n) for n in nodes.get("nodeIds", []) if n]
+                    elements = [element for element in found if element is not None]
             finally:
                 if search_id:
                     try:
@@ -534,14 +515,7 @@ class Tab:
             )
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
-            element: Element | None = None
-            root = await self._get_document_root()
-            result = await self._session.send(
-                "DOM.querySelector", {"nodeId": root, "selector": selector}
-            )
-            node_id = result.get("nodeId", 0)
-            if node_id:
-                element = await self._element_or_none(node_id, selector)
+            element = await self._query_selector(selector)
 
             if state == "attached" and element is not None:
                 return element
@@ -1310,27 +1284,3 @@ def _json_escape(s: str) -> str:
     import json
 
     return json.dumps(s)
-
-
-async def _wait_lifecycle(
-    events: list[dict], arrived: asyncio.Event, frame_id: str | None, loader_id: str, name: str
-) -> None:
-    """Wait for lifecycle event *name* of the document loaded by *loader_id*.
-
-    A client-side redirect commits a new document in the same frame: its
-    ``init`` event hands over the loader we wait on, as ``loadEventFired``
-    used to.
-    """
-    seen = 0
-    while True:
-        while seen < len(events):
-            event = events[seen]
-            seen += 1
-            if frame_id and event.get("frameId") != frame_id:
-                continue
-            if event.get("name") == "init" and event.get("loaderId") != loader_id:
-                loader_id = event.get("loaderId")
-            elif event.get("loaderId") == loader_id and event.get("name") == name:
-                return
-        arrived.clear()
-        await arrived.wait()
