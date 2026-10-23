@@ -42,3 +42,23 @@ def test_intercepted_request_exported():
     from tellurium import InterceptedRequest
 
     assert InterceptedRequest is not None
+
+
+def test_r1_names_exported():
+    import tellurium
+    from tellurium.browser.dialog import Dialog
+    from tellurium.browser.handles import StaleElementError
+    from tellurium.browser.launcher import LaunchError
+    from tellurium.browser.navigation import NavigationError, NavigationTimeoutError
+    from tellurium.cdp.types import TargetCrashedError
+
+    for obj in (
+        Dialog,
+        StaleElementError,
+        LaunchError,
+        NavigationError,
+        NavigationTimeoutError,
+        TargetCrashedError,
+    ):
+        assert getattr(tellurium, obj.__name__) is obj
+        assert obj.__name__ in tellurium.__all__

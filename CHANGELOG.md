@@ -7,6 +7,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Browser.launch(dialogs="dismiss" | "accept" | "manual")` sets the dialog
+  policy of every tab (initial, `new_tab`, popups, context tabs).
+- `tellurium` exports `Dialog`, `LaunchError`, `NavigationError`,
+  `NavigationTimeoutError`, `StaleElementError` and `TargetCrashedError`.
 - `Browser.launch(chrome_log=path)` appends Chrome's stdout and stderr to a
   file. By default the output is discarded, keeping only its tail in memory.
 - `Element.release()` frees an element's handle in the page; later calls on it
@@ -101,6 +105,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The initial tab enables the `Page` domain at launch, so a dialog opened
+  before its first `get()` (e.g. by `tab.eval("alert(1)")`) is answered
+  instead of blocking the tab.
+- `new_tab()` raises the builtin `TimeoutError` with the target id when the
+  new page is not ready in time (on Python 3.10 it was `asyncio.TimeoutError`).
 - Chrome for Testing extraction checks every symlink once the archive is
   unpacked, resolving it as the kernel does: a chain of links (`s1 -> ../..`,
   `l -> s1/../../../x`) that looked inside the install dir lexically but led

@@ -129,3 +129,31 @@ async def test_handler_that_never_decides_times_out_to_the_policy(browser):
     tab.on_dialog(handler)
     await _guard(tab.get(_page("<p>x</p>")))
     assert await asyncio.wait_for(tab.eval("confirm('ok?')"), timeout=5) is False
+
+
+async def test_launch_dialog_policy_reaches_every_tab():
+    from tellurium import Browser
+
+    browser = await Browser.launch(headless=True, dialogs="accept")
+    try:
+        main = browser.main_tab
+        await _guard(main.get(_page("<p>x</p>")))
+        assert await _guard(main.eval("confirm('sure?')")) is True
+        other = await _guard(browser.new_tab(_page("<p>y</p>")))
+        assert await _guard(other.eval("confirm('sure?')")) is True
+    finally:
+        await browser.close()
+
+
+async def test_alert_on_the_initial_tab_before_any_get_is_dismissed(browser):
+    tab = browser.main_tab
+    assert await _guard(tab.eval("alert('early'); 7", timeout=5)) == 7
+
+
+async def test_unknown_launch_dialog_policy_is_refused_before_chrome_starts():
+    import pytest
+
+    from tellurium import Browser
+
+    with pytest.raises(ValueError, match="dialog"):
+        await Browser.launch(headless=True, executable="/nonexistent/chrome", dialogs="ignore")

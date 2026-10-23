@@ -11,6 +11,7 @@ from typing import Any
 
 from tellurium.browser.context import BrowserContext
 from tellurium.browser.cookie import Cookie, clear_jar, read_jar
+from tellurium.browser.dialog import check_policy
 from tellurium.browser.engine import PatchedEngine, StockEngine
 from tellurium.browser.launcher import (
     _detect_chrome_version,
@@ -56,6 +57,7 @@ class Browser:
         self._stealth_profile = None
         self._stealth_idle = False
         self._mouse_profile = "normal"
+        self._dialogs = "dismiss"  # policy for every tab, see Browser.launch
         # Manual override applied to every session when stealth is off
         # (with stealth on the StealthEngine already owns the timezone).
         self._timezone_override: str | None = None
@@ -87,6 +89,7 @@ class Browser:
         viewport: tuple[int, int] | None = None,
         mouse_profile: str = "normal",
         chrome_log: str | Path | None = None,
+        dialogs: str = "dismiss",
     ) -> Browser:
         """Launch a Chrome process and return a connected :class:`Browser`.
 
@@ -149,6 +152,10 @@ class Browser:
             File that receives Chrome's stdout and stderr (appended). By
             default the output is discarded, keeping only its tail to explain
             a failed launch.
+        dialogs:
+            What every tab does with a JavaScript dialog nobody handles with
+            ``Tab.on_dialog``: ``"dismiss"`` (default; ``beforeunload`` is
+            accepted), ``"accept"`` or ``"manual"`` (left open).
 
         Launch is all-or-nothing: on failure or cancellation the process,
         pipe, temporary profile and proxy forwarder are released. When
@@ -170,6 +177,7 @@ class Browser:
                 raise ValueError("viewport width and height must be positive")
 
         self = cls()
+        self._dialogs = check_policy(dialogs)
         self._stealth_idle = stealth_idle
         self._mouse_profile = mouse_profile
         languages = list(languages) if languages is not None else None
@@ -430,12 +438,16 @@ class Browser:
 
             if page_target:
                 session = await self._router.attach(page_target["targetId"])
+                # Without Page.enable no javascriptDialogOpening is reported,
+                # so a dialog opened before the first get() would stay open.
+                await session.send("Page.enable", {}, timeout=10)
                 tab = Tab(
                     session,
                     self,
                     page_target["targetId"],
                     stealth_idle=stealth_idle,
                     mouse_profile=mouse_profile,
+                    dialogs=self._dialogs,
                 )
                 tab._url = page_target.get("url", "")
                 self._tabs.append(tab)
@@ -603,6 +615,7 @@ class Browser:
             target_id,
             stealth_idle=self._stealth_idle,
             mouse_profile=self._mouse_profile,
+            dialogs=self._dialogs,
         )
         tab._url = info.get("url", "")
         self._tabs.append(tab)
@@ -638,7 +651,10 @@ class Browser:
 
     async def _wait_adopted(self, target_id: str, timeout: float = 10) -> Tab:
         adopted = self._adopted.setdefault(target_id, asyncio.get_running_loop().create_future())
-        return await asyncio.wait_for(asyncio.shield(adopted), timeout=timeout)
+        try:
+            return await asyncio.wait_for(asyncio.shield(adopted), timeout=timeout)
+        except asyncio.TimeoutError:  # not the builtin TimeoutError on Python 3.10
+            raise TimeoutError(f"New tab {target_id} was not ready within {timeout}s") from None
 
     def _on_target_info_changed(self, params: dict) -> None:
         info = params.get("targetInfo", {})
