@@ -20,7 +20,7 @@ from tellurium.browser.launcher import (
     validate_extension_paths,
 )
 from tellurium.browser.process import BrowserProcess
-from tellurium.browser.proxy import ProxyForwarder, parse_proxy_url
+from tellurium.browser.proxy import forwarder_for, proxy_server_flag
 from tellurium.browser.tab import Tab, url_matches
 from tellurium.cdp.transport._pipeline import CommandPipeline
 from tellurium.cdp.transport._session import SessionRouter
@@ -104,9 +104,10 @@ class Browser:
         args:
             Extra CLI flags passed to Chrome.
         proxy:
-            Proxy URL, e.g. ``"http://user:pass@host:port"``.  If the URL
-            contains credentials a local :class:`ProxyForwarder` is started
-            automatically so Chrome only sees ``localhost:<port>``.
+            Proxy URL: ``http``, ``https``, ``socks4`` or ``socks5`` (scheme
+            kept for Chrome). With credentials (HTTP/HTTPS only) a local
+            :class:`ProxyForwarder` adds them, so Chrome only sees
+            ``127.0.0.1:<port>``.
         stealth:
             Enable stealth heuristics (engine-level).
         stealth_idle:
@@ -234,19 +235,14 @@ class Browser:
                     ", ".join(extensions),
                 )
 
+        # Validated before any resource exists (scheme, SOCKS credentials).
+        forwarder = forwarder_for(proxy) if proxy else None
+        proxy_flag = proxy_server_flag(proxy) if proxy else None
         try:
             # 3. Proxy with auth -> start forwarder
-            proxy_flag: str | None = None
-            if proxy:
-                info = parse_proxy_url(proxy)
-                if info["username"] and info["password"]:
-                    forwarder = ProxyForwarder(
-                        info["host"], info["port"], info["username"], info["password"]
-                    )
-                    await self._proc.start_forwarder(forwarder)
-                    proxy_flag = f"localhost:{forwarder.port}"
-                else:
-                    proxy_flag = f"{info['host']}:{info['port']}"
+            if forwarder is not None:
+                await self._proc.start_forwarder(forwarder)
+                proxy_flag = f"http://127.0.0.1:{forwarder.port}"
 
             # 4. User-data dir
             self._user_data_dir = user_data_dir or self._proc.make_temp_profile()

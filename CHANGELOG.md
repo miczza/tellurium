@@ -101,6 +101,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Browser.launch(proxy=...)` keeps the scheme: `socks5://`, `socks4://` and
+  `https://` proxies were passed to Chrome as plain HTTP proxies. IPv6 hosts are
+  bracketed, a bare `host:port` means HTTP, unknown schemes and SOCKS URLs with
+  credentials (Chrome cannot authenticate to SOCKS) raise `ValueError` before
+  Chrome starts. Percent-encoded proxy credentials are decoded, and an
+  authenticated `https://` proxy is reached over TLS by the forwarder.
 - `Browser.clear_cookies()` and `clear_cookies(domain)` work: they used the
   `Network` domain on the browser session, which has none, and always failed.
 - `Browser.get_cookies(domain)` (and `save_cookies(domain=...)`) match the
