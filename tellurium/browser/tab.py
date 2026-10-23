@@ -7,6 +7,7 @@ import base64
 import logging
 import random
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from tellurium.browser.dialog import DialogGuard, DialogHandler
@@ -249,34 +250,30 @@ class Tab:
             return None
         return remote.get("value")
 
-    async def eval_on(self, selector: str, expression: str) -> Any:
+    async def eval_on(self, selector: str, expression: str, timeout: float | None = None) -> Any:
         """Run JS on the first element matching *selector*.
 
         *expression* is a function body called with the element as ``this``.
+        *timeout* bounds each CDP command (default: the session's, 30 s).
         """
-        doc = await self._session.send("DOM.getDocument", {"depth": 0})
-        root_id = doc["root"]["nodeId"]
-        query = await self._session.send(
-            "DOM.querySelector", {"nodeId": root_id, "selector": selector}
+        send = self._session.send
+        doc = await send("DOM.getDocument", {"depth": 0}, timeout=timeout)
+        query = await send(
+            "DOM.querySelector",
+            {"nodeId": doc["root"]["nodeId"], "selector": selector},
+            timeout=timeout,
         )
         node_id = query.get("nodeId", 0)
         if not node_id:
             raise LookupError(f"No element matching {selector!r}")
-        resolve = await self._session.send(
-            "DOM.resolveNode", {"nodeId": node_id, "objectGroup": self._handles.name}
-        )
-        object_id = resolve["object"]["objectId"]
-        # Convert arrow functions
+        node = {"nodeId": node_id, "objectGroup": self._handles.name}
+        object_id = (await send("DOM.resolveNode", node, timeout=timeout))["object"]["objectId"]
         fn = expression
-        if "=>" in fn and not fn.strip().startswith("function"):
-            parts = fn.split("=>", 1)
-            params = parts[0].strip()
-            body = parts[1].strip()
-            if not params.startswith("("):
-                params = f"({params})"
-            if not body.startswith("{"):
-                body = f"{{ return {body}; }}"
-            fn = f"function{params} {body}"
+        if "=>" in fn and not fn.strip().startswith("function"):  # "el => el.id"
+            args, body = (part.strip() for part in fn.split("=>", 1))
+            args = args if args.startswith("(") else f"({args})"
+            body = body if body.startswith("{") else f"{{ return {body}; }}"
+            fn = f"function{args} {body}"
         try:
             res = await self._session.send(
                 "Runtime.callFunctionOn",
@@ -286,6 +283,7 @@ class Tab:
                     "returnByValue": True,
                     "awaitPromise": True,
                 },
+                timeout=timeout,
             )
         finally:
             self._handles.discard(object_id)
@@ -540,12 +538,14 @@ class Tab:
         full_page: bool = False,
         quality: int | None = None,
         format: str = "png",
+        timeout: float | None = None,
     ) -> bytes:
         """Capture a screenshot of the visible viewport or full page.
 
         *quality* (0-100) only applies to lossy formats (``"jpeg"``,
         ``"webp"``); Chrome rejects it for PNG, so it is dropped with a
-        warning instead of failing the call.
+        warning instead of failing the call. *timeout* bounds each CDP
+        command (default: the session's, 30 s; a tall full page may need more).
         """
         params: dict[str, Any] = {"format": format}
         if quality is not None:
@@ -558,7 +558,7 @@ class Tab:
             else:
                 params["quality"] = int(quality)
         if full_page:
-            metrics = await self._session.send("Page.getLayoutMetrics", {})
+            metrics = await self._session.send("Page.getLayoutMetrics", {}, timeout=timeout)
             content_size = metrics.get("contentSize", metrics.get("cssContentSize", {}))
             params["clip"] = {
                 "x": 0,
@@ -567,22 +567,21 @@ class Tab:
                 "height": content_size.get("height", 1080),
                 "scale": 1,
             }
-        result = await self._session.send("Page.captureScreenshot", params)
+        result = await self._session.send("Page.captureScreenshot", params, timeout=timeout)
         data = base64.b64decode(result["data"])
         if path:
-            from pathlib import Path as P
-
-            P(path).write_bytes(data)
+            await asyncio.to_thread(Path(path).write_bytes, data)
         return data
 
     async def content(self) -> str:
         """Return the full page HTML."""
-        doc = await self._session.send("DOM.getDocument", {"depth": 0})
-        root_id = doc["root"]["nodeId"]
+        root_id = await self._get_document_root()
         result = await self._session.send("DOM.getOuterHTML", {"nodeId": root_id})
         return result.get("outerHTML", "")
 
-    async def pdf(self, path: str | None = None, **opts: Any) -> bytes:
+    async def pdf(
+        self, path: str | None = None, *, timeout: float | None = None, **opts: Any
+    ) -> bytes:
         """Render the page to PDF via ``Page.printToPDF`` and return the bytes.
 
         *path* — when given, the bytes are also written there.
@@ -590,19 +589,18 @@ class Tab:
         (``landscape``, ``printBackground``, ``scale``, ``paperWidth``,
         ``paperHeight``, ``marginTop``, ``pageRanges``, ``preferCSSPageSize``…).
         ``printBackground=True`` is the default here because a PDF without
-        backgrounds rarely matches what the page looks like.
+        backgrounds rarely matches what the page looks like. *timeout* bounds
+        the command (default: the session's, 30 s).
 
         Chrome only implements ``Page.printToPDF`` in headless mode; a headed
         browser answers with a CDP error ("PrintToPDF is not implemented").
         """
         params: dict[str, Any] = {"printBackground": True, "transferMode": "ReturnAsBase64"}
         params.update(opts)
-        result = await self._session.send("Page.printToPDF", params)
+        result = await self._session.send("Page.printToPDF", params, timeout=timeout)
         data = base64.b64decode(result.get("data", ""))
         if path:
-            from pathlib import Path as P
-
-            P(path).write_bytes(data)
+            await asyncio.to_thread(Path(path).write_bytes, data)
         return data
 
     # ------------------------------------------------------------------

@@ -7,6 +7,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Tab.eval_on(..., timeout=)`, `Tab.screenshot(..., timeout=)` and
+  `Tab.pdf(..., timeout=)` bound their CDP commands per call (a tall full-page
+  screenshot or a slow promise could only be extended through the session-wide
+  30 s default). `screenshot` and `pdf` write the file off the event loop.
 - `Browser.launch(dialogs="dismiss" | "accept" | "manual")` sets the dialog
   policy of every tab (initial, `new_tab`, popups, context tabs).
 - `tellurium` exports `Dialog`, `LaunchError`, `NavigationError`,
