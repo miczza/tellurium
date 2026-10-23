@@ -10,6 +10,7 @@ import random
 import time
 from typing import TYPE_CHECKING, Any
 
+from tellurium.browser.dialog import DialogGuard, DialogHandler
 from tellurium.browser.element import Element, _elements_from_remote_array
 from tellurium.cdp.types import CDPError
 
@@ -86,6 +87,7 @@ class Tab:
         *,
         stealth_idle: bool = False,
         mouse_profile: str = "normal",
+        dialogs: str = "dismiss",
     ):
         from tellurium.stealth.human import MOUSE_PROFILES
 
@@ -96,6 +98,7 @@ class Tab:
         self._mouse_profile = mouse_profile
         self._typo_rng = None  # lazily seeded from the stealth profile
         self._session = session
+        self._dialogs = DialogGuard(session, dialogs)
         self._browser = browser
         self._target_id = target_id
         self._url: str = ""
@@ -205,6 +208,15 @@ class Tab:
     @property
     def closed(self) -> bool:
         return self._closed
+
+    def on_dialog(self, handler: DialogHandler | None) -> None:
+        """Call *handler* (sync or async) with each :class:`Dialog` the page opens.
+
+        The handler decides with ``dialog.accept(text)`` / ``dialog.dismiss()``;
+        an undecided dialog gets the tab policy (``Browser.launch(dialogs=...)``,
+        default ``"dismiss"``). ``None`` removes the handler.
+        """
+        self._dialogs.set_handler(handler)
 
     async def back(self) -> None:
         """Go back in history."""

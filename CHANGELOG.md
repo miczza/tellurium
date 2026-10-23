@@ -7,6 +7,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Tab.on_dialog(handler)` and `tellurium.browser.dialog.Dialog` (`type`,
+  `message`, `accept(text)`, `dismiss()`): every tab now answers JavaScript
+  dialogs. Without a handler the tab policy applies (`"dismiss"` by default,
+  `beforeunload` accepted so navigations are never cancelled); before, an
+  `alert()` froze every later command on the tab.
 - Patched-binary auto-install: `tellurium download-browser --browser patched
   [--version]`, `update-browser` (installs; `--security-only`), `verify-browser
   --reinstall` now wired. Releases are fetched from GitHub Releases of
