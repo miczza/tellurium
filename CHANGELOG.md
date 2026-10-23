@@ -7,6 +7,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Browser.launch(chrome_log=path)` appends Chrome's stdout and stderr to a
+  file. By default the output is discarded, keeping only its tail in memory.
 - Patched-binary auto-install: `tellurium download-browser --browser patched
   [--version]`, `update-browser` (installs; `--security-only`), `verify-browser
   --reinstall` now wired. Releases are fetched from GitHub Releases of
@@ -84,6 +86,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Chrome's stdout and stderr went to pipes nobody read: once about 64 KiB of
+  log piled up (failed TLS handshakes, `--enable-logging=stderr`) Chrome
+  blocked and every CDP command hung. The output is now drained on a thread
+  (or written to `chrome_log`).
+- `Browser.launch()` is all-or-nothing: on failure or cancellation (e.g.
+  `asyncio.wait_for` timing out) the Chrome process is reaped and the pipe,
+  temporary profile and proxy forwarder are released. When Chrome exits during
+  launch, `LaunchError` reports its exit code and last output (a profile
+  already in use, a missing library) instead of `ConnectionError('Browser pipe
+  closed')`.
+- `Browser.close()` stops Chrome before closing its pipe (on Windows closing a
+  pipe with a pending read can block), reaps it without blocking the event
+  loop, and still releases everything when cancelled.
+- The CDP pipe did not reach Chrome when the parent's pipe ends landed on fds
+  3 or 4 (an embedder with few open fds): the child closed the end it had just
+  set up.
 - A crashed renderer (OOM, killed process) left its tab in `browser.tabs` and
   every command on it waiting forever. `Target.targetCrashed` now fails the
   tab's pending and future commands with `TargetCrashedError` (a

@@ -6,8 +6,7 @@ import asyncio
 import dataclasses
 import logging
 import os
-import shutil
-import tempfile
+from pathlib import Path
 from typing import Any
 
 from tellurium.browser.context import BrowserContext
@@ -18,12 +17,11 @@ from tellurium.browser.launcher import (
     build_chrome_flags,
     build_load_extension_flag,
     check_chrome_version_for_extensions,
-    launch_chrome,
     validate_extension_paths,
 )
+from tellurium.browser.process import BrowserProcess
 from tellurium.browser.proxy import ProxyForwarder, parse_proxy_url
 from tellurium.browser.tab import Tab, url_matches
-from tellurium.cdp.transport import create_transport
 from tellurium.cdp.transport._session import SessionRouter
 from tellurium.cdp.types import TargetCrashedError
 from tellurium.stealth._grease import parse_grease_brands, parse_product_version
@@ -76,8 +74,8 @@ class Browser:
     """
 
     def __init__(self) -> None:
-        # Populated by launch()
-        self._process = None
+        # Populated by launch(); owns process, pipe, profile and forwarder
+        self._proc = BrowserProcess()
         self._router: SessionRouter | None = None
         self._dispatch_task: asyncio.Task | None = None
         self._tabs: list[Tab] = []
@@ -86,8 +84,6 @@ class Browser:
         self._adopted: dict[str, asyncio.Future] = {}
         self._contexts: dict[str, BrowserContext] = {}
         self._tabs_changed = asyncio.Event()
-        self._tmp_dir: str | None = None
-        self._forwarder: ProxyForwarder | None = None
         self._user_data_dir: str | None = None
         self._stealth_engine = None
         self._stealth_profile = None
@@ -123,6 +119,7 @@ class Browser:
         languages: list[str] | None = None,
         viewport: tuple[int, int] | None = None,
         mouse_profile: str = "normal",
+        chrome_log: str | Path | None = None,
     ) -> Browser:
         """Launch a Chrome process and return a connected :class:`Browser`.
 
@@ -180,6 +177,15 @@ class Browser:
             Wind-Mouse personality for every ``human=True`` mouse movement:
             ``"careful"``, ``"normal"`` (default) or ``"hasty"`` — see
             ``MOUSE_PROFILES`` in ``tellurium.stealth.human``.
+        chrome_log:
+            File that receives Chrome's stdout and stderr (appended). By
+            default the output is discarded, keeping only its tail to explain
+            a failed launch.
+
+        Launch is all-or-nothing: on failure or cancellation the process,
+        pipe, temporary profile and proxy forwarder are released. When
+        Chrome exits during launch, :class:`LaunchError` carries its exit
+        code and last output (e.g. a profile already in use).
         """
         from tellurium.stealth.human import MOUSE_PROFILES
 
@@ -236,7 +242,7 @@ class Browser:
 
         # 2a. Chrome 137+ branded check for extensions
         if extensions:
-            version = _detect_chrome_version(chrome_path)
+            version = await asyncio.to_thread(_detect_chrome_version, chrome_path)
             p = chrome_path.lower()
             is_branded_chrome = (
                 "google-chrome" in p  # linux binary name
@@ -261,279 +267,282 @@ class Browser:
                     ", ".join(extensions),
                 )
 
-        # 3. Proxy with auth -> start forwarder
-        proxy_flag: str | None = None
-        if proxy:
-            info = parse_proxy_url(proxy)
-            if info["username"] and info["password"]:
-                self._forwarder = ProxyForwarder(
-                    info["host"],
-                    info["port"],
-                    info["username"],
-                    info["password"],
-                )
-                await self._forwarder.start()
-                proxy_flag = f"localhost:{self._forwarder.port}"
-            else:
-                proxy_flag = f"{info['host']}:{info['port']}"
-
-        # 4. User-data dir
-        if user_data_dir:
-            self._user_data_dir = user_data_dir
-        else:
-            self._tmp_dir = tempfile.mkdtemp(prefix="tellurium_")
-            self._user_data_dir = self._tmp_dir
-
-        # 5. Build stealth profile & engine (if stealth=True)
-        stealth_engine = None
-        stealth_profile = None
-
-        if stealth:
-            from tellurium.stealth.engine import StealthEngine
-            from tellurium.stealth.profile import StealthProfile
-
-            # Build profile
-            if seed is not None:
-                stealth_profile = StealthProfile.from_seed(seed)
-            else:
-                stealth_profile = StealthProfile.auto()
-
-            # GeoIP resolution if proxy — resolve real exit IP
+        try:
+            # 3. Proxy with auth -> start forwarder
+            proxy_flag: str | None = None
             if proxy:
-                try:
-                    from tellurium.stealth.geoip import resolve_exit_ip, resolve_geoip
-
-                    forwarder_port = self._forwarder.port if self._forwarder else None
-                    exit_ip = resolve_exit_ip(proxy, forwarder_port)
-                    logger.info("Proxy exit IP: %s", exit_ip)
-                    geo = resolve_geoip(exit_ip)
-                    stealth_profile = dataclasses.replace(
-                        stealth_profile,
-                        languages=geo.languages,
-                        timezone=geo.timezone,
-                        locale=geo.languages[0],
-                        accept_language=", ".join(
-                            f"{lang};q={1.0 - i * 0.1:.1f}" if i > 0 else lang
-                            for i, lang in enumerate(geo.languages)
-                        ),
+                info = parse_proxy_url(proxy)
+                if info["username"] and info["password"]:
+                    forwarder = ProxyForwarder(
+                        info["host"], info["port"], info["username"], info["password"]
                     )
-                except Exception as e:  # noqa: BLE001 - GeoIP is best-effort
-                    logger.warning("GeoIP not available: %s. Using default locale.", e)
+                    await self._proc.start_forwarder(forwarder)
+                    proxy_flag = f"localhost:{forwarder.port}"
+                else:
+                    proxy_flag = f"{info['host']}:{info['port']}"
 
-            # Manual overrides win over both GeoIP and the seeded defaults
-            # (design doc 01 §"Override manuali (ignorano auto-detect)").
-            manual: dict[str, Any] = {}
-            if timezone is not None:
-                manual["timezone"] = timezone
-            if languages is not None:
-                from tellurium.stealth.profile import build_accept_language
+            # 4. User-data dir
+            self._user_data_dir = user_data_dir or self._proc.make_temp_profile()
 
-                manual["languages"] = languages
-                manual["locale"] = languages[0]
-                manual["accept_language"] = build_accept_language(languages)
-            if manual:
-                stealth_profile = dataclasses.replace(stealth_profile, **manual)
+            # 5. Build stealth profile & engine (if stealth=True)
+            stealth_engine = None
+            stealth_profile = None
 
-            stealth_engine = StealthEngine(
-                engine,
-                stealth_profile,
-                headless,
-                proxy is not None,
-            )
-            self._stealth_engine = stealth_engine
-            self._stealth_profile = stealth_profile
+            if stealth:
+                from tellurium.stealth.engine import StealthEngine
+                from tellurium.stealth.profile import StealthProfile
 
-        # 6. Build engine-specific args
-        if stealth and stealth_profile is not None:
-            engine_args = engine.build_args(stealth_profile)
-        else:
-            profile_obj = None
-            if seed is not None:
+                # Build profile
+                if seed is not None:
+                    stealth_profile = StealthProfile.from_seed(seed)
+                else:
+                    stealth_profile = StealthProfile.auto()
 
-                class _P:
-                    pass
+                # GeoIP resolution if proxy — resolve real exit IP
+                if proxy:
+                    try:
+                        from tellurium.stealth.geoip import resolve_exit_ip, resolve_geoip
 
-                profile_obj = _P()
-                profile_obj.seed = seed  # type: ignore[attr-defined]
-            engine_args = engine.build_args(profile_obj)
+                        forwarder_port = self._proc.forwarder.port if self._proc.forwarder else None
+                        exit_ip = resolve_exit_ip(proxy, forwarder_port)
+                        logger.info("Proxy exit IP: %s", exit_ip)
+                        geo = resolve_geoip(exit_ip)
+                        stealth_profile = dataclasses.replace(
+                            stealth_profile,
+                            languages=geo.languages,
+                            timezone=geo.timezone,
+                            locale=geo.languages[0],
+                            accept_language=", ".join(
+                                f"{lang};q={1.0 - i * 0.1:.1f}" if i > 0 else lang
+                                for i, lang in enumerate(geo.languages)
+                            ),
+                        )
+                    except Exception as e:  # noqa: BLE001 - GeoIP is best-effort
+                        logger.warning("GeoIP not available: %s. Using default locale.", e)
 
-        # 7. Stealth flags (extension + WebRTC)
-        stealth_flags: list[str] = []
-        user_exts: list[str] = extensions or []
+                # Manual overrides win over both GeoIP and the seeded defaults
+                # (design doc 01 §"Override manuali (ignorano auto-detect)").
+                manual: dict[str, Any] = {}
+                if timezone is not None:
+                    manual["timezone"] = timezone
+                if languages is not None:
+                    from tellurium.stealth.profile import build_accept_language
 
-        # Languages: let Chrome derive both navigator.languages and the
-        # Accept-Language header (with its native q-values) from the
-        # --accept-lang pref. Overriding acceptLanguage via
-        # Emulation.setUserAgentOverride leaks the raw string into
-        # navigator.languages (["en-US", "en;q=0.9"]) and produces a
-        # malformed header ("en-US, en;q=0.9;q=0.9"). Measured on Chrome 153.
-        # The same flag carries a manual languages= override with stealth off.
-        effective_languages = languages
-        if effective_languages is None and stealth and stealth_profile is not None:
-            effective_languages = stealth_profile.languages
-        if effective_languages:
-            stealth_flags.append("--accept-lang=" + ",".join(effective_languages))
+                    manual["languages"] = languages
+                    manual["locale"] = languages[0]
+                    manual["accept_language"] = build_accept_language(languages)
+                if manual:
+                    stealth_profile = dataclasses.replace(stealth_profile, **manual)
 
-        if viewport is not None:
-            stealth_flags.append(f"--window-size={int(viewport[0])},{int(viewport[1])}")
+                stealth_engine = StealthEngine(
+                    engine,
+                    stealth_profile,
+                    headless,
+                    proxy is not None,
+                )
+                self._stealth_engine = stealth_engine
+                self._stealth_profile = stealth_profile
 
-        if stealth and stealth_engine is not None:
-            ext_path = stealth_engine.build_extension()
-            if ext_path or user_exts:
+            # 6. Build engine-specific args
+            if stealth and stealth_profile is not None:
+                engine_args = engine.build_args(stealth_profile)
+            else:
+                profile_obj = None
+                if seed is not None:
+
+                    class _P:
+                        pass
+
+                    profile_obj = _P()
+                    profile_obj.seed = seed  # type: ignore[attr-defined]
+                engine_args = engine.build_args(profile_obj)
+
+            # 7. Stealth flags (extension + WebRTC)
+            stealth_flags: list[str] = []
+            user_exts: list[str] = extensions or []
+
+            # Languages: let Chrome derive both navigator.languages and the
+            # Accept-Language header (with its native q-values) from the
+            # --accept-lang pref. Overriding acceptLanguage via
+            # Emulation.setUserAgentOverride leaks the raw string into
+            # navigator.languages (["en-US", "en;q=0.9"]) and produces a
+            # malformed header ("en-US, en;q=0.9;q=0.9"). Measured on Chrome 153.
+            # The same flag carries a manual languages= override with stealth off.
+            effective_languages = languages
+            if effective_languages is None and stealth and stealth_profile is not None:
+                effective_languages = stealth_profile.languages
+            if effective_languages:
+                stealth_flags.append("--accept-lang=" + ",".join(effective_languages))
+
+            if viewport is not None:
+                stealth_flags.append(f"--window-size={int(viewport[0])},{int(viewport[1])}")
+
+            if stealth and stealth_engine is not None:
+                ext_path = stealth_engine.build_extension()
+                if ext_path or user_exts:
+                    stealth_flags.append(
+                        build_load_extension_flag(
+                            tellurium_stealth_path=ext_path,
+                            user_extensions=user_exts,
+                        )
+                    )
+                # Note: --disable-blink-features=AutomationControlled is
+                # intentionally NOT added. Chrome shows an "unsupported
+                # command-line flag" warning bar when it is present, which is
+                # itself a detection signal. The stealth extension's
+                # webdriver.js overrides navigator.webdriver via JS injection
+                # because --remote-debugging-pipe makes the native value true.
+                if proxy:
+                    stealth_flags.append(
+                        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
+                    )
+            elif user_exts:
+                # stealth=False but user extensions still need to be loaded
                 stealth_flags.append(
                     build_load_extension_flag(
-                        tellurium_stealth_path=ext_path,
+                        tellurium_stealth_path=None,
                         user_extensions=user_exts,
                     )
                 )
-            # Note: --disable-blink-features=AutomationControlled is
-            # intentionally NOT added. Chrome shows an "unsupported
-            # command-line flag" warning bar when it is present, which is
-            # itself a detection signal. The stealth extension's
-            # webdriver.js overrides navigator.webdriver via JS injection
-            # because --remote-debugging-pipe makes the native value true.
-            if proxy:
-                stealth_flags.append("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
-        elif user_exts:
-            # stealth=False but user extensions still need to be loaded
-            stealth_flags.append(
-                build_load_extension_flag(
-                    tellurium_stealth_path=None,
-                    user_extensions=user_exts,
-                )
+
+            # 8. Build flags
+            flags = build_chrome_flags(
+                headless=headless,
+                user_data_dir=self._user_data_dir,
+                proxy=proxy_flag,
+                extra_args=(args or []) + stealth_flags,
+                engine_args=engine_args,
             )
 
-        # 8. Build flags
-        flags = build_chrome_flags(
-            headless=headless,
-            user_data_dir=self._user_data_dir,
-            proxy=proxy_flag,
-            extra_args=(args or []) + stealth_flags,
-            engine_args=engine_args,
-        )
+            # 9-10. Launch Chrome, connect its pipe, route sessions
+            transport = await self._proc.spawn(chrome_path, flags, chrome_log)
+            self._router = SessionRouter(transport)
+            self._dispatch_task = asyncio.create_task(self._router.run())
 
-        # 9. Launch Chrome
-        process, write_fd, read_fd = launch_chrome(chrome_path, flags)
-        self._process = process
-
-        # 10. Transport + router
-        transport = create_transport(read_fd, write_fd)
-        await transport.start()
-        self._router = SessionRouter(transport)
-        self._dispatch_task = asyncio.create_task(self._router.run())
-
-        # 11. Wire stealth engine to router
-        if stealth_engine is not None:
-            stealth_engine.set_router(self._router)
-
-        # 11a. review 2026-04-15 #5/#9: read the real GREASE brand from the browser
-        # and coalesce with webrtc_public_ip into a single dataclasses.replace() call.
-        if stealth and stealth_engine is not None and stealth_profile is not None:
-            try:
-                version_info = await self._router.root.send("Browser.getVersion", {}, timeout=5.0)
-            except Exception:  # noqa: BLE001 - best-effort version probe
-                version_info = {}
-            raw_brands = version_info.get("userAgentData", {}).get("brands") or []
-            # Build a single replace() call for both GREASE and webrtc fields
-            replace_kwargs: dict = {}
-            # Align UA / Client Hints with the version the binary really has
-            # ("Chrome/153.0.8010.36", "HeadlessChrome/..."): the profile's
-            # default browser_version is only a fallback.
-            real_version = parse_product_version(version_info.get("product", ""))
-            if real_version and real_version != stealth_profile.browser_version:
-                stealth_profile = stealth_profile.with_browser_version(real_version)
-            if raw_brands:
-                g_brand, g_version = parse_grease_brands(raw_brands)
-                replace_kwargs["grease_brand"] = g_brand
-                replace_kwargs["grease_version"] = g_version
-            if resolved_webrtc_ip is not None:
-                replace_kwargs["webrtc_public_ip"] = resolved_webrtc_ip
-            if replace_kwargs:
-                stealth_profile = dataclasses.replace(stealth_profile, **replace_kwargs)
-            if stealth_profile is not self._stealth_profile:
-                stealth_engine.update_profile(stealth_profile)
-                self._stealth_profile = stealth_profile
-            # else: leave profile.grease_brand = None → engine falls back to "Not_A Brand"/"24"
-            #       and webrtc_public_ip = None → webrtc.js no-op
-
-        # 12. Discover initial page target
-        await self._router.root.send("Target.setDiscoverTargets", {"discover": True})
-        targets_result = await self._router.root.send("Target.getTargets", {})
-        page_target = None
-        for t in targets_result.get("targetInfos", []):
-            if t.get("type") == "page":
-                page_target = t
-                break
-
-        if page_target:
-            session = await self._router.attach(page_target["targetId"])
-            tab = Tab(
-                session,
-                self,
-                page_target["targetId"],
-                stealth_idle=stealth_idle,
-                mouse_profile=mouse_profile,
-            )
-            tab._url = page_target.get("url", "")
-            self._tabs.append(tab)
-            self._main_tab = tab
-
-            # 12a. Manual timezone override without stealth: the StealthEngine
-            # is not there to send it, so do it here (design doc 01 §Override).
-            if timezone is not None and stealth_engine is None:
-                self._timezone_override = timezone
-                await self._apply_manual_overrides(session)
-
-            # 13. Apply stealth to initial tab session
+            # 11. Wire stealth engine to router
             if stealth_engine is not None:
-                await stealth_engine.apply_to_session(session)
-                # T7: inject runtime stealth scripts before any navigation, so
-                # stealth=True works on Chrome branded >=137 where
-                # --load-extension is silently rejected.
-                await stealth_engine.apply_page_scripts(session)
+                stealth_engine.set_router(self._router)
 
-        # 14. Setup auto-attach for OOPIF / worker CDP patching (T7, T7.7).
-        # _STEALTH_TARGET_FILTER excludes 'page', so explicit attachToTarget
-        # from new_tab() is unaffected. Iframes/workers trigger the listener
-        # which routes to _on_target_attached -> _patch_and_resume.
-        #
-        # T7.7: auto-attach must be armed on the *page* session too — a
-        # browser-root-only setAutoAttach never fires for a page's OOPIFs or
-        # dedicated workers (verified empirically on Chrome 153). The root
-        # wiring stays for browser-scoped service workers.
-        #
-        # The root auto-attach also covers every *new page* (popups, new_tab,
-        # context tabs): each one is frozen until _adopt_page has patched it.
-        root = self._router.root
-        root.on("Target.attachedToTarget", self._on_attached_to_target)
-        root.on("Target.targetInfoChanged", self._on_target_info_changed)
-        root.on("Target.targetDestroyed", self._on_target_destroyed)
-        root.on("Target.targetCrashed", self._on_target_crashed)
-        if stealth_engine is not None:
-            await stealth_engine.wire_session(root, include_pages=True)
-            if self._main_tab is not None:
-                await stealth_engine.wire_session(self._main_tab._session)
-        else:
-            await root.send(
-                "Target.setAutoAttach",
-                {
-                    "autoAttach": True,
-                    "waitForDebuggerOnStart": True,
-                    "flatten": True,
-                    "filter": [{"type": "page", "exclude": False}],
-                },
-            )
+            # 11a. review 2026-04-15 #5/#9: read the real GREASE brand from the browser
+            # and coalesce with webrtc_public_ip into a single dataclasses.replace() call.
+            if stealth and stealth_engine is not None and stealth_profile is not None:
+                try:
+                    version_info = await self._router.root.send(
+                        "Browser.getVersion", {}, timeout=5.0
+                    )
+                except Exception:  # noqa: BLE001 - best-effort version probe
+                    version_info = {}
+                raw_brands = version_info.get("userAgentData", {}).get("brands") or []
+                # Build a single replace() call for both GREASE and webrtc fields
+                replace_kwargs: dict = {}
+                # Align UA / Client Hints with the version the binary really has
+                # ("Chrome/153.0.8010.36", "HeadlessChrome/..."): the profile's
+                # default browser_version is only a fallback.
+                real_version = parse_product_version(version_info.get("product", ""))
+                if real_version and real_version != stealth_profile.browser_version:
+                    stealth_profile = stealth_profile.with_browser_version(real_version)
+                if raw_brands:
+                    g_brand, g_version = parse_grease_brands(raw_brands)
+                    replace_kwargs["grease_brand"] = g_brand
+                    replace_kwargs["grease_version"] = g_version
+                if resolved_webrtc_ip is not None:
+                    replace_kwargs["webrtc_public_ip"] = resolved_webrtc_ip
+                if replace_kwargs:
+                    stealth_profile = dataclasses.replace(stealth_profile, **replace_kwargs)
+                if stealth_profile is not self._stealth_profile:
+                    stealth_engine.update_profile(stealth_profile)
+                    self._stealth_profile = stealth_profile
+                # else: leave profile.grease_brand = None → engine falls back to "Not_A Brand"/"24"
+                #       and webrtc_public_ip = None → webrtc.js no-op
 
-        # 15. Pin the window geometry for a headed browser. --window-size is
-        # honoured at startup by headless Chrome but a window manager can
-        # ignore/adjust it for a real window, so re-assert it over CDP.
-        if viewport is not None and not headless and self._main_tab is not None:
-            try:
-                await self._main_tab.set_viewport(int(viewport[0]), int(viewport[1]))
-            except Exception as exc:  # noqa: BLE001 — cosmetic, never fatal
-                logger.warning("Could not apply viewport %r: %s", viewport, exc)
+            # 12. Discover initial page target
+            await self._router.root.send("Target.setDiscoverTargets", {"discover": True})
+            targets_result = await self._router.root.send("Target.getTargets", {})
+            page_target = None
+            for t in targets_result.get("targetInfos", []):
+                if t.get("type") == "page":
+                    page_target = t
+                    break
 
+            if page_target:
+                session = await self._router.attach(page_target["targetId"])
+                tab = Tab(
+                    session,
+                    self,
+                    page_target["targetId"],
+                    stealth_idle=stealth_idle,
+                    mouse_profile=mouse_profile,
+                )
+                tab._url = page_target.get("url", "")
+                self._tabs.append(tab)
+                self._main_tab = tab
+
+                # 12a. Manual timezone override without stealth: the StealthEngine
+                # is not there to send it, so do it here (design doc 01 §Override).
+                if timezone is not None and stealth_engine is None:
+                    self._timezone_override = timezone
+                    await self._apply_manual_overrides(session)
+
+                # 13. Apply stealth to initial tab session
+                if stealth_engine is not None:
+                    await stealth_engine.apply_to_session(session)
+                    # T7: inject runtime stealth scripts before any navigation, so
+                    # stealth=True works on Chrome branded >=137 where
+                    # --load-extension is silently rejected.
+                    await stealth_engine.apply_page_scripts(session)
+
+            # 14. Setup auto-attach for OOPIF / worker CDP patching (T7, T7.7).
+            # _STEALTH_TARGET_FILTER excludes 'page', so explicit attachToTarget
+            # from new_tab() is unaffected. Iframes/workers trigger the listener
+            # which routes to _on_target_attached -> _patch_and_resume.
+            #
+            # T7.7: auto-attach must be armed on the *page* session too — a
+            # browser-root-only setAutoAttach never fires for a page's OOPIFs or
+            # dedicated workers (verified empirically on Chrome 153). The root
+            # wiring stays for browser-scoped service workers.
+            #
+            # The root auto-attach also covers every *new page* (popups, new_tab,
+            # context tabs): each one is frozen until _adopt_page has patched it.
+            root = self._router.root
+            root.on("Target.attachedToTarget", self._on_attached_to_target)
+            root.on("Target.targetInfoChanged", self._on_target_info_changed)
+            root.on("Target.targetDestroyed", self._on_target_destroyed)
+            root.on("Target.targetCrashed", self._on_target_crashed)
+            if stealth_engine is not None:
+                await stealth_engine.wire_session(root, include_pages=True)
+                if self._main_tab is not None:
+                    await stealth_engine.wire_session(self._main_tab._session)
+            else:
+                await root.send(
+                    "Target.setAutoAttach",
+                    {
+                        "autoAttach": True,
+                        "waitForDebuggerOnStart": True,
+                        "flatten": True,
+                        "filter": [{"type": "page", "exclude": False}],
+                    },
+                )
+
+            # 15. Pin the window geometry for a headed browser. --window-size is
+            # honoured at startup by headless Chrome but a window manager can
+            # ignore/adjust it for a real window, so re-assert it over CDP.
+            if viewport is not None and not headless and self._main_tab is not None:
+                try:
+                    await self._main_tab.set_viewport(int(viewport[0]), int(viewport[1]))
+                except Exception as exc:  # noqa: BLE001 — cosmetic, never fatal
+                    logger.warning("Could not apply viewport %r: %s", viewport, exc)
+
+        except BaseException as exc:
+            error = await asyncio.shield(self._abort_launch(exc))
+            if error is not None:
+                raise error from exc
+            raise
         return self
+
+    async def _abort_launch(self, cause: BaseException) -> Exception | None:
+        error = await self._proc.launch_error(cause)
+        await self.close()
+        return error
 
     async def _apply_manual_overrides(self, session: Any) -> None:
         """Apply non-stealth manual overrides to a freshly attached session."""
@@ -788,40 +797,14 @@ class Browser:
 
     async def close(self) -> None:
         """Terminate the browser process and clean up resources."""
-        # Cancel dispatch loop
         if self._dispatch_task and not self._dispatch_task.done():
             self._dispatch_task.cancel()
             try:
                 await self._dispatch_task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001 - shutdown must not raise
                 pass
-
-        # Close transport
-        if self._router:
-            try:
-                await self._router._transport.close()
-            except Exception:  # noqa: BLE001 - shutdown must not raise
-                pass
-
-        # Terminate Chrome
-        if self._process:
-            try:
-                self._process.terminate()
-                self._process.wait(timeout=5)
-            except Exception:  # noqa: BLE001 - shutdown must not raise
-                try:
-                    self._process.kill()
-                    self._process.wait(timeout=3)
-                except Exception:  # noqa: BLE001 - shutdown must not raise
-                    pass
-
-        # Stop proxy forwarder
-        if self._forwarder:
-            await self._forwarder.stop()
-
-        # Clean up temp dir
-        if self._tmp_dir:
-            shutil.rmtree(self._tmp_dir, ignore_errors=True)
+        # Shielded: a cancelled close() still releases everything.
+        await asyncio.shield(self._proc.close())
 
     async def __aenter__(self) -> Browser:
         return self

@@ -98,9 +98,25 @@ async def test_messages_split_across_reads_are_reassembled():
         assert await asyncio.wait_for(transport.recv(), 5) == {"id": 1}
         recv = asyncio.ensure_future(transport.recv())
         await asyncio.sleep(0.05)
-        os.write(child_write, b': 2}\0')
+        os.write(child_write, b": 2}\0")
         assert await asyncio.wait_for(recv, 5) == {"id": 2}
     finally:
         await transport.close()
         os.close(child_read)
         os.close(child_write)
+
+
+async def test_close_after_the_peer_went_away_is_quiet():
+    """Chrome exited first: the write side already closed itself."""
+    child_read, parent_write = os.pipe()
+    parent_read, child_write = os.pipe()
+    transport = PipePosixTransport(parent_read, parent_write)
+    await transport.start()
+    os.close(child_read)
+    os.close(child_write)
+    await asyncio.sleep(0.05)
+
+    await transport.close()
+
+    assert not _fd_is_open(parent_write)
+    assert not _fd_is_open(parent_read)

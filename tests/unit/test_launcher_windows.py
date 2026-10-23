@@ -15,14 +15,14 @@ from unittest.mock import patch
 
 import pytest
 
-from tellurium.browser import launcher
+from tellurium.browser import launcher, process
 from tellurium.browser.launcher import (
     _CRT_FOPEN,
     _CRT_FPIPE,
     _find_chrome_candidates,
     build_crt_inherit_block,
-    launch_chrome,
 )
+from tellurium.browser.process import launch_chrome
 
 # ---------------------------------------------------------------------------
 # Dispatcher
@@ -33,10 +33,12 @@ def test_launch_chrome_uses_the_posix_launcher_on_linux(monkeypatch):
     calls = []
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(
-        launcher, "launch_chrome_posix", lambda p, a: calls.append(("posix", p, a)) or ("P", 3, 4)
+        process,
+        "launch_chrome_posix",
+        lambda p, a, out: calls.append(("posix", p, a)) or ("P", 3, 4),
     )
     monkeypatch.setattr(
-        launcher,
+        process,
         "launch_chrome_windows",
         lambda p, a: pytest.fail("windows launcher used on linux"),
     )
@@ -48,10 +50,12 @@ def test_launch_chrome_uses_the_windows_launcher_on_win32(monkeypatch):
     calls = []
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(
-        launcher, "launch_chrome_windows", lambda p, a: calls.append(("win", p, a)) or ("W", 5, 6)
+        process, "launch_chrome_windows", lambda p, a: calls.append(("win", p, a)) or ("W", 5, 6)
     )
     monkeypatch.setattr(
-        launcher, "launch_chrome_posix", lambda p, a: pytest.fail("posix launcher used on win32")
+        process,
+        "launch_chrome_posix",
+        lambda p, a, out: pytest.fail("posix launcher used on win32"),
     )
     assert launch_chrome(r"C:\chrome.exe", ["--y"]) == ("W", 5, 6)
     assert calls == [("win", r"C:\chrome.exe", ["--y"])]
@@ -63,12 +67,11 @@ def test_windows_launcher_refuses_to_run_on_posix():
 
 
 def test_browser_launch_goes_through_the_dispatcher():
-    """browser.py must not call launch_chrome_posix directly any more."""
+    """Chrome is spawned through the platform dispatcher, never the POSIX path directly."""
     from tellurium.browser import browser as browser_mod
 
-    source = Path(browser_mod.__file__).read_text()
-    assert "launch_chrome(chrome_path, flags)" in source
-    assert "launch_chrome_posix(" not in source
+    assert "launch_chrome(chrome_path, flags, output)" in Path(process.__file__).read_text()
+    assert "launch_chrome_posix" not in Path(browser_mod.__file__).read_text()
 
 
 # ---------------------------------------------------------------------------

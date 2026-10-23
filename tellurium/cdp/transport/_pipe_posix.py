@@ -42,9 +42,7 @@ class PipePosixTransport(CDPTransport):
         self._reader = reader
         self._write_pipe = os.fdopen(self._write_fd, "wb", buffering=0)
         self._write_fd = None
-        self._write_transport, _ = await loop.connect_write_pipe(
-            asyncio.Protocol, self._write_pipe
-        )
+        self._write_transport, _ = await loop.connect_write_pipe(asyncio.Protocol, self._write_pipe)
 
     async def send(self, data: bytes) -> None:
         if self._write_transport is None:
@@ -71,7 +69,9 @@ class PipePosixTransport(CDPTransport):
         elif self._read_pipe is not None:
             self._read_pipe.close()
         if self._write_transport is not None:
-            self._write_transport.abort()
+            # It closes itself when Chrome closes its end; abort() would fail then.
+            if not self._write_transport.is_closing():
+                self._write_transport.abort()
         elif self._write_pipe is not None:
             self._write_pipe.close()
         for fd in (self._read_fd, self._write_fd):

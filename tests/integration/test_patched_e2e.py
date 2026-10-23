@@ -89,7 +89,7 @@ async def test_patched_launch_passes_fingerprint_flag(patched_binary):
     )
     async with browser:
         assert browser._engine.seed == 42069
-        cmdline = Path(f"/proc/{browser._process.pid}/cmdline")
+        cmdline = Path(f"/proc/{browser._proc.process.pid}/cmdline")
         if cmdline.exists():
             # Chromium rewrites its argv area as one space-joined string.
             argv = cmdline.read_bytes().replace(b"\0", b" ").split()

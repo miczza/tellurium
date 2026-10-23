@@ -402,61 +402,6 @@ def build_chrome_flags(
     return flags
 
 
-def launch_chrome_posix(
-    chrome_path: str,
-    args: list[str],
-) -> tuple[subprocess.Popen, int, int]:
-    """Launch Chrome with CDP pipe FDs (POSIX only).
-
-    Creates two anonymous pipes and remaps them to file descriptors 3 (read by
-    Chrome) and 4 (written by Chrome) inside the child process, matching the
-    ``--remote-debugging-pipe`` protocol.
-
-    Parameters
-    ----------
-    chrome_path:
-        Absolute path to the Chrome executable.
-    args:
-        CLI flags (should include ``--remote-debugging-pipe``).
-
-    Returns
-    -------
-    (process, parent_write_fd, parent_read_fd)
-        * **process** — the ``subprocess.Popen`` object
-        * **parent_write_fd** — the parent's write end of the pipe (send CDP messages here)
-        * **parent_read_fd** — the parent's read end of the pipe (receive CDP messages here)
-    """
-    # pipe(): (read_end, write_end)
-    chrome_read_fd, parent_write_fd = os.pipe()  # parent writes -> chrome reads on fd 3
-    parent_read_fd, chrome_write_fd = os.pipe()  # chrome writes on fd 4 -> parent reads
-
-    def _remap_fds() -> None:
-        """Called in the child process before exec."""
-        if chrome_read_fd != 3:
-            os.dup2(chrome_read_fd, 3)
-            os.close(chrome_read_fd)
-        if chrome_write_fd != 4:
-            os.dup2(chrome_write_fd, 4)
-            os.close(chrome_write_fd)
-        os.close(parent_write_fd)
-        os.close(parent_read_fd)
-
-    process = subprocess.Popen(
-        [chrome_path, *args],
-        preexec_fn=_remap_fds,
-        close_fds=False,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
-    # Close child-side FDs in the parent; they've been inherited by the child.
-    os.close(chrome_read_fd)
-    os.close(chrome_write_fd)
-
-    return process, parent_write_fd, parent_read_fd
-
-
 # ---------------------------------------------------------------------------
 # Windows launch
 # ---------------------------------------------------------------------------
@@ -518,7 +463,7 @@ def launch_chrome_windows(
     end-to-end behaviour against a real ``chrome.exe`` has never been observed.
     Treat a failure here as a bug report, not as a supported path.
 
-    Mirrors :func:`launch_chrome_posix`: two anonymous pipes are created, the
+    Mirrors :func:`~tellurium.browser.process.launch_chrome_posix`: two anonymous pipes are created, the
     child ends are handed over as file descriptors 3 (Chrome reads) and 4
     (Chrome writes), and the parent ends are returned as CRT file descriptors
     ready for :class:`~tellurium.cdp.transport._pipe_win.PipeWindowsTransport`.
@@ -534,7 +479,7 @@ def launch_chrome_windows(
     ``terminate``/``kill``.
     """
     if sys.platform != "win32":  # pragma: no cover - guarded by the dispatcher
-        raise RuntimeError("launch_chrome_windows() is Windows-only; use launch_chrome().")
+        raise RuntimeError("launch_chrome_windows() is Windows-only; use process.launch_chrome().")
     import _winapi
     import ctypes
     import ctypes.wintypes as wintypes
@@ -661,17 +606,3 @@ class _WindowsProcess:
             ctypes.windll.kernel32.TerminateProcess(self._handle, 1)
 
     kill = terminate
-
-
-def launch_chrome(
-    chrome_path: str,
-    args: list[str],
-) -> tuple[object, int, int]:
-    """Launch Chrome with CDP pipes using the current platform's mechanism.
-
-    Returns ``(process, parent_write_fd, parent_read_fd)`` — see
-    :func:`launch_chrome_posix` / :func:`launch_chrome_windows`.
-    """
-    if sys.platform == "win32":
-        return launch_chrome_windows(chrome_path, args)
-    return launch_chrome_posix(chrome_path, args)
