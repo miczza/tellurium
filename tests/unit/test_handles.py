@@ -122,3 +122,37 @@ def test_destroyed_context_maps_to_stale_element_error():
     assert isinstance(err, CDPError)
     other = CDPError("Something else", -32000)
     assert as_stale(other) is other
+
+
+async def test_select_retries_when_the_document_is_swapped_mid_query():
+    """A popup swaps about:blank for its page between getDocument and querySelector."""
+    tab, sent, _ = _tab(node_ids=[2])
+    calls = {"n": 0}
+    original = tab._session.send.side_effect
+
+    async def _send(method, params=None, timeout=None):
+        if method == "DOM.querySelector":
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise CDPError("Could not find node with given id", -32000)
+            return {"nodeId": 2}
+        return await original(method, params, timeout)
+
+    tab._session.send.side_effect = _send
+    element = await tab.select("#msg", timeout=2)
+    assert element._object_id == "OBJ2"
+    assert await tab.wait_for("#msg", state="attached", timeout=2) is not None
+
+
+async def test_select_still_raises_on_an_invalid_selector():
+    tab, _, _ = _tab()
+    original = tab._session.send.side_effect
+
+    async def _send(method, params=None, timeout=None):
+        if method == "DOM.querySelector":
+            raise CDPError("DOM Error while querying", -32000)
+        return await original(method, params, timeout)
+
+    tab._session.send.side_effect = _send
+    with pytest.raises(CDPError, match="querying"):
+        await tab.select("##", timeout=2)

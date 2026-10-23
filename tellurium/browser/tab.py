@@ -11,7 +11,12 @@ from typing import TYPE_CHECKING, Any
 
 from tellurium.browser.dialog import DialogGuard, DialogHandler
 from tellurium.browser.element import Element
-from tellurium.browser.handles import HandleGroup, elements_from_array
+from tellurium.browser.handles import (
+    HandleGroup,
+    StaleElementError,
+    as_stale,
+    elements_from_array,
+)
 from tellurium.browser.navigation import (
     check_wait_until,
     navigate,
@@ -317,16 +322,25 @@ class Tab:
         except CDPError:
             return None
 
-    async def select(self, selector: str, *, timeout: float = 10) -> Element:
-        """Wait for a CSS-matching element and return it."""
-        deadline = asyncio.get_running_loop().time() + timeout
-        while True:
+    async def _query_selector(self, selector: str) -> Element | None:
+        """First match of *selector*; ``None`` also when the document was swapped mid-query."""
+        try:
             root = await self._get_document_root()
             result = await self._session.send(
                 "DOM.querySelector", {"nodeId": root, "selector": selector}
             )
-            nid = result.get("nodeId", 0)
-            element = await self._element_or_none(nid, selector) if nid else None
+        except CDPError as exc:  # a navigation replaced the root between the two calls
+            if not isinstance(as_stale(exc), StaleElementError):
+                raise  # e.g. an invalid selector
+            return None
+        nid = result.get("nodeId", 0)
+        return await self._element_or_none(nid, selector) if nid else None
+
+    async def select(self, selector: str, *, timeout: float = 10) -> Element:
+        """Wait for a CSS-matching element and return it."""
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            element = await self._query_selector(selector)
             if element is not None:
                 return element
             if asyncio.get_running_loop().time() >= deadline:
@@ -501,14 +515,7 @@ class Tab:
             )
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
-            element: Element | None = None
-            root = await self._get_document_root()
-            result = await self._session.send(
-                "DOM.querySelector", {"nodeId": root, "selector": selector}
-            )
-            node_id = result.get("nodeId", 0)
-            if node_id:
-                element = await self._element_or_none(node_id, selector)
+            element = await self._query_selector(selector)
 
             if state == "attached" and element is not None:
                 return element

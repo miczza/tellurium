@@ -103,6 +103,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A stale element (its document navigated away, or it was released) raises
   `StaleElementError` (a `CDPError`) instead of a bare
   `CDP error -32000: Cannot find context with specified id`.
+- `Tab.select` and `wait_for` keep polling when a navigation replaces the
+  document between `DOM.getDocument` and `DOM.querySelector` (a popup swapping
+  `about:blank` for its page) instead of raising `CDPError`.
 - `Tab.select_all`, `xpath` and `xpath_all` skip a node removed between the
   query and its resolution instead of raising `CDPError`.
 - `Tab.get(timeout=...)` now bounds the whole navigation, `Page.navigate`
