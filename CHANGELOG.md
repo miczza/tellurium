@@ -7,6 +7,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `BrowserContext.clear_cookies(domain=None)` deletes the context's cookies
+  (or one domain's) without touching the default context.
 - `Tab.eval_on(..., timeout=)`, `Tab.screenshot(..., timeout=)` and
   `Tab.pdf(..., timeout=)` bound their CDP commands per call (a tall full-page
   screenshot or a slow promise could only be extended through the session-wide
@@ -109,6 +111,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `BrowserContext.get_cookies(domain)` matches the domain and its subdomains
+  instead of any substring, like `Browser.get_cookies`.
 - `Browser.launch(stealth=True, proxy=...)` looks up the proxy exit IP and its
   GeoIP data in a worker thread: run on the event loop, the lookup through an
   authenticated proxy starved the forwarder it was waiting for.

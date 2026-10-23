@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from tellurium.browser.cookie import Cookie
+from tellurium.browser.cookie import Cookie, clear_jar, read_jar
 
 if TYPE_CHECKING:
     from tellurium.browser.browser import Browser
@@ -51,18 +51,12 @@ class BrowserContext:
         return tab
 
     async def get_cookies(self, domain: str | None = None) -> list[Cookie]:
-        """Get cookies scoped to this context via ``Storage.getCookies``."""
-        root = self._browser._router.root
-        result = await root.send(
-            "Storage.getCookies",
-            {
-                "browserContextId": self._context_id,
-            },
-        )
-        cookies = [Cookie.from_json(c) for c in result.get("cookies", [])]
-        if domain:
-            cookies = [c for c in cookies if domain in c.domain]
-        return cookies
+        """This context's cookies; with *domain*, only its own and its subdomains'."""
+        return await read_jar(self._browser._router.root, domain, self._context_id)
+
+    async def clear_cookies(self, domain: str | None = None) -> None:
+        """Delete this context's cookies, or only *domain*'s (and its subdomains')."""
+        await clear_jar(self._browser._router.root, domain, self._context_id)
 
     async def set_cookies(self, cookies: list[Cookie]) -> None:
         """Set cookies in this context."""

@@ -57,3 +57,27 @@ async def test_context_cookies_are_isolated(browser):
         assert _names(await context.get_cookies("example.com")) == ["ctx"]
     finally:
         await context.close()
+
+
+async def test_context_get_cookies_matches_domain_not_substring(browser):
+    context = await browser.new_context()
+    try:
+        await context.set_cookies(_JAR)
+        assert _names(await context.get_cookies("example.com")) == ["a", "b"]
+        assert _names(await context.get_cookies("notexample.com")) == ["c"]
+    finally:
+        await context.close()
+
+
+async def test_context_clear_cookies_stays_in_the_context(browser):
+    context = await browser.new_context()
+    try:
+        await context.set_cookies(_JAR)
+        await browser.set_cookies([Cookie(name="main", value="1", domain=".example.com")])
+        await context.clear_cookies("example.com")
+        assert _names(await context.get_cookies()) == ["c", "d"]
+        await context.clear_cookies()
+        assert await context.get_cookies() == []
+        assert _names(await browser.get_cookies()) == ["main"]
+    finally:
+        await context.close()
