@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Re-render</title>
+<style>body { margin: 0; } #danger { position: fixed; left: 0; top: 0; width: 60px; height: 60px; }
+#app { margin: 200px; }</style>
+</head>
+<body>
+  <button id="danger" onclick="document.getElementById('status').textContent = 'deleted'">Delete account</button>
+  <div id="app"><button onclick="document.getElementById('status').textContent = 'saved'">Save</button></div>
+  <p id="status">idle</p>
+  <script>
+    // An SPA re-render: the same button again, as a brand-new node.
+    function rerender() {
+      document.getElementById('app').innerHTML =
+        '<button onclick="document.getElementById(\'status\').textContent = \'saved\'">Save</button>';
+    }
+  </script>
+</body>
+</html>

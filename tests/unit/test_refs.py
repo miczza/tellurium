@@ -85,12 +85,15 @@ def test_resolution_without_navigation_keeps_generation():
 class _FakeSession:
     """Answers DOM.resolveNode; optionally runs *during* before answering."""
 
-    def __init__(self, during=None):
+    def __init__(self, during=None, connected=True):
         self.calls: list[tuple[str, dict]] = []
         self._during = during
+        self._connected = connected
 
     async def send(self, method, params=None, timeout=None):
         self.calls.append((method, params))
+        if method == "Runtime.callFunctionOn":
+            return {"result": {"type": "boolean", "value": self._connected}}
         if self._during:
             self._during()
         return {"object": {"objectId": "obj-1"}}
@@ -107,7 +110,8 @@ async def test_resolve_ref_builds_an_element_from_the_backend_id():
     ref = refs.ref_for(42)
     session = _FakeSession()
     element = await resolve_ref(session, _FakeTab(), refs, "@" + ref)
-    assert session.calls == [("DOM.resolveNode", {"backendNodeId": 42})]
+    assert session.calls[0] == ("DOM.resolveNode", {"backendNodeId": 42})
+    assert session.calls[1][0] == "Runtime.callFunctionOn"
     assert element._object_id == "obj-1"
 
 
@@ -141,3 +145,18 @@ async def test_resolve_unknown_ref_sends_nothing():
     with pytest.raises(LookupError):
         await resolve_ref(session, _FakeTab(), RefMap(), "e5")
     assert session.calls == []
+
+
+async def test_detached_node_is_stale_and_its_handle_released():
+    from tellurium.browser.handles import HandleGroup
+    from tellurium.browser.refs import resolve_ref
+
+    refs = RefMap()
+    ref = refs.ref_for(42)
+    session = _FakeSession(connected=False)
+    tab = _FakeTab()
+    tab._handles = HandleGroup(session)
+    with pytest.raises(StaleElementError, match="no longer in the page"):
+        await resolve_ref(session, tab, refs, ref)
+    await tab._handles.drain()
+    assert ("Runtime.releaseObject", {"objectId": "obj-1"}) in session.calls

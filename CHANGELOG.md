@@ -17,7 +17,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `- iframe "<url>" [oopif]`.
 - `tellurium.browser.refs`: per-tab `RefMap` (`ref ↔ backendDOMNodeId`, stable
   within a document, stale after a main-frame navigation, numbers never reused)
-  and `resolve_ref()` into a normal `Element`.
+  and `resolve_ref()` into a normal `Element`; a ref whose node was detached
+  (SPA re-render, `document.open()`) raises `StaleElementError`.
 - Generated CDP bindings for the `Accessibility` domain
   (`tellurium.cdp.domains.accessibility`).
 - Downloads: `Browser.launch(downloads_dir=None)` and

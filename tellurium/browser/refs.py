@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from tellurium.browser.tab import Tab
     from tellurium.cdp.transport._session import Session
 
+_IS_CONNECTED = "function() { return this.isConnected; }"
 _REF = re.compile(r"@?e([1-9][0-9]*)")
 
 
@@ -108,8 +109,23 @@ async def resolve_ref(session: Session, tab: Tab | Any, refs: RefMap, ref: str) 
         params["objectGroup"] = handles.name
     result = await send_on_handle(session, "DOM.resolveNode", params)
     object_id = result["object"]["objectId"]
-    if refs.generation != generation:  # a navigation committed meanwhile
+    try:
+        # A node detached by a re-render or document.open() still resolves:
+        # acting on it would hit an empty box at (0, 0), i.e. another element.
+        check = {"objectId": object_id, "functionDeclaration": _IS_CONNECTED}
+        check["returnByValue"] = True
+        connected = await send_on_handle(session, "Runtime.callFunctionOn", check)
+        if connected.get("result", {}).get("value") is not True:
+            raise StaleElementError(
+                f"Ref {ref} names a node no longer in the page (re-rendered or removed):"
+                " take a new snapshot"
+            )
+        if refs.generation != generation:  # a navigation committed meanwhile
+            raise StaleElementError(
+                f"Ref {ref} belongs to a previous document: take a new snapshot"
+            )
+    except BaseException:
         if handles is not None:
             handles.discard(object_id)
-        raise StaleElementError(f"Ref {ref} belongs to a previous document: take a new snapshot")
+        raise
     return Element(session, tab, object_id=object_id)

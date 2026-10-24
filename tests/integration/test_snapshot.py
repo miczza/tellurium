@@ -214,3 +214,36 @@ async def test_five_thousand_node_page_snapshot_time(browser, local_server):
         )
     )
     assert median < 300, f"snapshot median {median:.0f} ms over {runs}"
+
+
+async def test_ref_of_a_rerendered_node_is_stale_not_another_element(browser, local_server):
+    """A node detached by an SPA re-render must never act: no click lands on
+    whatever sits at (0, 0) of an empty box."""
+    tab = browser.main_tab
+    refs = _watched(tab)
+    await tab.get(f"{local_server}/snapshot_rerender.html")
+    text = await take_snapshot(tab._session, refs)
+    save = _ref_of(text, '- button "Save"')
+    await tab.eval("rerender()")
+    for _ in range(4):
+        with pytest.raises(StaleElementError):
+            element = await resolve_ref(tab._session, tab, refs, save)
+            await element.click(human=True)
+    status = await tab.select("#status")
+    assert await status.text() == "idle"
+    # a new snapshot gives the new node its own ref, and that one works
+    fresh = await take_snapshot(tab._session, refs)
+    new_save = _ref_of(fresh, '- button "Save"')
+    assert new_save != save
+    await (await resolve_ref(tab._session, tab, refs, new_save)).click(human=True)
+    assert await status.text() == "saved"
+
+
+async def test_ref_after_document_open_is_stale(browser, local_server):
+    tab = browser.main_tab
+    refs = _watched(tab)
+    await tab.get(f"{local_server}/snapshot_form.html")
+    ref = _ref_of(await take_snapshot(tab._session, refs), '- button "Sign in"')
+    await tab.eval("document.open(); document.write('<button>Sign in</button>'); document.close()")
+    with pytest.raises(StaleElementError):
+        await resolve_ref(tab._session, tab, refs, ref)
