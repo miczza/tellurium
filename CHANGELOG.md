@@ -25,6 +25,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   takes `via=` (attach through a page session) and `timeout=` (a session Chrome
   opens after the deadline or a cancellation is detached), `detach()` takes
   `via=` and closes the session at once.
+- The handle of an `Element` in a cross-site iframe is released on that
+  iframe's session (dropped, `release()`, or with its group on navigation and
+  `Tab.close()`), not on the tab's, where it stayed alive with its document.
 - `Tab.snapshot()` / `Tab.snapshot_nodes()`: the accessibility snapshot of the
   tab (`interactive=`, `selector=`, `depth=`, `max_chars=`, plus `max_nodes=`
   and `snapshot_timeout=`). `Tab.ref("e3")` and `Tab.select("@e3")` turn a

@@ -182,7 +182,7 @@ async def _connected(
         answer = await send_on_handle(session, "Runtime.callFunctionOn", check | _BY_VALUE)
     finally:
         if isolated and handles is not None:
-            handles.discard(isolated)
+            handles.discard(isolated, session)
     return answer.get("result", {}).get("value") is True
 
 
@@ -228,6 +228,6 @@ async def resolve_ref(session: Session, tab: Tab | Any, refs: RefMap, ref: str) 
             )
     except BaseException:
         if handles is not None:
-            handles.discard(object_id)
+            handles.discard(object_id, session)
         raise
     return Element(session, tab, object_id=object_id)

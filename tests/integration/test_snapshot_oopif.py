@@ -271,3 +271,18 @@ async def test_oopif_session_attached_by_hand_is_reused_and_detached(browser, lo
             break
         await asyncio.sleep(0.05)
     assert extra.closed and not used.closed
+
+
+async def test_oopif_handle_is_released_in_the_oopif(browser, local_server):
+    from tellurium.cdp.types import CDPError
+
+    tab = browser.main_tab
+    await _open(tab, local_server)
+    text = await _snapshot_with(tab, "Sign in")
+    signin = await tab.ref(_ref_of(text, '- button "Sign in"'))
+    session, object_id = signin._session, signin._object_id
+    assert session is not tab._session
+    await session.send("Runtime.getProperties", {"objectId": object_id})  # alive
+    await signin.release()
+    with pytest.raises(CDPError, match="Could not find object"):
+        await session.send("Runtime.getProperties", {"objectId": object_id})
