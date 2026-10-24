@@ -12,8 +12,15 @@ if TYPE_CHECKING:
     from tellurium.browser.tab import Tab
     from tellurium.cdp.transport._session import Session
 
-# TreeWalker restricted to this element's subtree — the relative counterpart
-# of Tab._TEXT_WALKER_JS.
+
+def css_selector(selector: str) -> str:
+    """*selector* as given; ``LookupError`` if it is a snapshot ref (``@e3``), not CSS."""
+    if selector.startswith("@"):
+        raise LookupError(f"{selector!r} is a snapshot ref: use Tab.select() or Tab.ref()")
+    return selector
+
+
+# TreeWalker of this element's subtree, the relative Tab._TEXT_WALKER_JS.
 _REL_TEXT_WALKER_JS = """
 function(text, exact) {
     var results = [];
@@ -69,12 +76,8 @@ class Element:
         self._object_id: str | None = None
         if object_id:
             self._bind(object_id)
-        self._selector: str | None = (
-            None  # CSS selector used to locate this element (for isolated-world queries)
-        )
-        self._frame_id: str | None = (
-            None  # frame this element belongs to (None → use tab._frame_id)
-        )
+        self._selector: str | None = None  # CSS that located it (isolated-world queries)
+        self._frame_id: str | None = None  # its frame (None: tab._frame_id)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -431,19 +434,16 @@ class Element:
 
     async def select(self, selector: str) -> Element:
         """querySelector relative to this element."""
-        element = await self._call_element(
-            "function(s) { return this.querySelector(s); }", arguments=[{"value": selector}]
-        )
+        script, css = "function(s) { return this.querySelector(s); }", css_selector(selector)
+        element = await self._call_element(script, arguments=[{"value": css}])
         if element is None:
             raise LookupError(f"No element matching {selector!r} inside this element")
         return element
 
     async def select_all(self, selector: str) -> list[Element]:
         """querySelectorAll relative to this element."""
-        return await self._call_elements(
-            "function(s) { return Array.from(this.querySelectorAll(s)); }",
-            arguments=[{"value": selector}],
-        )
+        script = "function(s) { return Array.from(this.querySelectorAll(s)); }"
+        return await self._call_elements(script, arguments=[{"value": css_selector(selector)}])
 
     async def find(self, text: str, *, exact: bool = False) -> Element:
         """Find a descendant by visible text.  Raises ``LookupError``."""

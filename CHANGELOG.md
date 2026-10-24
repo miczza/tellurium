@@ -14,7 +14,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   keeps its ref across snapshots of one document, a main-frame navigation
   makes every earlier ref raise `StaleElementError`, an unknown ref raises
   `LookupError` at once (a ref is never polled for), as does a malformed
-  `"@…"` selector.
+  `"@…"` selector. A ref passed where CSS is expected (`select_all`,
+  `wait_for`, `eval_on`, `snapshot(selector=)`, `Element.select`/`select_all`)
+  raises `LookupError` pointing at `Tab.select()`/`Tab.ref()`.
 - `Tab.expect_download(timeout=30)`: `async with tab.expect_download() as
   info: ...` then `download = await info.value`. It takes the downloads of the
   tab's main frame and of its same-process iframes (tracked from

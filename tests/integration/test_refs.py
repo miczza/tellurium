@@ -180,3 +180,23 @@ async def test_refs_with_stealth(stealth_browser, local_server):
     user = re.findall(r"- textbox \[ref=(e\d+)\]", text)[0]
     await (await tab.select(f"@{user}")).type("ada", human=True)
     assert await tab.eval("document.getElementById('user').value") == "ada"
+
+
+_CSS_ONLY = {
+    "select_all": lambda tab, form: tab.select_all("@e1"),
+    "wait_for": lambda tab, form: tab.wait_for("@e1", timeout=1),
+    "eval_on": lambda tab, form: tab.eval_on("@e1", "e => 1"),
+    "snapshot": lambda tab, form: tab.snapshot(selector="@e1"),
+    "element.select": lambda tab, form: form.select("@e1"),
+    "element.select_all": lambda tab, form: form.select_all("@e1"),
+}
+
+
+@pytest.mark.parametrize("method", sorted(_CSS_ONLY))
+async def test_a_ref_given_where_css_is_expected_points_at_select(browser, local_server, method):
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/snapshot_form.html")
+    await tab.snapshot()
+    form = await tab.select("#login")
+    with pytest.raises(LookupError, match=r"snapshot ref.*Tab\.select\(\) or Tab\.ref\(\)"):
+        await _CSS_ONLY[method](tab, form)

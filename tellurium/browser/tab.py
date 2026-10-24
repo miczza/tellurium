@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from tellurium.browser.dialog import DialogGuard, DialogHandler
 from tellurium.browser.download import DownloadWaiter, TabFrames
-from tellurium.browser.element import Element
+from tellurium.browser.element import Element, css_selector
 from tellurium.browser.handles import (
     HandleGroup,
     StaleElementError,
@@ -273,7 +273,7 @@ class Tab:
         doc = await send("DOM.getDocument", {"depth": 0}, timeout=timeout)
         query = await send(
             "DOM.querySelector",
-            {"nodeId": doc["root"]["nodeId"], "selector": selector},
+            {"nodeId": doc["root"]["nodeId"], "selector": css_selector(selector)},
             timeout=timeout,
         )
         node_id = query.get("nodeId", 0)
@@ -326,7 +326,7 @@ class Tab:
         try:
             root = await self._get_document_root()
             result = await self._session.send(
-                "DOM.querySelector", {"nodeId": root, "selector": selector}
+                "DOM.querySelector", {"nodeId": root, "selector": css_selector(selector)}
             )
         except CDPError as exc:  # a navigation replaced the root between the two calls
             if not isinstance(as_stale(exc), StaleElementError):
@@ -375,6 +375,7 @@ class Tab:
         nodes (*interactive*), the first *selector* match's subtree, *depth* levels.
         Over *max_nodes* DOM nodes or *snapshot_timeout* s: ``SnapshotTooLargeError``.
         A node keeps its ref until the main frame navigates; act on it with :meth:`ref`."""
+        selector = css_selector(selector) if selector else selector
         opts = {"interactive": interactive, "selector": selector, "depth": depth}
         limits = {"max_nodes": max_nodes, "snapshot_timeout": snapshot_timeout}
         return await _snapshot_nodes(self._session, self._refs, **opts, **limits)
@@ -400,7 +401,7 @@ class Tab:
         while True:
             root = await self._get_document_root()
             result = await self._session.send(
-                "DOM.querySelectorAll", {"nodeId": root, "selector": selector}
+                "DOM.querySelectorAll", {"nodeId": root, "selector": css_selector(selector)}
             )
             found = [await self._element_or_none(nid) for nid in result.get("nodeIds", [])]
             elements = [element for element in found if element is not None]
