@@ -280,3 +280,27 @@ def test_five_thousand_nodes_build_and_render_fast():
     elapsed = time.perf_counter() - start
     assert text.count("\n") + 1 == 1 + 1000 * 3
     assert elapsed < 0.15, f"pure build+render took {elapsed * 1000:.0f} ms"
+
+
+def _nested_groups(first_id: int, count: int, leaf: dict) -> list[dict]:
+    """RootWebArea > group > group > ... (count) > leaf."""
+    nodes = [_node(first_id, "RootWebArea", "", [first_id + 1])]
+    for i in range(first_id + 1, first_id + count + 1):
+        nodes.append(_node(i, "group", "", [i + 1]))
+    leaf = dict(leaf, nodeId=str(first_id + count + 1))
+    leaf["backendDOMNodeId"] = first_id + count + 1
+    return nodes + [leaf]
+
+
+def test_nesting_limit_spans_stitched_iframes():
+    """280 groups, an iframe, 280 more groups: the walk never recurses without bound."""
+    inner = AXTree(nodes=_nested_groups(10_000, 280, _node(0, "button", "Deep")))
+    outer = AXTree(nodes=_nested_groups(1, 280, _node(0, "Iframe", "frame")))
+    outer.frames[282] = inner
+    nested = AXTree(nodes=_nested_groups(1, 280, _node(0, "Iframe", "frame")))
+    nested.frames[282] = outer  # and once more, frame in frame
+    for tree in (outer, nested):
+        text = _snapshot(tree)
+        assert text.startswith("- group [ref=e1]:")
+        assert "Deep" not in text  # cut by the total nesting limit
+        _snapshot(tree, interactive=True)

@@ -35,8 +35,9 @@ if TYPE_CHECKING:
 SNAPSHOT_TIMEOUT = 30.0
 # Iframes nested deeper than this are shown without their content.
 _MAX_FRAME_NESTING = 8
-# AX nesting walked at most (keeps the recursion far from Python's limit).
-_MAX_AX_NESTING = 300
+# AX nesting walked at most, across stitched iframes too: two Python frames per
+# level keep the recursion far from the interpreter's limit (1000).
+_MAX_AX_NESTING = 250
 
 # Never shown, nor their subtrees.
 _DROPPED = frozenset({"InlineTextBox", "ListMarker", "LineBreak"})
@@ -266,7 +267,7 @@ class _Pruner:
             raw = str((node.get("name") or {}).get("value") or "")
             return [] if self.interactive else [SnapshotNode(None, "text", raw)]
         if role == "Iframe":
-            return self.iframe(node, name, level)
+            return self.iframe(node, name, level, nesting + 1)
         props = _props(node)
         if self.interactive and not (
             role in _INTERACTIVE or (props.get("editable") and props.get("focusable"))
@@ -284,16 +285,25 @@ class _Pruner:
             snap.children = _fuse(self.children(node, level + 1, nesting), name, snap.value)
         return [snap]
 
-    def iframe(self, node: dict[str, Any], name: str, level: int) -> list[SnapshotNode]:
+    def iframe(
+        self, node: dict[str, Any], name: str, level: int, nesting: int
+    ) -> list[SnapshotNode]:
+        # *nesting* carries on into the frame: the limit is for the whole walk
         frame = self.tree.frames.get(node.get("backendDOMNodeId") or 0)
         if isinstance(frame, str):
             return [SnapshotNode(None, "iframe", frame, states={"oopif": True})]
         inner = _Pruner(frame, self.ref_for, self.interactive, self.depth) if frame else None
         if self.interactive:
-            return [n for r in inner.roots(None) for n in inner.emit(r, level)] if inner else []
+            return (
+                [n for r in inner.roots(None) for n in inner.emit(r, level, nesting)]
+                if inner
+                else []
+            )
         snap = SnapshotNode(self.ref_for(node["backendDOMNodeId"]), "iframe", name)
         if inner:
-            snap.children = [n for r in inner.roots(None) for n in inner.emit(r, level + 1)]
+            snap.children = [
+                n for r in inner.roots(None) for n in inner.emit(r, level + 1, nesting)
+            ]
         return [snap]
 
 

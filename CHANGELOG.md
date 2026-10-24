@@ -14,7 +14,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `[truncated: N more lines]` line); `take_snapshot_nodes()` returns the same
   as `SnapshotNode` trees. Built on `Accessibility.getFullAXTree`, without
   `Runtime.enable`; same-process iframes are stitched in, OOPIFs show as
-  `- iframe "<url>" [oopif]`.
+  `- iframe "<url>" [oopif]`. The AX nesting walked is bounded across
+  stitched iframes, so a hostile page cannot exhaust the recursion.
 - `tellurium.browser.refs`: per-tab `RefMap` (`ref ↔ backendDOMNodeId`, stable
   within a document, stale after a main-frame navigation, numbers never reused)
   and `resolve_ref()` into a normal `Element`; a ref whose node was detached
