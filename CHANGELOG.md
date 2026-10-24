@@ -7,12 +7,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `tellurium mcp`: tellurium as an MCP server over stdio (extra `tellurium[mcp]`,
-  official `mcp` SDK). Tool arguments are a whitelist checked against each tool's
-  schema (an unknown argument is an error); domain errors come back as `isError`
-  results that tell the agent what to do next (stale ref: take a new snapshot;
-  covered element: what is on top; page too large: use `selector=` or
-  `interactive=true`).
+- `tellurium mcp [--headed]`: tellurium as an MCP server over stdio (extra
+  `tellurium[mcp]`, official `mcp` SDK; without the extra the command prints the
+  install line). Twenty kebab-case tools: `session-open/list/close`,
+  `tab-open/list/close`, `navigate`, `snapshot`, `click`, `fill`, `press`,
+  `select-option`, `check`, `hover`, `scroll`, `wait-for`, `get-text`,
+  `screenshot` (image content), `download` (returns the saved path) and `eval`.
+  Page tools take a required `targetId`; arguments are a whitelist checked
+  against each tool's schema (an unknown argument is an error); actions return
+  `{ok, url, title, navigated}` and use human-like input unless `human: false`.
+  A named session is a `Session` in `~/.tellurium/sessions/<name>` (same
+  cookies, storage and seed next time); downloads go to `~/.tellurium/downloads/`;
+  `TELLURIUM_HOME` moves both. Domain errors come back as `isError` results that
+  tell the agent what to do next (stale ref: take a new snapshot; covered
+  element: what is on top; page too large: use `selector=` or
+  `interactive=true`). Closing stdin, SIGTERM or SIGINT closes every browser
+  and saves every named session.
 - `Tab.snapshot()` / `Tab.snapshot_nodes()`: the accessibility snapshot of the
   tab (`interactive=`, `selector=`, `depth=`, `max_chars=`, plus `max_nodes=`
   and `snapshot_timeout=`). `Tab.ref("e3")` and `Tab.select("@e3")` turn a

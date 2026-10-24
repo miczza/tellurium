@@ -24,6 +24,12 @@ asyncio.run(main())
 pip install tellurium
 ```
 
+Optional MCP server for LLM agents (`tellurium mcp`, see [MCP server](#mcp-server-tellurium-mcp)):
+
+```bash
+pip install tellurium[mcp]
+```
+
 Optional GeoIP support (auto-detect timezone/locale from proxy exit IP):
 
 ```bash
@@ -144,6 +150,44 @@ asyncio.run(main("http://127.0.0.1:8000/download.html"))
   browser owns and removes on `close()`, unless `Browser.launch(downloads_dir=…)`
   or `browser.new_context(downloads_dir=…)` names one to keep. `tab.get()` on
   a download URL raises `NavigationError`: use `expect_download()` instead.
+
+## MCP server (`tellurium mcp`)
+
+The same loop, for agents that speak the Model Context Protocol (Claude Code,
+Codex, …). Install the extra and register the server; it talks over stdio, so
+no port is opened:
+
+```bash
+pip install 'tellurium[mcp]'
+claude mcp add tellurium -- tellurium mcp            # add --headed to watch the browser
+```
+
+A typical run: `session-open {"name": "github"}` returns a `sessionId` and the
+`targetId` of its first tab; `navigate`, `snapshot`, then `fill` / `click` by
+ref; `download` returns the saved file's path; `session-close` saves. Next
+time `session-open {"name": "github"}` brings back the same identity (cookies,
+storage, fingerprint seed). Without a name the session is throwaway.
+
+| Tools | |
+|---|---|
+| `session-open`, `session-list`, `session-close` | browsers; a named session lives in `~/.tellurium/sessions/<name>` |
+| `tab-open`, `tab-list`, `tab-close` | tabs; popups appear in `tab-list` with their own `targetId` |
+| `navigate` | `url`, or `history`: `back` / `forward` / `reload` |
+| `snapshot` | the accessibility snapshot (`interactive`, `selector`, `depth`, `maxChars`) |
+| `click`, `fill`, `press`, `select-option`, `check`, `hover`, `scroll` | act on a ref; human-like input unless `human: false` |
+| `download` | click a ref, wait, save to `~/.tellurium/downloads/` and return the path |
+| `wait-for`, `get-text`, `screenshot`, `eval` | wait for text / ref / URL; read text; PNG image; JavaScript |
+
+- Every page tool takes the required `targetId`; arguments are checked against
+  the tool's schema, so an unknown argument is an error, not ignored.
+- Actions return `{ok, url, title, navigated}`, not a new snapshot: the agent
+  asks for one when the page changed.
+- Errors come back as tool errors that say what to do: a stale ref asks for a
+  new snapshot, a covered element names what is on top, a page too large to
+  snapshot suggests `selector=` or `interactive=true`.
+- When the client disconnects, or on SIGTERM/SIGINT, every browser is closed
+  and every named session saved.
+- `TELLURIUM_HOME` moves `~/.tellurium` (sessions and downloads) elsewhere.
 
 ---
 
@@ -1076,6 +1120,7 @@ tellurium list-browsers
 tellurium update-browser [--check] [--security-only]
 tellurium prune-browsers [--keep N]
 tellurium verify-browser [--reinstall]
+tellurium mcp [--headed]                                   # MCP server on stdio (tellurium[mcp])
 ```
 
 | Command | What it does |
@@ -1089,6 +1134,7 @@ tellurium verify-browser [--reinstall]
 | `update-browser` | Check the `chromium-telluride` releases and install a newer one. `--check` only reports, `--security-only` installs security releases only. |
 | `prune-browsers` | Delete old cached versions, keeping the `--keep N` most recent. The version behind `current` is never pruned. |
 | `verify-browser` | Re-hash the installed binary and compare with `binary_sha256` in `MANIFEST.json`. `--reinstall` re-downloads when the check fails. |
+| `mcp` | Serve tellurium's browser tools over MCP on stdio for an LLM agent. `--headed` shows the windows. Needs `pip install tellurium[mcp]`. |
 
 ---
 

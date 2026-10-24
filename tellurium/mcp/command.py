@@ -16,9 +16,6 @@ def register(subparsers: Any) -> None:
         "mcp", help="Run tellurium as an MCP server on stdio (needs tellurium[mcp])"
     )
     parser.add_argument("--headed", action="store_true", help="Show the browser windows")
-    parser.add_argument(
-        "--allow-eval", action="store_true", help="List the eval tool (always on with stdio)"
-    )
     parser.set_defaults(run=main)
 
 
