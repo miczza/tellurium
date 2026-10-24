@@ -85,6 +85,66 @@ async with browser:
     print(data)
 ```
 
+## Using tellurium from an LLM agent
+
+An agent does not read HTML: it reads a compact accessibility snapshot, picks a
+ref, and acts on it. `tab.snapshot()` gives one line per node, with a ref on
+every node you can act on:
+
+```text
+- link "Report" [ref=e1]
+- link "Big file" [ref=e2]
+- iframe [ref=e3]:
+  - link "Inner" [ref=e4]
+```
+
+`tab.select("@e1")` (or `tab.ref("e1")`) turns a ref back into a normal
+`Element`, so `click()`, `type()` and `human=True` work as usual. A complete
+run, from snapshot to downloaded file:
+
+```python
+import asyncio
+import re
+
+from tellurium import Browser
+
+
+async def main(url: str) -> None:
+    browser = await Browser.launch(headless=True)
+    async with browser:
+        tab = await browser.get(url)
+        page = await tab.snapshot(interactive=True)  # what the LLM reads
+        print(page)
+        ref = re.search(r'- link "Report" \[ref=(e\d+)\]', page).group(1)  # what it picks
+        async with tab.expect_download() as info:
+            await (await tab.select(f"@{ref}")).click(human=True)
+        download = await info.value
+        print(download.suggested_filename, await download.path())
+
+
+asyncio.run(main("http://127.0.0.1:8000/download.html"))
+```
+
+- **Snapshot options**: `interactive=True` keeps only what can be used,
+  `selector="form"` snapshots one subtree, `depth=` limits nesting,
+  `max_chars=` cuts the text with an explicit `[truncated: …]` line.
+  `snapshot_nodes()` returns the same tree as `SnapshotNode(ref, role, name,
+  value, states, children)`. Pages over `max_nodes=` (default 50000) raise
+  `SnapshotTooLargeError`: snapshot a part with `selector=`.
+- **Ref lifetime**: a node keeps its ref across snapshots of the same document.
+  After a navigation, or once the node left the page (an SPA re-render), its
+  ref raises `StaleElementError`, never acts on another element; a ref no
+  snapshot gave out raises `LookupError`. Take a new snapshot and retry.
+- **Frames**: same-process iframes are part of the snapshot and their refs
+  work like any other; a cross-site iframe shows as `- iframe "<url>" [oopif]`.
+- **Downloads**: `tab.expect_download(timeout=30)` takes the next download of
+  the tab (its iframes included). `download.url`, `suggested_filename`,
+  `await download.path()`, `await download.save_as(path)`, `await
+  download.cancel()`; failures raise `DownloadError`. Files go to a folder the
+  browser owns and removes on `close()`, unless `Browser.launch(downloads_dir=…)`
+  or `browser.new_context(downloads_dir=…)` names one to keep. `tab.get()` on
+  a download URL raises `NavigationError`: use `expect_download()` instead.
+
 ---
 
 ## API Reference
