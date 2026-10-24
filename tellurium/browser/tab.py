@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from tellurium.browser.dialog import DialogGuard, DialogHandler
-from tellurium.browser.download import DownloadWaiter, TabFrames, expect_tab_download
+from tellurium.browser.download import DownloadWaiter, TabFrames
 from tellurium.browser.element import Element
 from tellurium.browser.handles import (
     HandleGroup,
@@ -388,7 +388,7 @@ class Tab:
     def expect_download(self, timeout: float = 30) -> DownloadWaiter:
         """``async with tab.expect_download() as info: <start it>``, then
         ``download = await info.value``: the next download of this tab (iframes too)."""
-        return expect_tab_download(self, timeout)
+        return self._browser._downloads.expect_frames(self._frames, timeout=timeout)
 
     async def select_all(self, selector: str, *, timeout: float = 0) -> list[Element]:
         """Return all elements matching a CSS selector, polling up to *timeout* s for one.

@@ -287,6 +287,14 @@ class Downloads:
         those frames, used when the frame is not a known tab."""
         return DownloadWaiter(self, accepts, context_id, timeout)
 
+    def expect_frames(
+        self, frames: TabFrames, *, timeout: float = DEFAULT_TIMEOUT
+    ) -> DownloadWaiter:
+        """A waiter for the next download of one tab: started by one of its *frames*,
+        saved in the folder of the browser context of its main frame."""
+        located = self._locate(frames.main) if self._locate is not None else None
+        return self.expect(frames.__contains__, context_id=located or None, timeout=timeout)
+
     def _on_will_begin(self, params: dict) -> None:
         frame_id = params.get("frameId", "")
         waiter = next((w for w in self._waiters if w.accepts(frame_id)), None)
@@ -346,6 +354,11 @@ class TabFrames:
         session.on("Page.frameNavigated", self._on_navigated)
         session.on("Page.frameDetached", self._on_detached)
 
+    @property
+    def main(self) -> str:
+        """The id of the tab's main frame."""
+        return self._main
+
     def __contains__(self, frame_id: object) -> bool:
         return bool(frame_id) and frame_id in self._ids
 
@@ -361,13 +374,3 @@ class TabFrames:
         # "swap": the frame moves to another process under the same id, still ours
         if params.get("reason") != "swap" and params.get("frameId") != self._main:
             self._ids.discard(params.get("frameId", ""))
-
-
-def expect_tab_download(tab: Any, timeout: float = DEFAULT_TIMEOUT) -> DownloadWaiter:
-    """A waiter for the next download started by *tab*'s main frame or one of its
-    same-process iframes, saved in the folder of the tab's browser context."""
-    browser = tab._browser
-    contexts = browser._contexts.values()
-    context_id = next((c.context_id for c in contexts if tab in c._tabs), None)
-    frames = tab._frames
-    return browser._downloads.expect(frames.__contains__, context_id=context_id, timeout=timeout)
