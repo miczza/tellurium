@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Cross-site frame</title></head>
+<body>
+  <h1>Host</h1>
+  <iframe id="remote" title="Remote frame"></iframe>
+  <script>
+    // Served as a.test: the frame comes from b.test (same server, other site),
+    // so site isolation puts it in its own renderer.
+    document.getElementById('remote').src =
+      location.protocol + '//b.test:' + location.port + '/snapshot_child.html';
+  </script>
+</body>
+</html>

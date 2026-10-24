@@ -1,0 +1,123 @@
+{
+ "nodes": [
+  {
+   "nodeId": "85",
+   "ignored": false,
+   "childIds": [
+    "87"
+   ],
+   "backendDOMNodeId": 85,
+   "role": {
+    "value": "RootWebArea"
+   },
+   "name": {
+    "value": "Cross-site frame"
+   },
+   "properties": [
+    {
+     "name": "focusable",
+     "value": {
+      "value": true
+     }
+    },
+    {
+     "name": "url",
+     "value": {
+      "value": "http://a.test:8000/snapshot_oopif.html"
+     }
+    }
+   ]
+  },
+  {
+   "nodeId": "87",
+   "ignored": true,
+   "childIds": [
+    "90"
+   ],
+   "backendDOMNodeId": 87,
+   "parentId": "85",
+   "role": {
+    "value": "none"
+   }
+  },
+  {
+   "nodeId": "90",
+   "ignored": true,
+   "childIds": [
+    "91",
+    "92"
+   ],
+   "backendDOMNodeId": 90,
+   "parentId": "87",
+   "role": {
+    "value": "none"
+   }
+  },
+  {
+   "nodeId": "91",
+   "ignored": false,
+   "childIds": [
+    "94"
+   ],
+   "backendDOMNodeId": 91,
+   "parentId": "90",
+   "role": {
+    "value": "heading"
+   },
+   "name": {
+    "value": "Host"
+   },
+   "properties": [
+    {
+     "name": "level",
+     "value": {
+      "value": 1
+     }
+    }
+   ]
+  },
+  {
+   "nodeId": "92",
+   "ignored": false,
+   "childIds": [],
+   "backendDOMNodeId": 92,
+   "parentId": "90",
+   "role": {
+    "value": "Iframe"
+   },
+   "name": {
+    "value": "Remote frame"
+   }
+  },
+  {
+   "nodeId": "94",
+   "ignored": false,
+   "childIds": [
+    "-1000000026"
+   ],
+   "backendDOMNodeId": 94,
+   "parentId": "91",
+   "role": {
+    "value": "StaticText"
+   },
+   "name": {
+    "value": "Host"
+   }
+  },
+  {
+   "nodeId": "-1000000026",
+   "ignored": false,
+   "childIds": [],
+   "parentId": "94",
+   "role": {
+    "value": "InlineTextBox"
+   },
+   "name": {
+    "value": "Host"
+   }
+  }
+ ],
+ "frames": {
+  "92": "http://b.test:8000/snapshot_child.html"
+ }
+}

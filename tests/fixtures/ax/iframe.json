@@ -1,0 +1,335 @@
+{
+ "nodes": [
+  {
+   "nodeId": "65",
+   "ignored": false,
+   "childIds": [
+    "68"
+   ],
+   "backendDOMNodeId": 65,
+   "role": {
+    "value": "RootWebArea"
+   },
+   "name": {
+    "value": "Frames"
+   },
+   "properties": [
+    {
+     "name": "focusable",
+     "value": {
+      "value": true
+     }
+    },
+    {
+     "name": "url",
+     "value": {
+      "value": "http://a.test:8000/snapshot_iframe.html"
+     }
+    }
+   ]
+  },
+  {
+   "nodeId": "68",
+   "ignored": true,
+   "childIds": [
+    "71"
+   ],
+   "backendDOMNodeId": 68,
+   "parentId": "65",
+   "role": {
+    "value": "none"
+   }
+  },
+  {
+   "nodeId": "71",
+   "ignored": true,
+   "childIds": [
+    "72",
+    "73",
+    "74"
+   ],
+   "backendDOMNodeId": 71,
+   "parentId": "68",
+   "role": {
+    "value": "none"
+   }
+  },
+  {
+   "nodeId": "72",
+   "ignored": false,
+   "childIds": [
+    "75"
+   ],
+   "backendDOMNodeId": 72,
+   "parentId": "71",
+   "role": {
+    "value": "heading"
+   },
+   "name": {
+    "value": "Parent"
+   },
+   "properties": [
+    {
+     "name": "level",
+     "value": {
+      "value": 1
+     }
+    }
+   ]
+  },
+  {
+   "nodeId": "73",
+   "ignored": false,
+   "childIds": [
+    "76"
+   ],
+   "backendDOMNodeId": 73,
+   "parentId": "71",
+   "role": {
+    "value": "button"
+   },
+   "name": {
+    "value": "Top button"
+   },
+   "properties": [
+    {
+     "name": "invalid",
+     "value": {
+      "value": "false"
+     }
+    },
+    {
+     "name": "focusable",
+     "value": {
+      "value": true
+     }
+    }
+   ]
+  },
+  {
+   "nodeId": "74",
+   "ignored": false,
+   "childIds": [],
+   "backendDOMNodeId": 74,
+   "parentId": "71",
+   "role": {
+    "value": "Iframe"
+   },
+   "name": {
+    "value": "Child frame"
+   }
+  },
+  {
+   "nodeId": "75",
+   "ignored": false,
+   "childIds": [
+    "-1000000022"
+   ],
+   "backendDOMNodeId": 75,
+   "parentId": "72",
+   "role": {
+    "value": "StaticText"
+   },
+   "name": {
+    "value": "Parent"
+   }
+  },
+  {
+   "nodeId": "76",
+   "ignored": false,
+   "childIds": [
+    "-1000000023"
+   ],
+   "backendDOMNodeId": 76,
+   "parentId": "73",
+   "role": {
+    "value": "StaticText"
+   },
+   "name": {
+    "value": "Top button"
+   }
+  },
+  {
+   "nodeId": "-1000000022",
+   "ignored": false,
+   "childIds": [],
+   "parentId": "75",
+   "role": {
+    "value": "InlineTextBox"
+   },
+   "name": {
+    "value": "Parent"
+   }
+  },
+  {
+   "nodeId": "-1000000023",
+   "ignored": false,
+   "childIds": [],
+   "parentId": "76",
+   "role": {
+    "value": "InlineTextBox"
+   },
+   "name": {
+    "value": "Top button"
+   }
+  }
+ ],
+ "frames": {
+  "74": {
+   "nodes": [
+    {
+     "nodeId": "67",
+     "ignored": false,
+     "childIds": [
+      "77"
+     ],
+     "backendDOMNodeId": 67,
+     "role": {
+      "value": "RootWebArea"
+     },
+     "name": {
+      "value": "Child"
+     },
+     "properties": [
+      {
+       "name": "focusable",
+       "value": {
+        "value": true
+       }
+      },
+      {
+       "name": "url",
+       "value": {
+        "value": "http://a.test:8000/snapshot_child.html"
+       }
+      }
+     ]
+    },
+    {
+     "nodeId": "77",
+     "ignored": true,
+     "childIds": [
+      "80"
+     ],
+     "backendDOMNodeId": 77,
+     "parentId": "67",
+     "role": {
+      "value": "none"
+     }
+    },
+    {
+     "nodeId": "80",
+     "ignored": true,
+     "childIds": [
+      "81",
+      "82"
+     ],
+     "backendDOMNodeId": 80,
+     "parentId": "77",
+     "role": {
+      "value": "none"
+     }
+    },
+    {
+     "nodeId": "81",
+     "ignored": false,
+     "childIds": [
+      "83"
+     ],
+     "backendDOMNodeId": 81,
+     "parentId": "80",
+     "role": {
+      "value": "paragraph"
+     },
+     "name": {
+      "value": ""
+     }
+    },
+    {
+     "nodeId": "82",
+     "ignored": false,
+     "childIds": [
+      "84"
+     ],
+     "backendDOMNodeId": 82,
+     "parentId": "80",
+     "role": {
+      "value": "button"
+     },
+     "name": {
+      "value": "Inner button"
+     },
+     "properties": [
+      {
+       "name": "invalid",
+       "value": {
+        "value": "false"
+       }
+      },
+      {
+       "name": "focusable",
+       "value": {
+        "value": true
+       }
+      }
+     ]
+    },
+    {
+     "nodeId": "83",
+     "ignored": false,
+     "childIds": [
+      "-1000000024"
+     ],
+     "backendDOMNodeId": 83,
+     "parentId": "81",
+     "role": {
+      "value": "StaticText"
+     },
+     "name": {
+      "value": "Inside the frame"
+     }
+    },
+    {
+     "nodeId": "84",
+     "ignored": false,
+     "childIds": [
+      "-1000000025"
+     ],
+     "backendDOMNodeId": 84,
+     "parentId": "82",
+     "role": {
+      "value": "StaticText"
+     },
+     "name": {
+      "value": "Inner button"
+     }
+    },
+    {
+     "nodeId": "-1000000024",
+     "ignored": false,
+     "childIds": [],
+     "parentId": "83",
+     "role": {
+      "value": "InlineTextBox"
+     },
+     "name": {
+      "value": "Inside the frame"
+     }
+    },
+    {
+     "nodeId": "-1000000025",
+     "ignored": false,
+     "childIds": [],
+     "parentId": "84",
+     "role": {
+      "value": "InlineTextBox"
+     },
+     "name": {
+      "value": "Inner button"
+     }
+    }
+   ],
+   "frames": {}
+  }
+ }
+}
