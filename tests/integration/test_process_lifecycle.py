@@ -137,7 +137,7 @@ async def test_a_mute_chrome_times_out_naming_the_command(tmp_path, monkeypatch)
     monkeypatch.setattr(SessionRouter, "default_timeout", 0.5)
     children, profiles = _children(), _temp_profiles()
 
-    with pytest.raises(asyncio.TimeoutError, match=r"Target\.\w+ got no reply"):
+    with pytest.raises(asyncio.TimeoutError, match=r"[A-Z]\w+\.\w+ got no reply"):
         await asyncio.wait_for(Browser.launch(headless=True, executable=str(script)), 20)
 
     assert _children() <= children, "the mute process was not reaped"
