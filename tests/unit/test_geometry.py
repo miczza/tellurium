@@ -13,8 +13,25 @@ class _Session:
         self.answers = list(answers)
         self.calls = []
 
+    hit = 7  # backend id getNodeForLocation answers; the element is 7
+
     async def send(self, method, params=None, timeout=None):
         self.calls.append((method, params))
+        if method == "DOM.getNodeForLocation":
+            return {"backendNodeId": self.hit, "frameId": "main"}
+        if method == "DOM.describeNode":
+            node = params.get("backendNodeId", 7)
+            return {
+                "node": {"backendNodeId": node, "localName": "div", "attributes": ["id", "cover"]}
+            }
+        if method == "Page.getFrameTree":
+            return {"frameTree": {"frame": {"id": "main"}}}
+        if method == "DOM.resolveNode":
+            return {"object": {"objectId": f"o{params['backendNodeId']}"}}
+        if method == "Runtime.callFunctionOn":
+            return {"result": {"value": False}}
+        if method == "Runtime.releaseObject":
+            return {}
         return self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
 
 
@@ -82,5 +99,14 @@ async def test_human_click_presses_where_the_box_still_is():
 async def test_human_click_sends_no_press_if_the_node_went_or_moved(after):
     element = _Element(_Session(_quads(400, 300, 80, 30), after))
     with pytest.raises(StaleElementError):
+        await geometry.human_click(element)
+    assert [event[0] for event in element._tab.events] == ["move"]
+
+
+async def test_human_click_sends_nothing_when_another_node_is_on_top():
+    session = _Session(_quads(400, 300, 80, 30))
+    session.hit = 99
+    element = _Element(session)
+    with pytest.raises(geometry.ElementNotHittableError, match='<div id="cover"> is on top'):
         await geometry.human_click(element)
     assert [event[0] for event in element._tab.events] == ["move"]

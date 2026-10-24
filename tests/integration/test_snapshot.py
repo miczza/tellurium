@@ -361,3 +361,29 @@ async def test_selector_on_a_huge_subtree_is_refused_with_a_clear_error(browser,
     with pytest.raises(SnapshotTooLargeError, match="selector="):
         await take_snapshot(tab._session, RefMap(), selector="#rows")
     assert time.perf_counter() - start < 12
+
+
+@pytest.mark.parametrize("mode", ["frame", "ancestor", "cover"])
+async def test_human_click_never_lands_on_another_element(browser, local_server, mode):
+    """Zoomed frames skew Chrome's quads; an overlay hides the target: either the
+    click reaches Save, or nothing is sent and the error says what is on top."""
+    from tellurium.browser.geometry import ElementNotHittableError
+
+    tab = browser.main_tab
+    refs = _watched(tab)
+    await tab.get(f"{local_server}/snapshot_zoom.html?{mode}")
+    text = await take_snapshot(tab._session, refs)
+    save = await resolve_ref(tab._session, tab, refs, _ref_of(text, '- button "Save"'))
+    status = await tab.select("#status")
+    for _ in range(3):
+        try:
+            await save.click(human=True)
+        except ElementNotHittableError as exc:
+            assert "on top" in str(exc)
+            if mode == "cover":
+                assert "cover" in str(exc)
+        assert await status.text() in ("idle", "saved"), mode
+    if mode == "cover":
+        assert await status.text() == "idle"
+        with pytest.raises(ElementNotHittableError):
+            await save.hover()

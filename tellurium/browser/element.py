@@ -372,6 +372,7 @@ class Element:
         """Move the mouse to the centre of this element."""
         await self.scroll_into_view()
         x, y = await self._center()
+        await geometry.ensure_hit(self, x, y)  # never hover another element
         await self._tab.mouse_move(x, y)
 
     async def scroll_into_view(self, human: bool = False) -> None:
