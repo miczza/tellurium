@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 import pytest
@@ -73,11 +74,43 @@ async def test_same_ref_within_a_document_stale_after_navigation(browser, local_
     assert _ref_of(await tab.snapshot(interactive=True), '- textbox "Email"') == ref
     await tab.get(url)  # same page, new document
     for call in (tab.ref(ref), tab.select(f"@{ref}")):
-        with pytest.raises(StaleElementError):
+        with pytest.raises(StaleElementError, match="previous document"):
             await call
     fresh = _ref_of(await tab.snapshot(), '- textbox "Email"')
     assert fresh != ref
     assert await (await tab.select(f"@{fresh}")).attr("id") == "email"
+
+
+async def test_refs_are_stale_after_a_cross_site_navigation(browser, local_server):
+    """A new site gets a new renderer, whose backend node ids start over: without the
+    tab resetting its refs, an old ref would land on a node of the new document."""
+    tab = browser.main_tab
+    other_site = local_server.replace("127.0.0.1", "localhost")
+    await tab.get(f"{local_server}/snapshot_form.html")
+    old = re.findall(r"\[ref=(e\d+)\]", await tab.snapshot())
+    await tab.get(f"{other_site}/snapshot_form.html")
+    assert (await tab.snapshot()).count("[ref=") == len(old)
+    for ref in old:
+        with pytest.raises(StaleElementError, match="previous document"):
+            await tab.ref(ref)
+
+
+async def test_refs_are_stale_after_going_back(browser, local_server):
+    """Back to a page, restored from the back/forward cache or loaded again: a ref
+    taken there before leaving belongs to a previous document."""
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/snapshot_form.html")
+    ref = _ref_of(await tab.snapshot(), '- textbox "Email"')
+    await tab.get(f"{local_server}/basic.html")
+    back = asyncio.create_task(tab.wait_for_navigation(timeout=10))
+    await asyncio.sleep(0)  # the wait listens before the navigation starts
+    await tab.back()
+    await back
+    assert tab.url.endswith("/snapshot_form.html")
+    with pytest.raises(StaleElementError, match="previous document"):
+        await tab.ref(ref)
+    fresh = _ref_of(await tab.snapshot(), '- textbox "Email"')
+    assert await (await tab.ref(fresh)).attr("id") == "email"
 
 
 async def test_unknown_ref_is_a_lookup_error_without_waiting(browser, local_server):
