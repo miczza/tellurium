@@ -7,6 +7,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Tab.snapshot()` / `Tab.snapshot_nodes()`: the accessibility snapshot of the
+  tab (`interactive=`, `selector=`, `depth=`, `max_chars=`, plus `max_nodes=`
+  and `snapshot_timeout=`). `Tab.ref("e3")` and `Tab.select("@e3")` turn a
+  snapshot ref into a normal `Element` (human input included): the same node
+  keeps its ref across snapshots of one document, a main-frame navigation
+  makes every earlier ref raise `StaleElementError`, an unknown ref raises
+  `LookupError` at once (a ref is never polled for).
+- `Tab.expect_download(timeout=30)`: `async with tab.expect_download() as
+  info: ...` then `download = await info.value`. It takes the downloads of the
+  tab's main frame and of its same-process iframes (tracked from `Page` frame
+  events), never another tab's, and saves them in the folder of the tab's
+  browser context.
+- Exported from `tellurium`: `BrowserContext`, `Download`, `DownloadError`,
+  `SnapshotNode`, `SnapshotTooLargeError`, `ElementNotHittableError`.
+
 - `tellurium.browser.snapshot`: accessibility snapshot of a page for LLM
   agents. `take_snapshot()` renders a compact tree (`- button "Sign in"
   [ref=e3]`, `- textbox "Email" [ref=e5]: "ada@example.com"`, with
@@ -135,6 +150,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `NavigationError` for an aborted navigation (`net::ERR_ABORTED`, as for a
+  download) now points at `Tab.expect_download()`.
+- `Tab.back()` / `Tab.forward()` bound their CDP calls (5 s each); the XPath
+  search of `Tab.xpath()` / `Tab.xpath_all()` is shared, unchanged in behaviour.
 - `launch_chrome` and `launch_chrome_posix` moved from
   `tellurium.browser.launcher` to `tellurium.browser.process` (with the Chrome
   process lifecycle); the old import path still works.

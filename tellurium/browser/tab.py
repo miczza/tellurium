@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from tellurium.browser.dialog import DialogGuard, DialogHandler
+from tellurium.browser.download import DownloadWaiter, TabFrames, expect_tab_download
 from tellurium.browser.element import Element
 from tellurium.browser.handles import (
     HandleGroup,
@@ -22,9 +23,14 @@ from tellurium.browser.handles import (
 from tellurium.browser.navigation import (
     check_wait_until,
     navigate,
+    poll_url,
+    step_history,
     url_matches,
     wait_for_main_frame,
 )
+from tellurium.browser.refs import RefMap, parse_ref, resolve_ref
+from tellurium.browser.snapshot import FETCH_TIMEOUT, MAX_DOM_NODES, SnapshotNode, render
+from tellurium.browser.snapshot import take_snapshot_nodes as _snapshot_nodes
 from tellurium.cdp.types import CDPError
 
 logger = logging.getLogger("tellurium")
@@ -100,6 +106,8 @@ class Tab:
         self._session = session
         self._dialogs = DialogGuard(session, dialogs)
         self._handles = HandleGroup(session)
+        self._refs = RefMap()  # snapshot refs, a generation per main-frame document
+        self._frames = TabFrames(session, target_id)  # routes iframe downloads here
         self._browser = browser
         self._target_id = target_id
         self._url: str = ""
@@ -131,6 +139,7 @@ class Tab:
                 if not frame.get("parentId"):
                     self._frame_id = fid
                     self._handles.rotate()  # the old document's handles are gone
+                    self._refs.reset()
 
         self._session.on("Page.frameNavigated", _on_frame_navigated)
 
@@ -201,19 +210,11 @@ class Tab:
 
     async def back(self) -> None:
         """Go back in history."""
-        history = await self._session.send("Page.getNavigationHistory", {})
-        idx = history["currentIndex"]
-        if idx > 0:
-            entry = history["entries"][idx - 1]
-            await self._session.send("Page.navigateToHistoryEntry", {"entryId": entry["id"]})
+        await step_history(self._session, -1)
 
     async def forward(self) -> None:
         """Go forward in history."""
-        history = await self._session.send("Page.getNavigationHistory", {})
-        idx = history["currentIndex"]
-        if idx < len(history["entries"]) - 1:
-            entry = history["entries"][idx + 1]
-            await self._session.send("Page.navigateToHistoryEntry", {"entryId": entry["id"]})
+        await step_history(self._session, 1)
 
     async def reload(self) -> None:
         await self._session.send("Page.reload", {})
@@ -335,7 +336,9 @@ class Tab:
         return await self._element_or_none(nid, selector) if nid else None
 
     async def select(self, selector: str, *, timeout: float = 10) -> Element:
-        """Wait for a CSS-matching element and return it."""
+        """Wait for a CSS-matching element and return it; ``"@e3"`` is :meth:`ref`."""
+        if selector.startswith("@") and parse_ref(selector):
+            return await self.ref(selector)
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
             element = await self._query_selector(selector)
@@ -345,16 +348,53 @@ class Tab:
                 raise TimeoutError(f"Timed out waiting for selector {selector!r}")
             await asyncio.sleep(0.2)
 
-    async def select_all(self, selector: str, *, timeout: float = 0) -> list[Element]:
-        """Return all elements matching a CSS selector.
+    async def snapshot(
+        self,
+        *,
+        interactive: bool = False,
+        selector: str | None = None,
+        depth: int | None = None,
+        max_chars: int | None = None,
+        **limits: Any,
+    ) -> str:
+        """The page as text for an LLM, ``- button "Sign in" [ref=e3]`` per line, cut past
+        *max_chars* with a signal. Options and *limits* as in :meth:`snapshot_nodes`."""
+        opts = {"interactive": interactive, "selector": selector, "depth": depth}
+        return render(await self.snapshot_nodes(**opts, **limits), max_chars=max_chars)
 
-        *timeout* — seconds to keep polling until at least one element
-        matches.  The default of ``0`` returns immediately (possibly an empty
-        list), which is the historical behaviour; design doc 03 documents a
-        default of 10 but that would silently block for 10s on the common
-        "count the matches, maybe zero" call, so waiting stays opt-in.
-        An empty list is returned when the timeout expires — no exception,
-        unlike :meth:`select`.
+    async def snapshot_nodes(
+        self,
+        *,
+        interactive: bool = False,
+        selector: str | None = None,
+        depth: int | None = None,
+        max_nodes: int | None = MAX_DOM_NODES,
+        snapshot_timeout: float = FETCH_TIMEOUT,
+    ) -> list[SnapshotNode]:
+        """The page's accessibility tree as :class:`SnapshotNode` trees: only usable
+        nodes (*interactive*), the first *selector* match's subtree, *depth* levels.
+        Over *max_nodes* DOM nodes or *snapshot_timeout* s: ``SnapshotTooLargeError``.
+        A node keeps its ref until the main frame navigates; act on it with :meth:`ref`."""
+        opts = {"interactive": interactive, "selector": selector, "depth": depth}
+        limits = {"max_nodes": max_nodes, "snapshot_timeout": snapshot_timeout}
+        return await _snapshot_nodes(self._session, self._refs, **opts, **limits)
+
+    async def ref(self, ref: str) -> Element:
+        """The element of a snapshot ref (``"e3"`` or ``"@e3"``). ``StaleElementError``
+        if it is from an earlier document or the node left the page, ``LookupError``
+        if no snapshot gave it out."""
+        return await resolve_ref(self._session, self, self._refs, ref)
+
+    def expect_download(self, timeout: float = 30) -> DownloadWaiter:
+        """``async with tab.expect_download() as info: <start it>``, then
+        ``download = await info.value``: the next download of this tab (iframes too)."""
+        return expect_tab_download(self, timeout)
+
+    async def select_all(self, selector: str, *, timeout: float = 0) -> list[Element]:
+        """Return all elements matching a CSS selector, polling up to *timeout* s for one.
+
+        The default ``0`` returns at once, possibly an empty list (counting matches,
+        maybe zero, must not block); an expired timeout gives ``[]``, not an error.
         """
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
@@ -416,78 +456,44 @@ class Tab:
 
         return await elements_from_array(self._session, self, remote["objectId"])
 
-    async def xpath(self, expression: str, *, timeout: float = 10) -> Element | None:
-        """Evaluate an XPath expression. Returns first match or *None*.
+    async def _xpath_once(self, expression: str, limit: int | None) -> list[Element]:
+        """One ``DOM.performSearch``, at most *limit* nodes. ``DOM.getDocument`` primes the
+        DOM agent; the result set is always released with ``DOM.discardSearchResults``
+        (without it each poll leaked one set in the DOM agent for the tab's lifetime)."""
+        await self._session.send("DOM.getDocument", {"depth": 0})
+        result = await self._session.send("DOM.performSearch", {"query": expression})
+        search_id, count = result.get("searchId", ""), result.get("resultCount", 0)
+        try:
+            if not count:
+                return []
+            window = {"searchId": search_id, "fromIndex": 0, "toIndex": min(count, limit or count)}
+            nodes = await self._session.send("DOM.getSearchResults", window)
+            found = [await self._element_or_none(n) for n in nodes.get("nodeIds", []) if n]
+            return [element for element in found if element is not None]
+        finally:
+            if search_id:
+                try:
+                    await self._session.send("DOM.discardSearchResults", {"searchId": search_id})
+                except Exception:  # noqa: BLE001 — best effort, must never break input
+                    pass
 
-        ``DOM.getDocument`` is sent to prime the DOM agent (``performSearch``
-        needs a document); its root node id is not used because the search is
-        document-wide. Every result set is released with
-        ``DOM.discardSearchResults`` — without it each poll iteration leaked
-        one set inside the browser's DOM agent for the lifetime of the tab.
-        """
+    async def _poll_xpath(self, expression: str, timeout: float, limit: int | None = None):
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
-            await self._session.send("DOM.getDocument", {"depth": 0})
-            result = await self._session.send("DOM.performSearch", {"query": expression})
-            search_id = result.get("searchId", "")
-            count = result.get("resultCount", 0)
-            try:
-                if count:
-                    nodes = await self._session.send(
-                        "DOM.getSearchResults",
-                        {"searchId": search_id, "fromIndex": 0, "toIndex": 1},
-                    )
-                    nids = nodes.get("nodeIds", [])
-                    element = await self._element_or_none(nids[0]) if nids and nids[0] else None
-                    if element is not None:
-                        return element
-            finally:
-                if search_id:
-                    try:
-                        await self._session.send(
-                            "DOM.discardSearchResults", {"searchId": search_id}
-                        )
-                    except Exception:  # noqa: BLE001 — best effort, must never break input
-                        pass
-            if asyncio.get_running_loop().time() >= deadline:
-                return None
-            await asyncio.sleep(0.2)
-
-    async def xpath_all(self, expression: str, *, timeout: float = 0) -> list[Element]:
-        """Return every node matching an XPath expression.
-
-        *timeout* — seconds to keep polling until at least one node matches
-        (default ``0``: return immediately, possibly empty).  Like
-        :meth:`xpath`, every ``DOM.performSearch`` result set is released with
-        ``DOM.discardSearchResults``; without it each poll would leak one set
-        inside the browser's DOM agent for the lifetime of the tab.
-        """
-        deadline = asyncio.get_running_loop().time() + timeout
-        while True:
-            await self._session.send("DOM.getDocument", {"depth": 0})
-            result = await self._session.send("DOM.performSearch", {"query": expression})
-            search_id = result.get("searchId", "")
-            count = result.get("resultCount", 0)
-            elements: list[Element] = []
-            try:
-                if count:
-                    nodes = await self._session.send(
-                        "DOM.getSearchResults",
-                        {"searchId": search_id, "fromIndex": 0, "toIndex": count},
-                    )
-                    found = [await self._element_or_none(n) for n in nodes.get("nodeIds", []) if n]
-                    elements = [element for element in found if element is not None]
-            finally:
-                if search_id:
-                    try:
-                        await self._session.send(
-                            "DOM.discardSearchResults", {"searchId": search_id}
-                        )
-                    except Exception:  # noqa: BLE001 — best effort cleanup
-                        pass
+            elements = await self._xpath_once(expression, limit)
             if elements or asyncio.get_running_loop().time() >= deadline:
                 return elements
             await asyncio.sleep(0.2)
+
+    async def xpath(self, expression: str, *, timeout: float = 10) -> Element | None:
+        """First node matching an XPath expression, polled for up to *timeout* s; or *None*."""
+        found = await self._poll_xpath(expression, timeout, limit=1)
+        return found[0] if found else None
+
+    async def xpath_all(self, expression: str, *, timeout: float = 0) -> list[Element]:
+        """Every node matching an XPath expression, polling up to *timeout* s for one
+        (default ``0``: return immediately, possibly empty)."""
+        return await self._poll_xpath(expression, timeout)
 
     async def wait_for(
         self, selector: str, *, state: str = "visible", timeout: float = 30
@@ -1191,15 +1197,7 @@ class Tab:
         *url* is a glob pattern (``"*/dashboard*"``) when it contains ``*`` or
         ``?``; otherwise it is matched as a substring, as before.
         """
-        deadline = asyncio.get_running_loop().time() + timeout
-        while True:
-            current = await self.eval("window.location.href")
-            if url_matches(url, current or ""):
-                self._url = current
-                return
-            if asyncio.get_running_loop().time() >= deadline:
-                raise TimeoutError(f"Timed out waiting for URL containing {url!r}")
-            await asyncio.sleep(0.25)
+        self._url = await poll_url(lambda: self.eval("window.location.href"), url, timeout)
 
     # ------------------------------------------------------------------
     # Network capture

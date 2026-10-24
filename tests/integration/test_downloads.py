@@ -29,12 +29,8 @@ def private_tempdir(monkeypatch, tmp_path_factory):
 
 
 def expect_download(tab, timeout=30):
-    """What Tab.expect_download (part B) will do: wait for a download of this tab."""
-    browser = tab._browser
-    context_id = next((c.context_id for c in browser._contexts.values() if tab in c._tabs), None)
-    return browser._downloads.expect(
-        lambda frame_id: frame_id == tab._target_id, context_id=context_id, timeout=timeout
-    )
+    """Wait for a download of this tab."""
+    return tab.expect_download(timeout=timeout)
 
 
 async def _click(tab, selector):

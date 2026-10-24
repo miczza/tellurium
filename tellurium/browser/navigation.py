@@ -67,7 +67,8 @@ class NavigationError(RuntimeError):
         if error_text == "net::ERR_ABORTED":
             message += (
                 " (no document was committed: an HTTP 204/205 response, a download,"
-                " or a navigation cancelled by the page)"
+                " or a navigation cancelled by the page; use Tab.expect_download()"
+                " to capture a download)"
             )
         super().__init__(message)
 
@@ -93,6 +94,27 @@ def url_matches(pattern: str, url: str) -> bool:
     if "*" in pattern or "?" in pattern:
         return fnmatch.fnmatchcase(url, pattern)
     return pattern in url
+
+
+async def step_history(session: Session, step: int, timeout: float = _SHORT_TIMEOUT) -> None:
+    """Go *step* entries back (``-1``) or forward (``1``) in history; a no-op at either end."""
+    history = await session.send("Page.getNavigationHistory", {}, timeout=timeout)
+    index = history["currentIndex"] + step
+    if 0 <= index < len(history["entries"]):
+        entry = {"entryId": history["entries"][index]["id"]}
+        await session.send("Page.navigateToHistoryEntry", entry, timeout=timeout)
+
+
+async def poll_url(read_url: Callable[[], Awaitable[str | None]], url: str, timeout: float) -> str:
+    """Poll *read_url* until it matches *url* (see :func:`url_matches`); return it."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        current = await read_url()
+        if url_matches(url, current or ""):
+            return current or ""
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError(f"Timed out waiting for URL containing {url!r}")
+        await asyncio.sleep(0.25)
 
 
 def _dialog_hint(dialogs: DialogGuard | None) -> str:

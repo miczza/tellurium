@@ -328,3 +328,39 @@ class Downloads:
         for download in list(self._active.values()):
             download._finish("canceled", DownloadError(reason))
         self._waiters.clear()
+
+
+class TabFrames:
+    """The frame ids of one tab's page, kept from its ``Page`` frame events, so a
+    download started by one of its same-process iframes reaches the tab's waiter.
+
+    Frame ids are unique across the browser: a kept id never names another
+    tab's frame. A main-frame navigation drops the old document's frames.
+    """
+
+    def __init__(self, session: Any, main_frame_id: str) -> None:
+        self._main = main_frame_id
+        self._ids = {main_frame_id}
+        session.on("Page.frameAttached", lambda p: self._ids.add(p.get("frameId", "")))
+        session.on("Page.frameNavigated", self._on_navigated)
+
+    def __contains__(self, frame_id: object) -> bool:
+        return bool(frame_id) and frame_id in self._ids
+
+    def _on_navigated(self, params: dict) -> None:
+        frame = params.get("frame", {})
+        if not frame.get("parentId"):
+            self._main = frame.get("id") or self._main
+            self._ids = {self._main}
+        elif frame.get("id"):
+            self._ids.add(frame["id"])
+
+
+def expect_tab_download(tab: Any, timeout: float = DEFAULT_TIMEOUT) -> DownloadWaiter:
+    """A waiter for the next download started by *tab*'s main frame or one of its
+    same-process iframes, saved in the folder of the tab's browser context."""
+    browser = tab._browser
+    contexts = browser._contexts.values()
+    context_id = next((c.context_id for c in contexts if tab in c._tabs), None)
+    frames = tab._frames
+    return browser._downloads.expect(frames.__contains__, context_id=context_id, timeout=timeout)
