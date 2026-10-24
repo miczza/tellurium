@@ -12,7 +12,13 @@ import pytest
 
 from tellurium.browser.handles import StaleElementError
 from tellurium.browser.refs import RefMap, resolve_ref
-from tellurium.browser.snapshot import AXTree, fetch_tree, take_snapshot, take_snapshot_nodes
+from tellurium.browser.snapshot import (
+    AXTree,
+    SnapshotTooLargeError,
+    fetch_tree,
+    take_snapshot,
+    take_snapshot_nodes,
+)
 
 # The gate reads metrics the tests leave here (build/ is not versioned).
 METRICS = Path(__file__).parents[2] / "build" / "metrics"
@@ -78,7 +84,7 @@ async def test_snapshot_of_a_login_form(browser, local_server):
     await tab.get(f"{local_server}/snapshot_form.html")
     text = await take_snapshot(tab._session, _watched(tab))
     assert '- heading "Sign in" [level=1] [ref=' in text
-    assert re.search(r'- textbox "Email" \[ref=e\d+\]: ada@example.com', text)
+    assert re.search(r'- textbox "Email" \[ref=e\d+\]: "ada@example.com"', text)
     assert re.search(r'- checkbox "Remember me" \[checked\] \[ref=e\d+\]', text)
     assert re.search(r'- button "Single sign-on" \[disabled\] \[ref=e\d+\]', text)
 
@@ -247,3 +253,32 @@ async def test_ref_after_document_open_is_stale(browser, local_server):
     await tab.eval("document.open(); document.write('<button>Sign in</button>'); document.close()")
     with pytest.raises(StaleElementError):
         await resolve_ref(tab._session, tab, refs, ref)
+
+
+async def test_selector_on_a_huge_page_fetches_only_the_subtree(browser, local_server):
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/snapshot_huge.html")
+    refs = _watched(tab)
+    start = time.perf_counter()
+    text = await take_snapshot(tab._session, refs, selector="#top")
+    elapsed = time.perf_counter() - start
+    assert text.splitlines()[0].startswith("- navigation [ref=")
+    assert 'link "Help"' in text
+    assert elapsed < 1.0, f"selector snapshot took {elapsed:.2f} s"
+
+
+async def test_whole_huge_page_is_refused_fast_with_a_clear_error(browser, local_server):
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/snapshot_huge.html")
+    start = time.perf_counter()
+    with pytest.raises(SnapshotTooLargeError, match="selector="):
+        await take_snapshot(tab._session, RefMap())
+    assert time.perf_counter() - start < 1.0
+
+
+@pytest.mark.parametrize("selector", ["head", "#hidden"])
+async def test_selector_on_a_node_without_ax_is_a_lookup_error(browser, local_server, selector):
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/snapshot_rerender.html")
+    with pytest.raises(LookupError, match="accessibility"):
+        await take_snapshot(tab._session, RefMap(), selector=selector)

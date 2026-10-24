@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Huge</title></head>
+<body>
+  <nav id="top"><a href="/home">Home</a> <a href="/help">Help</a></nav>
+  <div id="rows"></div>
+  <script>
+    // 30000 buttons with their text: 60000 DOM nodes, over the snapshot limit.
+    const rows = document.getElementById('rows');
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < 30000; i++) {
+      const b = document.createElement('button');
+      b.textContent = 'Row ' + i;
+      frag.append(b);
+    }
+    rows.append(frag);
+  </script>
+</body>
+</html>

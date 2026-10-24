@@ -9,13 +9,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `tellurium.browser.snapshot`: accessibility snapshot of a page for LLM
   agents. `take_snapshot()` renders a compact tree (`- button "Sign in"
-  [ref=e3]`, values, `checked`/`disabled`/`expanded`/`level` states) with
-  `interactive=`, `selector=`, `depth=` and `max_chars=` (cut with an explicit
+  [ref=e3]`, `- textbox "Email" [ref=e5]: "ada@example.com"`, with
+  `checked`/`disabled`/`expanded`/`level` states) with `interactive=`,
+  `selector=`, `depth=` and `max_chars=` (always kept, cut with an explicit
   `[truncated: N more lines]` line); `take_snapshot_nodes()` returns the same
-  as `SnapshotNode` trees. Built on `Accessibility.getFullAXTree`, without
-  `Runtime.enable`; same-process iframes are stitched in, OOPIFs show as
-  `- iframe "<url>" [oopif]`. The AX nesting walked is bounded across
-  stitched iframes, so a hostile page cannot exhaust the recursion.
+  as `SnapshotNode` trees. Page text, names and values are always quoted, with
+  control and bidi characters escaped and a `[+N chars]` cap, so a page cannot
+  forge lines or refs. Built on `Accessibility.getFullAXTree` (`queryAXTree`
+  for `selector=`, at the cost of the subtree), without `Runtime.enable`, and
+  `Accessibility.disable` afterwards; pruning runs off the event loop. Pages
+  over 50000 DOM nodes raise `SnapshotTooLargeError` unless scoped with
+  `selector=`; a selector on an element outside the accessibility tree raises
+  `LookupError`. Same-process iframes are stitched in, OOPIFs show as
+  `- iframe "<url>" [oopif]`; the AX nesting walked is bounded across stitched
+  iframes, so a hostile page cannot exhaust the recursion.
 - `tellurium.browser.refs`: per-tab `RefMap` (`ref ↔ backendDOMNodeId`, stable
   within a document, stale after a main-frame navigation, numbers never reused)
   and `resolve_ref()` into a normal `Element`; a ref whose node was detached

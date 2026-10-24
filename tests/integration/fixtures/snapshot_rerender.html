@@ -8,6 +8,7 @@
   <button id="danger" onclick="document.getElementById('status').textContent = 'deleted'">Delete account</button>
   <div id="app"><button onclick="document.getElementById('status').textContent = 'saved'">Save</button></div>
   <p id="status">idle</p>
+  <div id="hidden" style="display:none"><button>Ghost</button></div>
   <script>
     // An SPA re-render: the same button again, as a brand-new node.
     function rerender() {
