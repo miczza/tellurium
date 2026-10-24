@@ -1,8 +1,8 @@
 """Accessibility snapshot of a page, compact enough for an LLM.
 
 ``Accessibility.getFullAXTree`` (or ``queryAXTree`` for a ``selector=``) gives
-the AX nodes; pure functions prune them and render lines such as
-``- textbox "Email" [ref=e5]: "ada@example.com"``. Same-process iframes are
+the AX nodes; pure functions prune them into :class:`SnapshotNode` trees, which
+:mod:`~tellurium.browser.snapshot_text` renders as lines. Same-process iframes are
 stitched under their ``iframe`` node, an OOPIF shows as ``- iframe "<url>"
 [oopif]``. Refs come from the tab's :class:`~tellurium.browser.refs.RefMap`.
 No ``Runtime.enable``: only the Accessibility, DOM and Memory domains.
@@ -11,8 +11,6 @@ No ``Runtime.enable``: only the Accessibility, DOM and Memory domains.
 from __future__ import annotations
 
 import asyncio
-import json
-import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -20,6 +18,7 @@ from urllib.parse import urljoin
 
 from tellurium.browser.handles import StaleElementError
 from tellurium.browser.refs import pending_ref
+from tellurium.browser.snapshot_text import is_text, render, squash
 from tellurium.cdp.types import CDPError
 
 if TYPE_CHECKING:
@@ -51,11 +50,6 @@ _INTERACTIVE = frozenset(
     "button link textbox searchbox checkbox radio switch combobox listbox option menuitem"
     " menuitemcheckbox menuitemradio slider spinbutton tab treeitem DisclosureTriangle".split()
 )
-_SPACES = re.compile(r"\s+")
-# Page text longer than this is cut in the rendering, with a ``[+N chars]`` signal.
-_MAX_TEXT = 300
-# Left raw by json.dumps: C1 controls, bidi marks/overrides/isolates, separators.
-_UNSAFE = re.compile("[\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]")
 
 
 class SnapshotTooLargeError(RuntimeError):
@@ -160,10 +154,6 @@ async def fetch_tree(
     return tree
 
 
-def _text(value: Any) -> str:
-    return _SPACES.sub(" ", str(value)).strip()
-
-
 def _props(node: dict[str, Any]) -> dict[str, Any]:
     return {p.get("name"): (p.get("value") or {}).get("value") for p in node.get("properties", [])}
 
@@ -213,7 +203,7 @@ class _Pruner:
     def emit(self, node: dict[str, Any], level: int, nesting: int = 0) -> list[SnapshotNode]:
         """The snapshot nodes standing for *node* placed at *level*."""
         role = _role(node)
-        name = _text((node.get("name") or {}).get("value") or "")
+        name = squash((node.get("name") or {}).get("value") or "")
         if role in _DROPPED:
             return []
         if node.get("ignored") or role == "RootWebArea" or (role in _TRANSPARENT and not name):
@@ -258,30 +248,26 @@ class _Pruner:
         return [snap]
 
 
-def _is_text(node: SnapshotNode) -> bool:
-    return node.role == "text" and node.ref is None
-
-
 def _fuse(children: list[SnapshotNode], name: str, value: str | None) -> list[SnapshotNode]:
     """Fuse adjacent text, collapse its spaces, drop text repeating a name (a label
     next to its control, the content of a named node)."""
     fused: list[SnapshotNode] = []
     for child in children:
-        if _is_text(child) and fused and _is_text(fused[-1]):
+        if is_text(child) and fused and is_text(fused[-1]):
             fused[-1].name += " " + child.name
         else:
             fused.append(child)
     for child in fused:
-        if _is_text(child):
-            child.name = _text(child.name)
+        if is_text(child):
+            child.name = squash(child.name)
     out = []
     for i, child in enumerate(fused):
-        if _is_text(child):
-            near = [s.name for s in fused[max(i - 1, 0) : i + 2] if not _is_text(s)]
+        if is_text(child):
+            near = [s.name for s in fused[max(i - 1, 0) : i + 2] if not is_text(s)]
             if not child.name or child.name in near:
                 continue
         out.append(child)
-    if out and all(_is_text(c) for c in out) and " ".join(c.name for c in out) in (name, value):
+    if out and all(is_text(c) for c in out) and " ".join(c.name for c in out) in (name, value):
         return []
     return out
 
@@ -304,78 +290,6 @@ def build_nodes(
         raise ValueError(f"depth must be >= 0, got {depth}")
     pruner = _Pruner(tree, ref_for, interactive, float("inf") if depth is None else depth)
     return _fuse(pruner.walk(root, 0, 0), "", None)
-
-
-def _quote(text: str) -> str:
-    """Page text as a JSON string with control and bidi characters escaped, capped:
-    nothing a page writes can end the quotes, break the line or fake a ref."""
-    extra = len(text) - _MAX_TEXT
-    quoted = json.dumps(text[:_MAX_TEXT] + "…" if extra > 0 else text, ensure_ascii=False)
-    quoted = _UNSAFE.sub(lambda m: f"\\u{ord(m.group()):04x}", quoted)
-    return f"{quoted} [+{extra} chars]" if extra > 0 else quoted
-
-
-def _head(node: SnapshotNode) -> str:
-    parts = [node.role]
-    if node.name:
-        parts.append(_quote(node.name))
-    for key, state in node.states.items():
-        if key == "oopif":
-            parts.append("[oopif]")
-        elif key == "level":
-            parts.append(f"[level={state}]")
-        elif state is True:
-            parts.append(f"[{key}]")
-        elif key == "expanded" or state == "mixed":
-            parts.append(f"[{key}={str(state).lower()}]")
-    if node.ref:
-        parts.append(f"[ref={node.ref}]")
-    return " ".join(parts)
-
-
-def _lines(nodes: list[SnapshotNode], indent: str, out: list[str]) -> None:
-    for node in nodes:
-        if _is_text(node):
-            out.append(f"{indent}- text: {_quote(node.name)}")
-            continue
-        line, children = f"{indent}- {_head(node)}", node.children
-        if node.value is not None:
-            line += f": {_quote(_text(node.value))}"
-        elif len(children) == 1 and _is_text(children[0]):
-            line, children = f"{line}: {_quote(children[0].name)}", []
-        elif children:
-            line += ":"
-        out.append(line)
-        _lines(children, indent + "  ", out)
-
-
-def render(nodes: list[SnapshotNode], *, max_chars: int | None = None) -> str:
-    """Render *nodes* as ``- role "name" [state] [ref=eN]: "value"`` lines.
-
-    With *max_chars*, whole lines are kept while they fit and a last line
-    ``- [truncated: N more lines; ...]`` says what was cut; the result never
-    exceeds *max_chars* (shorter signals when it is tiny).
-    """
-    if max_chars is not None and max_chars < 1:
-        raise ValueError(f"max_chars must be >= 1, got {max_chars}")
-    lines: list[str] = []
-    _lines(nodes, "", lines)
-    text = "\n".join(lines)
-    if max_chars is None or len(text) <= max_chars:
-        return text
-    sizes = [0]
-    for line in lines:
-        sizes.append(sizes[-1] + len(line) + 1)
-    for marker in (
-        "- [truncated: {} more lines; narrow with selector=, depth= or interactive=True]",
-        "- [truncated: {} more lines]",
-        "- [truncated]",
-    ):
-        for kept in range(len(lines) - 1, -1, -1):
-            signal = marker.format(len(lines) - kept)
-            if sizes[kept] + len(signal) <= max_chars:
-                return "\n".join([*lines[:kept], signal])
-    return "…"
 
 
 async def _backend_id_of(session: Session, selector: str, timeout: float) -> int:

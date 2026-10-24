@@ -1,0 +1,102 @@
+"""Text of a snapshot: the ``- role "name" [state] [ref=eN]: "value"`` lines.
+
+Page text is quoted as JSON with control and bidi characters escaped and long
+strings capped, so nothing a page writes can break a line or fake a ref.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from tellurium.browser.snapshot import SnapshotNode
+
+_SPACES = re.compile(r"\s+")
+# Page text longer than this is cut in the rendering, with a ``[+N chars]`` signal.
+_MAX_TEXT = 300
+# Left raw by json.dumps: C1 controls, bidi marks/overrides/isolates, separators.
+_UNSAFE = re.compile("[\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]")
+
+
+def squash(value: Any) -> str:
+    """*value* as text with every run of white space turned into one space, trimmed."""
+    return _SPACES.sub(" ", str(value)).strip()
+
+
+def is_text(node: SnapshotNode) -> bool:
+    """Whether *node* is page text rather than an element."""
+    return node.role == "text" and node.ref is None
+
+
+def _quote(text: str) -> str:
+    """Page text as a JSON string with control and bidi characters escaped, capped:
+    nothing a page writes can end the quotes, break the line or fake a ref."""
+    extra = len(text) - _MAX_TEXT
+    quoted = json.dumps(text[:_MAX_TEXT] + "…" if extra > 0 else text, ensure_ascii=False)
+    quoted = _UNSAFE.sub(lambda m: f"\\u{ord(m.group()):04x}", quoted)
+    return f"{quoted} [+{extra} chars]" if extra > 0 else quoted
+
+
+def _head(node: SnapshotNode) -> str:
+    parts = [node.role]
+    if node.name:
+        parts.append(_quote(node.name))
+    for key, state in node.states.items():
+        if key == "oopif":
+            parts.append("[oopif]")
+        elif key == "level":
+            parts.append(f"[level={state}]")
+        elif state is True:
+            parts.append(f"[{key}]")
+        elif key == "expanded" or state == "mixed":
+            parts.append(f"[{key}={str(state).lower()}]")
+    if node.ref:
+        parts.append(f"[ref={node.ref}]")
+    return " ".join(parts)
+
+
+def _lines(nodes: list[SnapshotNode], indent: str, out: list[str]) -> None:
+    for node in nodes:
+        if is_text(node):
+            out.append(f"{indent}- text: {_quote(node.name)}")
+            continue
+        line, children = f"{indent}- {_head(node)}", node.children
+        if node.value is not None:
+            line += f": {_quote(squash(node.value))}"
+        elif len(children) == 1 and is_text(children[0]):
+            line, children = f"{line}: {_quote(children[0].name)}", []
+        elif children:
+            line += ":"
+        out.append(line)
+        _lines(children, indent + "  ", out)
+
+
+def render(nodes: list[SnapshotNode], *, max_chars: int | None = None) -> str:
+    """Render *nodes* as ``- role "name" [state] [ref=eN]: "value"`` lines.
+
+    With *max_chars*, whole lines are kept while they fit and a last line
+    ``- [truncated: N more lines; ...]`` says what was cut; the result never
+    exceeds *max_chars* (shorter signals when it is tiny).
+    """
+    if max_chars is not None and max_chars < 1:
+        raise ValueError(f"max_chars must be >= 1, got {max_chars}")
+    lines: list[str] = []
+    _lines(nodes, "", lines)
+    text = "\n".join(lines)
+    if max_chars is None or len(text) <= max_chars:
+        return text
+    sizes = [0]
+    for line in lines:
+        sizes.append(sizes[-1] + len(line) + 1)
+    for marker in (
+        "- [truncated: {} more lines; narrow with selector=, depth= or interactive=True]",
+        "- [truncated: {} more lines]",
+        "- [truncated]",
+    ):
+        for kept in range(len(lines) - 1, -1, -1):
+            signal = marker.format(len(lines) - kept)
+            if sizes[kept] + len(signal) <= max_chars:
+                return "\n".join([*lines[:kept], signal])
+    return "…"
