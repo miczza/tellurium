@@ -421,7 +421,16 @@ async def test_fetch_over_snapshot_timeout_is_too_large():
                 await asyncio.sleep(timeout or 60)  # Chrome still busy
             return await super().send(method, params, timeout)
 
-    session = Slow()
-    with pytest.raises(snapshot.SnapshotTooLargeError, match="snapshot_timeout="):
-        await snapshot.take_snapshot(session, RefMap(), snapshot_timeout=0.05)
-    assert session.calls[-1] == "Accessibility.disable"
+    class Busy(Slow):  # and too busy to answer the disable either
+        async def send(self, method, params=None, timeout=None):
+            if method == "Accessibility.disable":
+                self.calls.append(method)
+                await asyncio.sleep(timeout or 60)
+            return await super().send(method, params, timeout)
+
+    for session in (Slow(), Busy()):
+        start = time.perf_counter()
+        with pytest.raises(snapshot.SnapshotTooLargeError, match="snapshot_timeout=0.05"):
+            await snapshot.take_snapshot(session, RefMap(), snapshot_timeout=0.05)
+        assert time.perf_counter() - start < 0.5  # the disable is sent, not awaited long
+        assert "Accessibility.disable" in session.calls

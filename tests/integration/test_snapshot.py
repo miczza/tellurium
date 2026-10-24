@@ -394,10 +394,14 @@ async def test_tree_too_slow_to_fetch_is_refused_in_time(browser, local_server):
     """Shadow DOM escapes the node count: the fetch has its own time limit."""
     tab = browser.main_tab
     await tab.get(f"{local_server}/snapshot_shadow.html")
-    start = time.perf_counter()
-    with pytest.raises(SnapshotTooLargeError, match="snapshot_timeout="):
-        await take_snapshot(tab._session, RefMap(), snapshot_timeout=0.5)
-    assert time.perf_counter() - start < 3
+    for selector in (None, "#host"):  # the count is low: a selector fetches it all too
+        start = time.perf_counter()
+        with pytest.raises(SnapshotTooLargeError) as raised:
+            await take_snapshot(tab._session, RefMap(), selector=selector, snapshot_timeout=0.5)
+        assert time.perf_counter() - start < 1.2  # close to the limit asked for
+        message = str(raised.value)
+        assert "snapshot_timeout=0.5" in message and "shadow DOM" in message
+        assert "selector=" not in message  # it would not help here
     # the tab is still usable afterwards
     text = await take_snapshot(tab._session, RefMap(), selector="h1")
     assert text.startswith('- heading "Web component"')

@@ -35,7 +35,7 @@ MAX_DOM_NODES = 50_000
 FETCH_TIMEOUT = 5.0
 # Iframes nested deeper than this are shown without their content.
 _MAX_FRAME_NESTING = 8
-_DISABLE_TIMEOUT = 2.0
+_DISABLE_TIMEOUT = 0.2  # sent either way: only the wait for the answer is cut
 # AX nesting walked at most, across stitched iframes too: two Python frames per
 # level keep the recursion far from the interpreter's limit (1000).
 _MAX_AX_NESTING = 250
@@ -389,8 +389,7 @@ async def _backend_id_of(session: Session, selector: str, timeout: float) -> int
 
 
 async def _count_nodes(session: Session, timeout: float) -> int:
-    """Nodes of the live documents (iframes of the process included), counted by
-    Chrome: no garbage, no page JS."""
+    """Nodes of the live documents and their iframes, by Chrome: no garbage, no page JS."""
     await _send(session, "DOM.getDocument", {"depth": 0}, timeout)
     search = await _send(session, "DOM.performSearch", {"query": "//node()"}, timeout)
     await _send(session, "DOM.discardSearchResults", {"searchId": search["searchId"]}, timeout)
@@ -398,42 +397,43 @@ async def _count_nodes(session: Session, timeout: float) -> int:
 
 
 def _too_large(count: int, what: str, max_nodes: int) -> SnapshotTooLargeError:
-    hint = "pass selector= to snapshot a part of it, or a higher max_nodes= (None: no limit)"
     return SnapshotTooLargeError(
-        f"{what} has {count} DOM nodes, over max_nodes={max_nodes}: {hint}"
+        f"{what} has {count} DOM nodes, over max_nodes={max_nodes}: pass selector= to"
+        " snapshot a part, or a higher max_nodes= (None: no limit)"
     )
-
-
-async def _fetch_scoped(
-    session: Session, root: int | None, max_nodes: int | None, limit: float, timeout: float
-) -> AXTree:
-    """The whole tree when the page is within *max_nodes* (linear in the page), else
-    only *root*'s subtree (queryAXTree, superlinear); both within *limit* seconds."""
-    count = await _count_nodes(session, timeout) if max_nodes is not None else 0
-    over = max_nodes is not None and count > max_nodes
-    if over and root is None:
-        raise _too_large(count, "The page", max_nodes)
-    scope = root if over else None
-    try:  # shadow roots escape the count: the time limit bounds the cost anyway
-        tree = await asyncio.wait_for(fetch_tree(session, root=scope, timeout=timeout), limit)
-    except asyncio.TimeoutError:
-        raise SnapshotTooLargeError(
-            f"The accessibility tree took over {limit:g} s (a big page, or shadow DOM):"
-            " pass selector= to snapshot a part, or a higher snapshot_timeout="
-        ) from None
-    if (
-        scope is not None
-        and (dom := sum(1 for n in tree.nodes if n.get("backendDOMNodeId"))) > max_nodes
-    ):
-        raise _too_large(dom, "The selected part", max_nodes)
-    return tree
 
 
 async def _snapshot_once(
     session: Session, selector: str | None, limits: tuple, timeout: float, **opts: Any
 ) -> list[SnapshotNode]:
+    """One snapshot, within ``snapshot_timeout`` from the first command: shadow roots
+    escape the node count, and a renderer busy with an earlier tree delays them all."""
+    seen: dict[str, Any] = {"count": "no", "scope": None}
+    steps = _steps(session, selector, limits[0], seen, timeout, opts)
+    try:
+        return await asyncio.wait_for(steps, limits[1])
+    except asyncio.TimeoutError:
+        hint = "a narrower selector= or " if seen["scope"] else ""
+        raise SnapshotTooLargeError(
+            f"The snapshot took over snapshot_timeout={limits[1]:g} s ({seen['count']} DOM nodes"
+            f" counted; shadow DOM is not): pass {hint}a higher snapshot_timeout="
+        ) from None
+
+
+async def _steps(
+    session: Session, selector: str | None, max_nodes: Any, seen: dict, timeout: float, opts: dict
+) -> list[SnapshotNode]:
+    """Whole tree within *max_nodes* (linear), else the selector's subtree (superlinear)."""
     root = await _backend_id_of(session, selector, timeout) if selector else None
-    tree = await _fetch_scoped(session, root, *limits, timeout)
+    count = await _count_nodes(session, timeout) if max_nodes is not None else 0
+    seen["count"] = count or "no"
+    over = max_nodes is not None and count > max_nodes
+    if over and root is None:
+        raise _too_large(count, "The page", max_nodes)
+    scope = seen["scope"] = root if over else None
+    tree = await fetch_tree(session, root=scope, timeout=timeout)
+    if scope and (dom := sum(1 for n in tree.nodes if n.get("backendDOMNodeId"))) > max_nodes:
+        raise _too_large(dom, "The selected part", max_nodes)
     found = [n for n in tree.nodes if root is not None and n.get("backendDOMNodeId") == root]
     nodes = await asyncio.to_thread(build_nodes, tree, pending_ref, root=root, **opts)
     # an element Chrome ignores (body, html) still scopes; one it does not show is an error
