@@ -148,3 +148,41 @@ def test_cli_mcp_without_extra_prints_the_install_command():
     assert done.returncode == 2
     assert "pip install 'tellurium[mcp]'" in done.stderr
     assert done.stdout == ""
+
+
+# --------------------------------------------------------------------------- #
+# Small rules of the tools
+# --------------------------------------------------------------------------- #
+
+
+def test_download_names_never_overwrite_or_escape(tmp_path):
+    from tellurium.mcp.actions import _free_path
+
+    first = _free_path(tmp_path / "dl", "report.csv")
+    assert first == tmp_path / "dl" / "report.csv"
+    first.write_text("x")
+    assert _free_path(tmp_path / "dl", "report.csv").name == "report (1).csv"
+    assert _free_path(tmp_path / "dl", "../../etc/passwd").parent == tmp_path / "dl"
+    for odd in ("", ".", ".."):
+        assert _free_path(tmp_path / "dl", odd).name == "download"
+
+
+async def test_malformed_ref_is_refused_before_touching_the_page():
+    from tellurium.mcp.pages import ref_element
+
+    class _NoTab:
+        async def select(self, selector):
+            raise AssertionError("must not be reached")
+
+    with pytest.raises(ToolError, match="ref must look like 'e12'"):
+        await ref_element(_NoTab(), "button.submit")
+
+
+def test_session_names_are_safe_directory_names():
+    from tellurium.mcp.sessions import _check_name
+
+    for good in ("github", "work.2", "a_b-c"):
+        _check_name(good)
+    for bad in ("../x", ".hidden", "", "a/b", "x" * 65, "temp-3"):
+        with pytest.raises(ToolError, match="Invalid session name"):
+            _check_name(bad)

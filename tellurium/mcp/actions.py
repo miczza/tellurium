@@ -163,7 +163,9 @@ async def _download(pool: Any, args: dict[str, Any]) -> Reply:
 def _free_path(folder: Path, suggested: str) -> Path:
     """``folder/<name>`` not yet taken: ``report.csv``, ``report (1).csv``, …"""
     folder.mkdir(parents=True, exist_ok=True)
-    name = Path(suggested).name or "download"
+    name = Path(suggested).name
+    if name in ("", ".", ".."):
+        name = "download"
     stem, suffix = Path(name).stem, Path(name).suffix
     candidate, n = folder / name, 0
     while candidate.exists():
