@@ -10,6 +10,7 @@ first :class:`DownloadWaiter` whose filter accepts the frame that started it.
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -17,6 +18,11 @@ from typing import Any
 
 #: Default deadline of a waiter and of :meth:`Download.path`, in seconds.
 DEFAULT_TIMEOUT = 30.0
+
+#: Deadline of each cancel sent while a browser or context closes, in seconds.
+STOP_TIMEOUT = 2.0
+
+_ANY = object()  # every browser context, for Downloads.stop
 
 
 class DownloadError(Exception):
@@ -45,7 +51,13 @@ class Download:
         self.total_bytes = 0
         self._file: Path | None = None
         self._error: DownloadError | None = None
+        self._stop_error: DownloadError | None = None  # why its owner canceled it
         self._done = asyncio.Event()
+
+    @property
+    def context_id(self) -> str | None:
+        """The browser context it belongs to (``None``: the default one)."""
+        return self._context_id
 
     def __repr__(self) -> str:
         return f"<Download {self.suggested_filename!r} {self.state} ({self.guid})>"
@@ -58,7 +70,8 @@ class Download:
             self._file = Path(params.get("filePath") or self._folder / self.guid)
             self._finish(state)
         elif state == "canceled":
-            self._finish(state, DownloadError(f"Download of {self.url} was canceled"))
+            error = self._stop_error or DownloadError(f"Download of {self.url} was canceled")
+            self._finish(state, error)
 
     def _finish(self, state: str, error: DownloadError | None = None) -> None:
         if self._done.is_set():
@@ -108,6 +121,17 @@ class Download:
         await self._downloads._session.send("Browser.cancelDownload", params, timeout=timeout)
         await self._wait(timeout)
 
+    async def _stop(self, error: DownloadError) -> None:
+        """Cancel on behalf of a closing browser or context: Chrome deletes the
+        partial file; whatever happens, waits fail with *error*."""
+        self._stop_error = error
+        try:
+            await self.cancel(STOP_TIMEOUT)
+        except Exception:  # noqa: BLE001 - Chrome may be gone already
+            pass
+        finally:
+            self._finish("canceled", error)
+
 
 def _copy(source: Path, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -138,7 +162,15 @@ class DownloadWaiter:
         self._future: asyncio.Future[Download] = asyncio.get_running_loop().create_future()
 
     def accepts(self, frame_id: str) -> bool:
-        return not self._future.done() and (self._accepts is None or self._accepts(frame_id))
+        """Whether this waiter takes a download of *frame_id*; a filter that
+        raises fails this waiter alone."""
+        if self._future.done():
+            return False
+        try:
+            return self._accepts is None or bool(self._accepts(frame_id))
+        except Exception as exc:  # noqa: BLE001 - handed to the waiter
+            self._fail(exc)
+            return False
 
     async def __aenter__(self) -> DownloadWaiter:
         self._deadline = asyncio.get_running_loop().time() + self._timeout
@@ -173,7 +205,7 @@ class DownloadWaiter:
         if not self._future.done():
             self._future.set_result(download)
 
-    def _fail(self, error: DownloadError) -> None:
+    def _fail(self, error: Exception) -> None:
         if not self._future.done():
             self._future.set_exception(error)
             self._future.exception()  # retrieved: never logged as unhandled
@@ -187,7 +219,9 @@ class Downloads:
     """The downloads of one browser: a folder per browser context, the
     downloads in progress and the waiters for the next ones."""
 
-    def __init__(self) -> None:
+    def __init__(self, locate: Callable[[str], str | None] | None = None) -> None:
+        # frame id -> its browser context ("" for the default one), None if unknown
+        self._locate = locate
         self._session: Any = None
         self._folders: dict[str | None, tuple[Path, bool]] = {}  # context -> (folder, owned)
         self._active: dict[str, Download] = {}
@@ -197,14 +231,20 @@ class Downloads:
         """Where the downloads of *context_id* (``None``: the default context) go."""
         return self._folders[context_id][0]
 
-    async def start(self, session: Any, folder: str | Path, owned: bool) -> None:
+    async def start(
+        self, session: Any, folder: str | Path, owned: bool, reader: asyncio.Task | None = None
+    ) -> None:
         """Save the default context's downloads in *folder* and listen for them.
 
-        *owned* folders are temporary: their owner removes them.
+        *owned* folders are temporary: their owner removes them. When the
+        *reader* of the CDP pipe ends (Chrome closed or crashed), every wait
+        fails at once.
         """
         self._session = session
         session.on("Browser.downloadWillBegin", self._on_will_begin)
         session.on("Browser.downloadProgress", self._on_progress)
+        if reader is not None:
+            reader.add_done_callback(lambda _: self._lost())
         await self._allow(None, Path(folder), owned)
 
     async def add_context(self, context_id: str, folder: str | Path | None = None) -> Path:
@@ -222,6 +262,7 @@ class Downloads:
             await asyncio.to_thread(shutil.rmtree, folder, ignore_errors=True)
 
     async def _allow(self, context_id: str | None, folder: Path, owned: bool) -> Path:
+        folder = Path(os.path.abspath(folder))  # Chrome and path() must agree
         await asyncio.to_thread(folder.mkdir, parents=True, exist_ok=True)
         self._folders[context_id] = (folder, owned)
         params: dict[str, Any] = {
@@ -242,7 +283,8 @@ class Downloads:
         timeout: float = DEFAULT_TIMEOUT,
     ) -> DownloadWaiter:
         """A waiter for the next download started by a frame *accepts* takes
-        (any frame when ``None``) in browser context *context_id*."""
+        (any frame when ``None``). *context_id* is the browser context of
+        those frames, used when the frame is not a known tab."""
         return DownloadWaiter(self, accepts, context_id, timeout)
 
     def _on_will_begin(self, params: dict) -> None:
@@ -250,8 +292,10 @@ class Downloads:
         waiter = next((w for w in self._waiters if w.accepts(frame_id)), None)
         if waiter is None:
             return  # nobody waits for it: Chrome still saves it in the folder
-        folder, _ = self._folders.get(waiter.context_id) or self._folders[None]
-        download = Download(self, params, waiter.context_id, folder)
+        located = self._locate(frame_id) if self._locate is not None else None
+        context_id = waiter.context_id if located is None else (located or None)
+        folder, _ = self._folders.get(context_id) or self._folders[None]
+        download = Download(self, params, context_id, folder)
         self._active[download.guid] = download
         waiter._resolve(download)
 
@@ -260,10 +304,27 @@ class Downloads:
         if download is not None:
             download._progress(params)
 
-    def close(self) -> None:
-        """Fail every waiter and unfinished download: the browser is closing."""
+    async def stop(self, reason: str, context_id: Any = _ANY) -> None:
+        """Cancel the unfinished downloads of *context_id* (default: all) and
+        fail them and its waiters with ``DownloadError(reason)``.
+
+        Run before the context or browser goes away, so Chrome deletes the
+        partial files; each cancel is bounded by :data:`STOP_TIMEOUT`.
+        """
         for waiter in list(self._waiters):
-            waiter._fail(DownloadError("The browser closed before a download began"))
+            if context_id is _ANY or waiter.context_id == context_id:
+                waiter._fail(DownloadError(reason))
+                waiter._discard()
+        downloads = [
+            d for d in self._active.values() if context_id is _ANY or d.context_id == context_id
+        ]
+        await asyncio.gather(*(d._stop(DownloadError(reason)) for d in downloads))
+
+    def _lost(self) -> None:
+        """The pipe to Chrome is gone: nothing will ever be reported again."""
+        reason = "Chrome closed or crashed"
+        for waiter in list(self._waiters):
+            waiter._fail(DownloadError(reason))
         for download in list(self._active.values()):
-            download._finish("canceled", DownloadError("The browser closed during the download"))
+            download._finish("canceled", DownloadError(reason))
         self._waiters.clear()

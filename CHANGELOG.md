@@ -14,7 +14,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `tellurium.browser.download` adds `Download` (`url`, `suggested_filename`,
   `state`, `path()`, `save_as()`, `cancel()`), `DownloadError` and
   `DownloadWaiter`, which waits for the next download of the frames it
-  accepts. `Browser.close()` fails pending waits with `DownloadError`.
+  accepts. `Browser.close()` and `BrowserContext.close()` cancel unfinished
+  downloads first (no partial `.crdownload` file is left in a kept folder) and
+  fail their waits with `DownloadError`; so does Chrome exiting or crashing,
+  at once instead of at the timeout. `Download.context_id` names the context
+  a download comes from; a relative `downloads_dir` is made absolute; a
+  waiter's filter that raises fails that waiter alone.
 
 - `tellurium download-browser --browser patched --allow-unverified` installs a
   release without a matching `SHA256SUMS` (mirrors, local builds); the same

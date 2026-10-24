@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from tellurium.browser.context import BrowserContext
+from tellurium.browser.context import BrowserContext, tab_context
 from tellurium.browser.cookie import Cookie, clear_jar, read_jar
 from tellurium.browser.dialog import check_policy
 from tellurium.browser.download import Downloads
@@ -60,7 +60,7 @@ class Browser:
         self._stealth_idle = False
         self._mouse_profile = "normal"
         self._dialogs = "dismiss"  # policy for every tab, see Browser.launch
-        self._downloads = Downloads()  # folders, downloads in progress, waiters
+        self._downloads = Downloads(lambda frame_id: tab_context(self, frame_id))
         # Manual override applied to every session when stealth is off
         # (with stealth on the StealthEngine already owns the timezone).
         self._timezone_override: str | None = None
@@ -392,7 +392,9 @@ class Browser:
             self._router = SessionRouter(transport)
             self._dispatch_task = asyncio.create_task(self._router.run())
             self._proc.reader = self._dispatch_task
-            await self._downloads.start(self._router.root, downloads, downloads_dir is None)
+            await self._downloads.start(
+                self._router.root, downloads, downloads_dir is None, self._dispatch_task
+            )
 
             # 11. Wire stealth engine to router
             if stealth_engine is not None:
@@ -777,8 +779,10 @@ class Browser:
         Every resource is released even if this call is cancelled meanwhile;
         the cancellation is re-raised afterwards.
         """
-        self._downloads.close()
-        await self._proc.close()
+        try:  # unfinished downloads first: Chrome then deletes their partial files
+            await self._downloads.stop("The browser closed")
+        finally:
+            await self._proc.close()
 
     async def __aenter__(self) -> Browser:
         return self

@@ -1,6 +1,7 @@
 import http.server
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,8 @@ class _FixtureHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             return
         if len(parts) >= 3 and parts[1] in ("download", "download-slow"):
-            self._attachment(parts[2], slow=parts[1] == "download-slow")
+            name = urllib.parse.unquote(parts[2])
+            self._attachment(name, slow=parts[1] == "download-slow")
             return
         if len(parts) >= 3 and parts[1] == "redirect":
             self.send_response(302)

@@ -102,13 +102,25 @@ class BrowserContext:
     async def close(self) -> None:
         """Dispose of this browser context and detach all its tabs.
 
-        Its downloads folder is removed too when it is temporary.
+        Its unfinished downloads are canceled (their waits fail with
+        ``DownloadError``) and its downloads folder is removed when temporary.
         """
         for tab in list(self._tabs):
             self._browser._forget_tab(tab._target_id)
         self._browser._contexts.pop(self._context_id, None)
+        downloads = self._browser._downloads
         root = self._browser._router.root
         try:
+            await downloads.stop("The browser context closed", self._context_id)
             await root.send("Target.disposeBrowserContext", {"browserContextId": self._context_id})
         finally:
-            await self._browser._downloads.remove_context(self._context_id)
+            await downloads.remove_context(self._context_id)
+
+
+def tab_context(browser: Browser, frame_id: str) -> str | None:
+    """The browser context of the tab whose main frame is *frame_id*: ``""``
+    for the default context, ``None`` when no tab has that frame."""
+    tab = browser._find_tab(frame_id)
+    if tab is None:
+        return None
+    return next((cid for cid, ctx in browser._contexts.items() if tab in ctx._tabs), "")
