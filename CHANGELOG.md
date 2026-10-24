@@ -15,7 +15,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `screenshot` (image content), `download` (returns the saved path) and `eval`.
   Page tools take a required `targetId`; arguments are a whitelist checked
   against each tool's schema (an unknown argument is an error); actions return
-  `{ok, url, title, navigated}` and use human-like input unless `human: false`.
+  `{ok, url, title, navigated}` and use human-like input unless `human: false`
+  (`select-option` presses arrow keys on the focused list). `press` sends the key
+  codes Chrome acts on (Enter submits) and refuses an unknown key.
   A named session is a `Session` in `~/.tellurium/sessions/<name>` (same
   cookies, storage and seed next time); downloads go to `~/.tellurium/downloads/`;
   `TELLURIUM_HOME` moves both. Domain errors come back as `isError` results that

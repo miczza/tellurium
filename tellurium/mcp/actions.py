@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
 from tellurium.browser.tab import Tab
-from tellurium.mcp import page_state
+from tellurium.mcp import keys, page_state
 from tellurium.mcp.pages import ref_element, state_data
 from tellurium.mcp.results import Reply, ToolError
 from tellurium.mcp.tool import Tool, param
@@ -23,18 +24,23 @@ DOWNLOAD_DEFAULT = 60
 DOWNLOAD_MAX = 600
 SCROLL_DEFAULT = 600
 
-# Select by value, else by the visible label: the snapshot shows labels.
-_SELECT = """function() {
+# The option wanted, by value, else by the visible label (the snapshot shows labels):
+# [selected index, wanted index], or null.
+_FIND = """function() {
   const wanted = __WANTED__;
   const options = Array.from(this.options || []);
-  const hit = options.find(o => o.value === wanted)
-    || options.find(o => o.label.trim() === wanted.trim());
-  if (!hit) return null;
-  this.value = hit.value;
+  let i = options.findIndex(o => o.value === wanted);
+  if (i < 0) i = options.findIndex(o => o.label.trim() === wanted.trim());
+  return i < 0 ? null : [this.selectedIndex, i];
+}"""
+_SELECTED = "function() { return this.selectedIndex; }"
+_SET = """function() {
+  this.selectedIndex = __INDEX__;
   this.dispatchEvent(new Event('input', {bubbles: true}));
   this.dispatchEvent(new Event('change', {bubbles: true}));
-  return hit.value;
 }"""
+# Farther than this, a person would type rather than press arrows: set it directly.
+MAX_ARROWS = 20
 
 
 async def _act(
@@ -67,18 +73,19 @@ async def _fill(pool: Any, args: dict[str, Any]) -> Reply:
     async def fill() -> None:
         await element.type(args["text"], human=_human(args), clear=True)
         if args.get("submit"):
-            await tab.keyboard_press("Enter")
+            await keys.press(tab, "Enter", human=_human(args))
 
     return await _act(args, tab, f"filled {args['ref']}", fill)
 
 
 async def _press(pool: Any, args: dict[str, Any]) -> Reply:
     tab = pool.tab(args["targetId"])
+    keys.parse(args["key"])  # an unknown key fails before anything happens
 
     async def press() -> None:
         if "ref" in args:
             await (await ref_element(tab, args["ref"])).focus()
-        await tab.keyboard_press(args["key"])
+        await keys.press(tab, args["key"], human=_human(args))
 
     return await _act(args, tab, f"pressed {args['key']}", press)
 
@@ -88,11 +95,32 @@ async def _select_option(pool: Any, args: dict[str, Any]) -> Reply:
     element = await ref_element(tab, args["ref"])
 
     async def select() -> None:
-        chosen = await element.apply(_SELECT.replace("__WANTED__", json.dumps(args["value"])))
-        if chosen is None:
+        found = await element.apply(_FIND.replace("__WANTED__", json.dumps(args["value"])))
+        if found is None:
             raise ToolError(f"{args['ref']} has no option with value or label {args['value']!r}")
+        current, wanted = found
+        if _human(args) and abs(wanted - current) <= MAX_ARROWS:
+            current = await _select_with_arrows(tab, element, current, wanted)
+        if current != wanted:
+            await element.apply(_SET.replace("__INDEX__", str(int(wanted))))
 
     return await _act(args, tab, f"selected {args['value']!r} in {args['ref']}", select)
+
+
+async def _select_with_arrows(tab: Tab, element: Any, current: int, wanted: int) -> int:
+    """Focus the <select> and press arrows, as a person on a closed list does: the
+    browser itself changes the value and fires trusted events. The index reached
+    (short of *wanted* when a disabled option or the list's end stops it)."""
+    await element.focus()
+    key = "ArrowDown" if wanted > current else "ArrowUp"
+    while current != wanted:
+        await keys.press(tab, key)
+        moved = await element.apply(_SELECTED)
+        if moved == current:
+            break
+        current = moved
+        await asyncio.sleep(random.uniform(0.05, 0.15))
+    return current
 
 
 async def _check(pool: Any, args: dict[str, Any]) -> Reply:
@@ -202,7 +230,7 @@ TOOLS = [
     ),
     Tool(
         "select-option",
-        "Choose an option of a <select> by value or visible label.",
+        "Choose an option of a <select> by value or visible label (human: arrow keys).",
         _select_option,
         {"ref": _REF, "value": param("string", "Option value or label.")},
         ("ref", "value"),

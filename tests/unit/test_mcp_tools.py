@@ -214,3 +214,16 @@ def test_session_names_are_safe_directory_names():
     for bad in ("../x", ".hidden", "", "a/b", "x" * 65, "temp-3"):
         with pytest.raises(ToolError, match="Invalid session name"):
             _check_name(bad)
+
+
+def test_keys_carry_the_codes_chrome_acts_on_and_unknown_keys_fail():
+    from tellurium.mcp.keys import parse
+
+    assert parse("Enter") == ("Enter", 0, 13, "\r")
+    assert parse("Control+a") == ("a", 2, 65, "a")
+    assert parse("Shift+Tab") == ("Tab", 8, 9, "")
+    assert parse("ArrowDown")[2] == 40 and parse("F5")[2] == 116
+    with pytest.raises(ToolError, match="Unknown key 'NotAKey'"):
+        parse("NotAKey")
+    with pytest.raises(ToolError, match="Unknown modifier 'Hyper'"):
+        parse("Hyper+a")

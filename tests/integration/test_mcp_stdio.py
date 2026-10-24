@@ -194,6 +194,44 @@ async def test_actions_tabs_and_errors(local_server, tmp_path):
         assert "Timed out" in missing
 
 
+_LISTEN = """
+window.seen = [];
+for (const type of ['click', 'change', 'submit']) {
+  document.addEventListener(type, e => seen.push(type + ':' + e.isTrusted), true);
+}
+"""
+
+
+async def test_input_is_human_by_default_and_keys_really_act(local_server, tmp_path):
+    async with _server(tmp_path) as client:
+        tid = (await _call(client, "session-open")).structured_content["targetId"]
+        await _call(client, "navigate", targetId=tid, url=f"{local_server}/snapshot_form.html")
+        await _call(client, "eval", targetId=tid, expression=_LISTEN)
+        page = await _snapshot(client, tid, selector="form")
+        more = _ref(page, "button", "More options")
+
+        await _call(client, "click", targetId=tid, ref=more)  # no human argument
+        await _call(client, "click", targetId=tid, ref=more, human=False)
+        await _call(
+            client, "select-option", targetId=tid, ref=_ref(page, "combobox"), value="English"
+        )
+        await _call(
+            client,
+            "fill",
+            targetId=tid,
+            ref=_ref(page, "textbox", "Email"),
+            text="a@b.c",
+            submit=True,
+        )
+        seen = (await _call(client, "eval", targetId=tid, expression="seen")).structured_content
+        assert seen["value"][:2] == ["click:true", "click:false"]
+        assert "change:true" in seen["value"]  # the browser chose the option, from real keys
+        assert "submit:true" in seen["value"]  # Enter really submitted the form
+
+        assert "Unknown key" in await _error(client, "press", targetId=tid, key="NotAKey")
+        await _call(client, "press", targetId=tid, key="Control+a")
+
+
 async def test_a_session_open_in_another_server_is_reported_as_such(tmp_path):
     async with _server(tmp_path) as first, _server(tmp_path) as second:
         await _call(first, "session-open", name="work")
