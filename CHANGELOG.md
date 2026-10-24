@@ -21,7 +21,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   over `max_nodes=` DOM nodes (default 50000, counted by Chrome in the live
   documents only; `None` for no limit) raise `SnapshotTooLargeError` with the
   count, unless `selector=` names a small enough part (a slow subtree fails
-  after 5 s with the same error). `selector="body"`/`"html"` give the whole
+  after 5 s with the same error). The whole fetch is also bounded by
+  `snapshot_timeout=` (default 5 s, for what the count cannot see, such as
+  shadow DOM): past it, `SnapshotTooLargeError` instead of a long wait. `selector="body"`/`"html"` give the whole
   page; a selector on an element outside the accessibility tree raises
   `LookupError`. Same-process iframes are stitched in, OOPIFs show as
   `- iframe "<url>" [oopif]`; the AX nesting walked is bounded across stitched

@@ -30,9 +30,9 @@ if TYPE_CHECKING:
 SNAPSHOT_TIMEOUT = 30.0
 # Default ``max_nodes``: Chrome needs ~1 s and ~50 MB of JSON for 50000 nodes,
 # parsed on the event loop by the transport. Over it, ``selector=`` scopes the
-# fetch to a subtree (queryAXTree, superlinear: bounded by _QUERY_TIMEOUT).
+# fetch to a subtree. Default ``snapshot_timeout``: bound of the whole fetch.
 MAX_DOM_NODES = 50_000
-_QUERY_TIMEOUT = 5.0
+FETCH_TIMEOUT = 5.0
 # Iframes nested deeper than this are shown without their content.
 _MAX_FRAME_NESTING = 8
 _DISABLE_TIMEOUT = 2.0
@@ -111,23 +111,21 @@ def _document_url(nodes: list[dict[str, Any]]) -> str:
 
 
 async def _frame_of(
-    session: Session, backend_node_id: int, base_url: str, nesting: int, timeout: float
+    session: Session, bid: int, base_url: str, nesting: int, timeout: float
 ) -> AXTree | str | None:
-    """The document of the ``<iframe>`` *backend_node_id*: tree, OOPIF URL or ``None``."""
-    params = {"backendNodeId": backend_node_id}
+    """The document of the ``<iframe>`` with backend id *bid*: tree, OOPIF URL or ``None``."""
     try:
-        described = await _send(session, "DOM.describeNode", params, timeout)
+        described = await _send(session, "DOM.describeNode", {"backendNodeId": bid}, timeout)
     except CDPError:  # detached meanwhile
         return None
     node = described.get("node", {})
-    frame_id = node.get("frameId")
-    if not frame_id:
+    if not (frame_id := node.get("frameId")):
         return None
     if "contentDocument" not in node:  # the document lives in another renderer
         attributes = node.get("attributes", [])
         src = dict(zip(attributes[::2], attributes[1::2], strict=False)).get("src", "")
         return urljoin(base_url, src) if src else "about:blank"
-    if nesting >= _MAX_FRAME_NESTING:
+    if nesting >= _MAX_FRAME_NESTING:  # too deep: shown without content
         return None
     try:
         return await fetch_tree(session, frame_id=frame_id, timeout=timeout, _nesting=nesting + 1)
@@ -171,11 +169,11 @@ def _props(node: dict[str, Any]) -> dict[str, Any]:
 
 
 def _states(props: dict[str, Any], role: str) -> dict[str, bool | int | str]:
-    states: dict[str, bool | int | str] = {}
-    for key in ("checked", "pressed"):
-        if key in props:
-            value = props[key]
-            states[key] = "mixed" if value == "mixed" else value in (True, "true")
+    states: dict[str, bool | int | str] = {
+        key: "mixed" if props[key] == "mixed" else props[key] in (True, "true")
+        for key in ("checked", "pressed")
+        if key in props
+    }
     if "expanded" in props:
         states["expanded"] = bool(props["expanded"])
     states.update({key: True for key in ("disabled", "selected") if props.get(key) is True})
@@ -235,9 +233,7 @@ class _Pruner:
             return self.children(node, level, nesting)
         value = (node.get("value") or {}).get("value")
         snap = SnapshotNode(
-            ref=self.ref_for(node["backendDOMNodeId"], self.frame)
-            if node.get("backendDOMNodeId")
-            else None,
+            ref=self.ref_for(bid, self.frame) if (bid := node.get("backendDOMNodeId")) else None,
             role=role,
             name=name,
             value=None if value in (None, "") else str(value),
@@ -402,39 +398,42 @@ async def _count_nodes(session: Session, timeout: float) -> int:
 
 
 def _too_large(count: int, what: str, max_nodes: int) -> SnapshotTooLargeError:
+    hint = "pass selector= to snapshot a part of it, or a higher max_nodes= (None: no limit)"
     return SnapshotTooLargeError(
-        f"{what} has {count} DOM nodes, over max_nodes={max_nodes}: pass selector= to"
-        " snapshot a part of it, or a higher max_nodes= (None: no limit)"
+        f"{what} has {count} DOM nodes, over max_nodes={max_nodes}: {hint}"
     )
 
 
 async def _fetch_scoped(
-    session: Session, root: int | None, max_nodes: int | None, timeout: float
+    session: Session, root: int | None, max_nodes: int | None, limit: float, timeout: float
 ) -> AXTree:
     """The whole tree when the page is within *max_nodes* (linear in the page), else
-    only *root*'s subtree, bounded in time and size (queryAXTree is superlinear)."""
+    only *root*'s subtree (queryAXTree, superlinear); both within *limit* seconds."""
     count = await _count_nodes(session, timeout) if max_nodes is not None else 0
-    if max_nodes is None or count <= max_nodes:
-        return await fetch_tree(session, timeout=timeout)
-    if root is None:
+    over = max_nodes is not None and count > max_nodes
+    if over and root is None:
         raise _too_large(count, "The page", max_nodes)
-    try:
-        tree = await fetch_tree(session, root=root, timeout=min(timeout, _QUERY_TIMEOUT))
-    except TimeoutError:
+    scope = root if over else None
+    try:  # shadow roots escape the count: the time limit bounds the cost anyway
+        tree = await asyncio.wait_for(fetch_tree(session, root=scope, timeout=timeout), limit)
+    except asyncio.TimeoutError:
         raise SnapshotTooLargeError(
-            f"The selected part of a {count}-node page took over {_QUERY_TIMEOUT:.0f} s:"
-            " pass a narrower selector="
+            f"The accessibility tree took over {limit:g} s (a big page, or shadow DOM):"
+            " pass selector= to snapshot a part, or a higher snapshot_timeout="
         ) from None
-    if (dom := sum(1 for n in tree.nodes if n.get("backendDOMNodeId"))) > max_nodes:
+    if (
+        scope is not None
+        and (dom := sum(1 for n in tree.nodes if n.get("backendDOMNodeId"))) > max_nodes
+    ):
         raise _too_large(dom, "The selected part", max_nodes)
     return tree
 
 
 async def _snapshot_once(
-    session: Session, selector: str | None, max_nodes: int | None, timeout: float, **opts: Any
+    session: Session, selector: str | None, limits: tuple, timeout: float, **opts: Any
 ) -> list[SnapshotNode]:
     root = await _backend_id_of(session, selector, timeout) if selector else None
-    tree = await _fetch_scoped(session, root, max_nodes, timeout)
+    tree = await _fetch_scoped(session, root, *limits, timeout)
     found = [n for n in tree.nodes if root is not None and n.get("backendDOMNodeId") == root]
     nodes = await asyncio.to_thread(build_nodes, tree, pending_ref, root=root, **opts)
     # an element Chrome ignores (body, html) still scopes; one it does not show is an error
@@ -454,21 +453,22 @@ async def take_snapshot_nodes(
     selector: str | None = None,
     depth: int | None = None,
     max_nodes: int | None = MAX_DOM_NODES,
+    snapshot_timeout: float = FETCH_TIMEOUT,
     timeout: float = SNAPSHOT_TIMEOUT,
 ) -> list[SnapshotNode]:
     """Snapshot the page behind *session* as :class:`SnapshotNode` trees, refs from *refs*.
 
     *selector* scopes to the first match's subtree (``LookupError`` if none or not in
-    the AX tree). Over *max_nodes* DOM nodes (``None``: no limit) it raises
-    :class:`SnapshotTooLargeError`, unless *selector* names a small enough part.
-    """
+    the AX tree). :class:`SnapshotTooLargeError` over *max_nodes* DOM nodes (``None``:
+    no limit) unless *selector* names a small part, or past *snapshot_timeout* s."""
     if depth is not None and depth < 0:
         raise ValueError(f"depth must be >= 0, got {depth}")
     try:
         for _ in range(3):
             generation = refs.generation
             opts = {"interactive": interactive, "depth": depth}
-            nodes = await _snapshot_once(session, selector, max_nodes, timeout, **opts)
+            limits = (max_nodes, snapshot_timeout)
+            nodes = await _snapshot_once(session, selector, limits, timeout, **opts)
             if refs.generation == generation:
                 refs.settle(nodes)
                 return nodes
@@ -490,9 +490,11 @@ async def take_snapshot(
     depth: int | None = None,
     max_chars: int | None = None,
     max_nodes: int | None = MAX_DOM_NODES,
+    snapshot_timeout: float = FETCH_TIMEOUT,
     timeout: float = SNAPSHOT_TIMEOUT,
 ) -> str:
     """Snapshot the page behind *session* as text (see :func:`render`)."""
     opts = {"interactive": interactive, "selector": selector, "depth": depth}
-    nodes = await take_snapshot_nodes(session, refs, **opts, max_nodes=max_nodes, timeout=timeout)
+    limits = {"max_nodes": max_nodes, "snapshot_timeout": snapshot_timeout}
+    nodes = await take_snapshot_nodes(session, refs, **opts, **limits, timeout=timeout)
     return render(nodes, max_chars=max_chars)

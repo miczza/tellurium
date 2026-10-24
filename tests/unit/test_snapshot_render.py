@@ -408,3 +408,20 @@ def test_hostile_page_content_cannot_forge_lines_or_refs():
     for raw in "\x1b\x00\x7f\x85\u202e\u2066\u2028\ufeff":
         assert raw not in text
     assert "[+9700 chars]" in text  # the cap says how much was cut
+
+
+async def test_fetch_over_snapshot_timeout_is_too_large():
+    import asyncio
+
+    from tellurium.browser import snapshot
+
+    class Slow(_SnapshotSession):
+        async def send(self, method, params=None, timeout=None):
+            if method == "Accessibility.getFullAXTree":
+                await asyncio.sleep(timeout or 60)  # Chrome still busy
+            return await super().send(method, params, timeout)
+
+    session = Slow()
+    with pytest.raises(snapshot.SnapshotTooLargeError, match="snapshot_timeout="):
+        await snapshot.take_snapshot(session, RefMap(), snapshot_timeout=0.05)
+    assert session.calls[-1] == "Accessibility.disable"

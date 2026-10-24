@@ -341,7 +341,8 @@ async def test_max_nodes_lifts_the_limit_and_the_error_says_how(browser, local_s
     await tab.get(f"{local_server}/snapshot_huge.html")
     with pytest.raises(SnapshotTooLargeError, match=r"60\d\d\d DOM nodes.*max_nodes="):
         await take_snapshot(tab._session, RefMap())
-    text = await take_snapshot(tab._session, RefMap(), max_nodes=100_000, max_chars=500)
+    limits = {"max_nodes": 100_000, "snapshot_timeout": 30}
+    text = await take_snapshot(tab._session, RefMap(), **limits, max_chars=500)
     assert '- button "Row 0" [ref=' in text
 
 
@@ -387,3 +388,16 @@ async def test_human_click_never_lands_on_another_element(browser, local_server,
         assert await status.text() == "idle"
         with pytest.raises(ElementNotHittableError):
             await save.hover()
+
+
+async def test_tree_too_slow_to_fetch_is_refused_in_time(browser, local_server):
+    """Shadow DOM escapes the node count: the fetch has its own time limit."""
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/snapshot_shadow.html")
+    start = time.perf_counter()
+    with pytest.raises(SnapshotTooLargeError, match="snapshot_timeout="):
+        await take_snapshot(tab._session, RefMap(), snapshot_timeout=0.5)
+    assert time.perf_counter() - start < 3
+    # the tab is still usable afterwards
+    text = await take_snapshot(tab._session, RefMap(), selector="h1")
+    assert text.startswith('- heading "Web component"')

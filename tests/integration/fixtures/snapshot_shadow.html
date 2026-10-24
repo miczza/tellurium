@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Shadow</title></head>
+<body>
+  <h1>Web component</h1>
+  <div id="host"></div>
+  <script>
+    // 40000 buttons with their text behind a closed shadow root: 80000 nodes that
+    // DOM.performSearch does not see.
+    const root = document.getElementById('host').attachShadow({ mode: 'closed' });
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < 40000; i++) {
+      const b = document.createElement('button');
+      b.textContent = 'Shadow ' + i;
+      frag.append(b);
+    }
+    root.append(frag);
+  </script>
+</body>
+</html>
