@@ -29,12 +29,21 @@ class ElementNotHittableError(RuntimeError):
 _MAX_FRAMES = 8
 # The aim point wanders this far from the centre, at most a quarter of the box.
 _JITTER = 3.0
-# True when *node* is this element, one of its <label>s, or inside them (shadow
-# roots included): a click there reaches the element, as a person's would.
+# True when *node* is this element or inside it, or inside one of its <label>s
+# with no other control on the way (shadow roots included): a click there
+# reaches the element, as a person's would.
 _HOLDS = """function(node) {
-  const owners = [this, ...(this.labels || [])];
+  const controls = 'a[href],button,input,select,textarea,summary,[tabindex],'
+    + '[contenteditable]:not([contenteditable="false"])';
+  const roles = /^(button|link|checkbox|radio|switch|menuitem\\w*|tab|option|textbox|combobox|slider)$/;
+  const labels = Array.from(this.labels || []);
+  let crossed = false;
   for (let n = node; n; n = n.parentNode || (n instanceof ShadowRoot ? n.host : null)) {
-    if (owners.includes(n)) return true;
+    if (n === this) return true;
+    if (labels.includes(n)) return !crossed;
+    if (n.nodeType === 1 && (n.matches(controls) || roles.test(n.getAttribute('role') || ''))) {
+      crossed = true;
+    }
   }
   return false;
 }"""

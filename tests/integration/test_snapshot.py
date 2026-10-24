@@ -437,3 +437,20 @@ async def test_drag_from_a_zoomed_frame_sends_no_press_elsewhere(browser, local_
     with pytest.raises(ElementNotHittableError):
         await save.drag_to(await tab.select("#status"))
     assert await (await tab.select("#status")).text() == "idle"
+
+
+@pytest.mark.parametrize(("name", "other"), [("Accept", "link"), ("Notify", "#od")])
+async def test_a_control_inside_the_label_is_not_the_target(browser, local_server, name, other):
+    """A hit in the target's label counts only if no other control lies on the way."""
+    from tellurium.browser.geometry import ElementNotHittableError
+
+    tab = browser.main_tab
+    refs = _watched(tab)
+    await tab.get(f"{local_server}/snapshot_hit.html")
+    text = await take_snapshot(tab._session, refs)
+    target = await resolve_ref(tab._session, tab, refs, _ref_of(text, f'- checkbox "{name}"'))
+    with pytest.raises(ElementNotHittableError):
+        await target.click(human=True)
+    assert not await target.is_checked()
+    assert await (await tab.select("#status")).text() == "idle"
+    assert not await (await tab.select("#od")).is_checked()

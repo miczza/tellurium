@@ -16,6 +16,12 @@
     <div id="glass"></div>
   </div>
   <div class="switch"><input id="c2" type="checkbox"><label for="c2" aria-label="Dark mode"></label></div>
+  <!-- labels holding another control over the input: a click there is not the input's -->
+  <div class="switch"><input id="tc" type="checkbox" aria-label="Accept"><label for="tc"><a
+    href="#terms" style="display: block; width: 40px; height: 20px"
+    onclick="document.getElementById('status').textContent = 'link'; return false">terms</a></label></div>
+  <div class="switch"><input id="td" type="checkbox" aria-label="Notify"><label for="td"><input
+    id="od" type="checkbox" aria-label="Other" style="margin: 0; width: 40px; height: 20px"></label></div>
   <p id="status">idle</p>
 </body>
 </html>

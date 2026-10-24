@@ -169,7 +169,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Before the press (and before `hover()` moves the pointer) Chrome hit-tests the
   point (`DOM.getNodeForLocation`, as a click would: `pointer-events: none`
   overlays let through): unless the node there is the element, one of its
-  labels (custom checkboxes), or inside them (through frames and shadow roots),
+  labels (custom checkboxes; not through another control inside the label,
+  such as a link), or inside them (through frames and shadow roots),
   no event is sent and
   `ElementNotHittableError` names what is on top (an overlay, or a frame under
   CSS `zoom`, whose quads Chrome reports unscaled). `drag_to()` checks both
