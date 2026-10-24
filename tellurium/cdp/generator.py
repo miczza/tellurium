@@ -2,57 +2,21 @@
 
 from __future__ import annotations
 
+import keyword
 import re
 from typing import Any
 
-# Python builtins / keywords that need a trailing underscore when used as module names
-_PYTHON_RESERVED = frozenset(
-    {
-        "False",
-        "None",
-        "True",
-        "and",
-        "as",
-        "assert",
-        "async",
-        "await",
-        "break",
-        "class",
-        "continue",
-        "def",
-        "del",
-        "elif",
-        "else",
-        "except",
-        "finally",
-        "for",
-        "from",
-        "global",
-        "if",
-        "import",
-        "in",
-        "input",
-        "is",
-        "lambda",
-        "nonlocal",
-        "not",
-        "or",
-        "pass",
-        "raise",
-        "return",
-        "try",
-        "while",
-        "with",
-        "yield",
-        # also shadow builtins that would clash
-        "type",
-        "id",
-        "list",
-        "dict",
-        "set",
-        "object",
-    }
-)
+# Python keywords, plus builtins that would clash, take a trailing underscore
+# when used as module names.
+_PYTHON_RESERVED = frozenset(keyword.kwlist) | {
+    "input",
+    "type",
+    "id",
+    "list",
+    "dict",
+    "set",
+    "object",
+}
 
 
 def _to_snake(name: str) -> str:
