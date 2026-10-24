@@ -54,12 +54,14 @@ async def test_fetch_tree_stitches_a_same_process_iframe(browser, local_server):
     assert ("button", "Inner button") in _roles_and_names(child)
 
 
-async def test_fetch_tree_marks_an_oopif_by_url(isolating_browser, local_server):
+async def test_fetch_tree_reads_an_oopif_through_its_session(isolating_browser, local_server):
     port = local_server.rsplit(":", 1)[1]
     tab = isolating_browser.main_tab
     await tab.get(f"http://a.test:{port}/snapshot_oopif.html")
     tree = await fetch_tree(tab._session)
-    assert list(tree.frames.values()) == [f"http://b.test:{port}/snapshot_child.html"]
+    (child,) = tree.frames.values()
+    assert isinstance(child, AXTree) and child.owner and child.session is not tab._session
+    assert ("button", "Inner button") in _roles_and_names(child)
 
 
 def _ref_of(text: str, line_start: str) -> str:
@@ -173,12 +175,15 @@ async def test_same_process_iframe_content_is_in_the_snapshot(browser, local_ser
     assert refs.frame_of(inner_ref) not in ("", top_frame)
 
 
-async def test_oopif_shows_as_a_placeholder(isolating_browser, local_server):
+async def test_oopif_content_is_stitched(isolating_browser, local_server):
+    """A2: the cross-site frame is read through its own session (more in
+    test_snapshot_oopif.py); the [oopif] line is left for frames out of reach."""
     port = local_server.rsplit(":", 1)[1]
     tab = isolating_browser.main_tab
     await tab.get(f"http://a.test:{port}/snapshot_oopif.html")
     text = await take_snapshot(tab._session, RefMap())
-    assert f'- iframe "http://b.test:{port}/snapshot_child.html" [oopif]' in text
+    assert "[oopif]" not in text
+    assert '- button "Inner button" [ref=' in text
 
 
 async def test_snapshot_works_with_stealth(stealth_browser, local_server):

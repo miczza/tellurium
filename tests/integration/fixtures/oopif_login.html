@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Login widget</title>
+<style>
+  body { margin: 0; }
+  #signin { position: absolute; left: 10px; top: 10px; width: 120px; height: 40px; }
+  #email { position: absolute; left: 10px; top: 70px; width: 200px; }
+  #state { position: absolute; left: 10px; top: 110px; margin: 0; }
+  #deep { position: absolute; left: 240px; top: 10px; width: 160px; height: 100px; border: 0; }
+</style>
+</head>
+<body>
+  <button id="signin" onclick="document.getElementById('state').textContent =
+    'signed in as ' + document.getElementById('email').value">Sign in</button>
+  <input id="email" aria-label="Email">
+  <p id="state">signed out</p>
+  <script>
+    // ?nested: one more frame, back on 127.0.0.1 (the host's site, another renderer
+    // than this widget's): an OOPIF inside an OOPIF.
+    if (location.search === '?nested') {
+      const deep = document.createElement('iframe');
+      deep.id = 'deep';
+      deep.title = 'Deep';
+      deep.src = location.protocol + '//127.0.0.1:' + location.port + '/oopif_deep.html';
+      document.body.appendChild(deep);
+    }
+  </script>
+</body>
+</html>

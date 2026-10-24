@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Host</title>
+<style>
+  body { margin: 0; }
+  /* where the widget's own coordinates would land if read as the host's */
+  #danger { position: absolute; left: 0; top: 0; width: 320px; height: 220px; }
+  #login { position: absolute; left: 360px; top: 140px; width: 440px; height: 300px;
+           border: 4px solid #888; padding: 6px; }
+</style>
+</head>
+<body>
+  <button id="danger" onclick="document.title = 'deleted'">Delete account</button>
+  <iframe id="login" title="Login"></iframe>
+  <script>
+    // Served from 127.0.0.1, the widget comes from localhost (or ?host=): another
+    // site, so site isolation puts it in its own renderer (an OOPIF).
+    const query = new URLSearchParams(location.search);
+    const host = query.get('host') || 'localhost';
+    document.getElementById('login').src = location.protocol + '//' + host + ':'
+      + location.port + '/oopif_login.html' + (query.has('nested') ? '?nested' : '');
+  </script>
+</body>
+</html>

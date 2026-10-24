@@ -7,6 +7,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Tab.snapshot()` reads cross-site iframes (OOPIFs) too: their content is
+  stitched under their `iframe` line, read through the frame's own CDP session
+  (the one stealth auto-attach holds, else one attached for it, which Chrome
+  detaches with the frame or the tab). The `- iframe "<url>" [oopif]` line is
+  left only for a frame that cannot be reached. Refs of OOPIF nodes resolve and
+  act through that session (a ref whose frame went away raises
+  `StaleElementError`); `Element` boxes are offset by the `<iframe>` content
+  box up to the tab, and the hit check before a pointer press (`human=True`
+  clicks, `hover`, `drag_to`) checks every document on the way: the press
+  reaches the target or raises `ElementNotHittableError`, never another element.
 - `Tab.snapshot()` / `Tab.snapshot_nodes()`: the accessibility snapshot of the
   tab (`interactive=`, `selector=`, `depth=`, `max_chars=`, plus `max_nodes=`
   and `snapshot_timeout=`). `Tab.ref("e3")` and `Tab.select("@e3")` turn a
