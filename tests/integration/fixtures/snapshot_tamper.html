@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Tamper</title>
+<style>body { margin: 0; } #danger { position: fixed; left: 0; top: 0; width: 80px; height: 80px; }
+#app { margin-top: 2500px; }</style>
+</head>
+<body>
+  <button id="danger" onclick="document.getElementById('status').textContent = 'deleted'">Delete account</button>
+  <p id="status">idle</p>
+  <div id="app"><button onclick="document.getElementById('status').textContent = 'saved'">Save</button></div>
+  <script>
+    const fresh = '<button onclick="document.getElementById(\'status\').textContent = \'saved\'">Save</button>';
+    function rerender() { document.getElementById('app').innerHTML = fresh; }
+    // the page lies about detached nodes
+    function lie() {
+      Object.defineProperty(Node.prototype, 'isConnected', { get() { return true; } });
+    }
+    // and re-renders while the pointer travels
+    function rerenderOnScroll() { addEventListener('scroll', rerender, { once: true }); }
+  </script>
+</body>
+</html>

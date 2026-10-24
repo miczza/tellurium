@@ -164,8 +164,13 @@ async def test_same_process_iframe_content_is_in_the_snapshot(browser, local_ser
     await tab.get(f"{local_server}/snapshot_iframe.html")
     text = await take_snapshot(tab._session, refs)
     assert '- iframe "Child frame" [ref=' in text
-    inner = await resolve_ref(tab._session, tab, refs, _ref_of(text, '- button "Inner button"'))
+    inner_ref = _ref_of(text, '- button "Inner button"')
+    inner = await resolve_ref(tab._session, tab, refs, inner_ref)
     assert await inner.attr("id") == "inner"
+    # each ref knows its frame: the detached check runs in that frame's isolated world
+    top_frame = refs.frame_of(_ref_of(text, '- button "Top button"'))
+    assert top_frame == tab._frame_id
+    assert refs.frame_of(inner_ref) not in ("", top_frame)
 
 
 async def test_oopif_shows_as_a_placeholder(isolating_browser, local_server):
@@ -296,3 +301,28 @@ async def test_human_actions_on_a_node_in_a_stitched_iframe_hit_that_node(browse
     assert await (await tab.select("#hover")).text() == "save"
     await save.click(human=True)
     assert await (await tab.select("#status")).text() == "saved"
+
+
+async def test_detached_check_does_not_trust_page_js(browser, local_server):
+    tab = browser.main_tab
+    refs = _watched(tab)
+    await tab.get(f"{local_server}/snapshot_tamper.html")
+    save = _ref_of(await take_snapshot(tab._session, refs), '- button "Save"')
+    await tab.eval("lie(); rerender()")
+    assert await tab.eval("document.createElement('b').isConnected") is True  # the lie works
+    with pytest.raises(StaleElementError):
+        await resolve_ref(tab._session, tab, refs, save)
+    assert await (await tab.select("#status")).text() == "idle"
+
+
+async def test_rerender_while_the_pointer_travels_sends_no_click(browser, local_server):
+    tab = browser.main_tab
+    refs = _watched(tab)
+    await tab.get(f"{local_server}/snapshot_tamper.html")
+    save = await resolve_ref(
+        tab._session, tab, refs, _ref_of(await take_snapshot(tab._session, refs), '- button "Save"')
+    )
+    await tab.eval("rerenderOnScroll()")
+    with pytest.raises(StaleElementError):
+        await save.click(human=True)
+    assert await (await tab.select("#status")).text() == "idle"

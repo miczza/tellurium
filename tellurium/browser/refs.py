@@ -19,7 +19,13 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from tellurium.browser.handles import StaleElementError, handles_of, send_on_handle
+from tellurium.browser.handles import (
+    HANDLE_TIMEOUT,
+    StaleElementError,
+    handles_of,
+    send_on_handle,
+)
+from tellurium.cdp.types import CDPError
 
 if TYPE_CHECKING:
     from tellurium.browser.element import Element
@@ -27,6 +33,7 @@ if TYPE_CHECKING:
     from tellurium.cdp.transport._session import Session
 
 _IS_CONNECTED = "function() { return this.isConnected; }"
+_BY_VALUE = {"returnByValue": True}
 _REF = re.compile(r"@?e([1-9][0-9]*)")
 
 
@@ -45,20 +52,28 @@ class RefMap:
         self._first = 1  # first ref number of the current generation
         self._ref_of: dict[int, int] = {}  # backendDOMNodeId -> ref number
         self._node_of: dict[int, int] = {}  # ref number -> backendDOMNodeId
+        self._frame_of: dict[int, str] = {}  # ref number -> frame id ("" unknown)
 
     @property
     def generation(self) -> int:
         """Bumped by every :meth:`reset` (main-frame navigation)."""
         return self._generation
 
-    def ref_for(self, backend_node_id: int) -> str:
-        """The ref of *backend_node_id*, handing out a new one on first sight."""
+    def ref_for(self, backend_node_id: int, frame_id: str = "") -> str:
+        """The ref of *backend_node_id* (in frame *frame_id*), new on first sight."""
         number = self._ref_of.get(backend_node_id)
         if number is None:
             number, self._next = self._next, self._next + 1
             self._ref_of[backend_node_id] = number
             self._node_of[number] = backend_node_id
+        if frame_id:
+            self._frame_of[number] = frame_id
         return f"e{number}"
+
+    def frame_of(self, ref: str) -> str:
+        """The frame id of the node behind *ref*, ``""`` if not known."""
+        parsed = parse_ref(ref)
+        return self._frame_of.get(int(parsed[1:]), "") if parsed else ""
 
     def lookup(self, ref: str) -> int:
         """The backend node id of *ref* (``"e3"`` or ``"@e3"``).
@@ -85,11 +100,41 @@ class RefMap:
         self._first = self._next
         self._ref_of.clear()
         self._node_of.clear()
+        self._frame_of.clear()
 
     def on_frame_navigated(self, params: dict) -> None:
         """``Page.frameNavigated`` handler: reset on a main-frame navigation."""
         if not params.get("frame", {}).get("parentId"):
             self.reset()
+
+
+async def _connected(
+    session: Session, tab: Tab | Any, backend_node_id: int, frame_id: str, object_id: str
+) -> bool:
+    """``isConnected`` read in the tab's isolated world, where page JS cannot redefine
+    it; in the page's own world only when no isolated world is available."""
+    from tellurium.stealth._isolated import get_hsim_world
+
+    handles, isolated = handles_of(tab), None
+    if hasattr(tab, "_hsim_worlds"):
+        frame_id = frame_id or getattr(tab, "_frame_id", "")
+        context = await get_hsim_world(tab, frame_id=frame_id)
+        params: dict[str, Any] = {"backendNodeId": backend_node_id, "executionContextId": context}
+        if handles is not None:
+            params["objectGroup"] = handles.name
+        try:
+            if context is not None:
+                result = await session.send("DOM.resolveNode", params, timeout=HANDLE_TIMEOUT)
+                isolated = result["object"]["objectId"]
+        except CDPError:  # the world went with its document: use the page's world
+            tab._hsim_worlds.pop(frame_id, None)
+    check = {"objectId": isolated or object_id, "functionDeclaration": _IS_CONNECTED}
+    try:
+        answer = await send_on_handle(session, "Runtime.callFunctionOn", check | _BY_VALUE)
+    finally:
+        if isolated and handles is not None:
+            handles.discard(isolated)
+    return answer.get("result", {}).get("value") is True
 
 
 async def resolve_ref(session: Session, tab: Tab | Any, refs: RefMap, ref: str) -> Element:
@@ -112,10 +157,7 @@ async def resolve_ref(session: Session, tab: Tab | Any, refs: RefMap, ref: str) 
     try:
         # A node detached by a re-render or document.open() still resolves:
         # acting on it would hit an empty box at (0, 0), i.e. another element.
-        check = {"objectId": object_id, "functionDeclaration": _IS_CONNECTED}
-        check["returnByValue"] = True
-        connected = await send_on_handle(session, "Runtime.callFunctionOn", check)
-        if connected.get("result", {}).get("value") is not True:
+        if not await _connected(session, tab, backend_node_id, refs.frame_of(ref), object_id):
             raise StaleElementError(
                 f"Ref {ref} names a node no longer in the page (re-rendered or removed):"
                 " take a new snapshot"

@@ -160,3 +160,12 @@ async def test_detached_node_is_stale_and_its_handle_released():
         await resolve_ref(session, tab, refs, ref)
     await tab._handles.drain()
     assert ("Runtime.releaseObject", {"objectId": "obj-1"}) in session.calls
+
+
+def test_refs_remember_their_frame_until_reset():
+    refs = RefMap()
+    ref = refs.ref_for(7, "frame-A")
+    assert refs.ref_for(7) == ref and refs.frame_of(ref) == "frame-A"
+    assert refs.frame_of("e999") == "" and refs.frame_of("junk") == ""
+    refs.reset()
+    assert refs.frame_of(ref) == ""

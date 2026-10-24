@@ -199,9 +199,11 @@ def _states(props: dict[str, Any], role: str) -> dict[str, bool | int | str]:
 class _Pruner:
     """Walks one document's AX nodes; a sub-pruner walks each stitched iframe."""
 
-    def __init__(self, tree: AXTree, ref_for: Callable[[int], str], interactive: bool, depth):
+    def __init__(self, tree: AXTree, ref_for: Callable[..., str], interactive: bool, depth):
         self.tree, self.ref_for, self.interactive, self.depth = tree, ref_for, interactive, depth
         self.by_id = {node["nodeId"]: node for node in tree.nodes}
+        roots = (n.get("frameId") for n in tree.nodes if _role(n) == "RootWebArea")
+        self.frame = next(roots, None) or ""  # the document's frame, for the refs
 
     def walk(self, root: int | None, level: int, nesting: int) -> list[SnapshotNode]:
         """From *root* (a backend node id), else from the document node."""
@@ -244,7 +246,9 @@ class _Pruner:
             return self.children(node, level, nesting)
         value = (node.get("value") or {}).get("value")
         snap = SnapshotNode(
-            ref=self.ref_for(node["backendDOMNodeId"]) if node.get("backendDOMNodeId") else None,
+            ref=self.ref_for(node["backendDOMNodeId"], self.frame)
+            if node.get("backendDOMNodeId")
+            else None,
             role=role,
             name=name,
             value=None if value in (None, "") else str(value),
@@ -264,7 +268,7 @@ class _Pruner:
         inner = _Pruner(frame, self.ref_for, self.interactive, self.depth) if frame else None
         if self.interactive:
             return inner.walk(None, level, nesting) if inner else []
-        snap = SnapshotNode(self.ref_for(node["backendDOMNodeId"]), "iframe", name)
+        snap = SnapshotNode(self.ref_for(node["backendDOMNodeId"], self.frame), "iframe", name)
         snap.children = inner.walk(None, level + 1, nesting) if inner else []
         return [snap]
 
@@ -299,13 +303,13 @@ def _fuse(children: list[SnapshotNode], name: str, value: str | None) -> list[Sn
 
 def build_nodes(
     tree: AXTree,
-    ref_for: Callable[[int], str],
+    ref_for: Callable[[int, str], str],
     *,
     interactive: bool = False,
     root: int | None = None,
     depth: int | None = None,
 ) -> list[SnapshotNode]:
-    """Prune *tree* into snapshot nodes, naming each with ``ref_for(backend_id)``.
+    """Prune *tree* into snapshot nodes, naming each ``ref_for(backend_id, frame_id)``.
 
     *interactive* keeps only what an agent can act on; *root* (a backend node
     id) scopes to that node's subtree; *depth* keeps that many levels (text
@@ -411,15 +415,16 @@ async def _check_size(session: Session, timeout: float) -> None:
         )
 
 
-def _pending_ref(backend_node_id: int) -> str:
-    return f"#{backend_node_id}"
+def _pending_ref(backend_node_id: int, frame_id: str) -> str:
+    return f"#{backend_node_id}#{frame_id}"
 
 
 def _assign_refs(nodes: list[SnapshotNode], refs: RefMap) -> None:
     """Swap the pending refs of an off-loop build for real ones, in document order."""
     for node in nodes:
         if node.ref and node.ref.startswith("#"):
-            node.ref = refs.ref_for(int(node.ref[1:]))
+            backend_node_id, frame_id = node.ref[1:].split("#", 1)
+            node.ref = refs.ref_for(int(backend_node_id), frame_id)
         _assign_refs(node.children, refs)
 
 
