@@ -33,7 +33,8 @@ INSTRUCTIONS = """\
 tellurium drives a real Chrome (stealth, human-like input by default).
 1. session-open {name?}: a named session ('github') keeps its logins, storage and
    fingerprint across runs; without a name it is throwaway. It returns sessionId
-   and the targetId of its first tab. Page tools all take that targetId.
+   and the targetId of its first tab. Every page tool takes a targetId (from
+   session-open, tab-open or tab-list).
 2. navigate {targetId, url}.
 3. snapshot {targetId}: the page as an accessibility tree, one node per line,
    with [ref=eN] on what you can act on. Big page: interactive=true or

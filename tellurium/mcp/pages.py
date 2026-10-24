@@ -139,58 +139,55 @@ async def _eval(pool: Any, args: dict[str, Any]) -> Reply:
     return Reply(truncate(text, TEXT_CHARS), {"targetId": args["targetId"], "value": value})
 
 
-_REF_PARAM = param("string", "Element ref from the latest snapshot, e.g. 'e12'.")
-_MAX_CHARS = param("integer", "Cut the text after this many characters.")
+_REF_PARAM = param("string", "Snapshot ref, e.g. e12.")
+_MAX_CHARS = param("integer")
 
 TOOLS = [
     Tool(
         "navigate",
-        "Load url in the tab, or go back/forward/reload (history). Returns url, title "
-        "and whether the document changed; take a new snapshot after.",
+        "Load url, or step history. Returns url, title, navigated.",
         _navigate,
         {
-            "url": param("string", "Address to load."),
-            "history": param("string", "History step.", enum=["back", "forward", "reload"]),
+            "url": param("string"),
+            "history": param("string", enum=["back", "forward", "reload"]),
         },
         page=True,
     ),
     Tool(
         "snapshot",
-        "The page as an accessibility tree, one node per line; act on [ref=eN] with "
-        "the other tools. Refs stay valid until the page navigates.",
+        "The page as an accessibility tree; act on [ref=eN] with the other tools.",
         _snapshot,
         {
-            "interactive": param("boolean", "Only nodes you can act on (much shorter)."),
-            "selector": param("string", "CSS selector: snapshot only that part."),
-            "depth": param("integer", "Levels of nesting to include."),
+            "interactive": param("boolean", "Only actionable nodes."),
+            "selector": param("string", "CSS: only that part."),
+            "depth": param("integer"),
             "maxChars": _MAX_CHARS,
         },
         page=True,
     ),
     Tool(
         "get-text",
-        "Visible text of an element (ref) or of the whole page.",
+        "Visible text of ref, or of the page.",
         _get_text,
         {"ref": _REF_PARAM, "maxChars": _MAX_CHARS},
         page=True,
     ),
     Tool(
         "screenshot",
-        "PNG screenshot of the viewport, the full page, or one element (ref).",
+        "PNG of the viewport, the full page, or ref.",
         _screenshot,
-        {"ref": _REF_PARAM, "fullPage": param("boolean", "Whole page, not just the viewport.")},
+        {"ref": _REF_PARAM, "fullPage": param("boolean")},
         page=True,
     ),
     Tool(
         "wait-for",
-        "Wait until text appears, a ref becomes visible, or the URL matches "
-        "(glob with * or substring).",
+        "Wait for text, a visible ref, or a URL (glob or substring).",
         _wait_for,
         {
-            "text": param("string", "Visible text to wait for."),
+            "text": param("string"),
             "ref": _REF_PARAM,
-            "url": param("string", "URL glob ('*/done*') or substring."),
-            "timeout": param("number", f"Seconds (default {WAIT_DEFAULT}, max {WAIT_MAX})."),
+            "url": param("string"),
+            "timeout": param("number", f"Seconds, default {WAIT_DEFAULT}."),
         },
         page=True,
         timeout=WAIT_MAX + 15,
@@ -199,9 +196,9 @@ TOOLS = [
 
 EVAL_TOOL = Tool(
     "eval",
-    "Evaluate a JavaScript expression in the page and return its JSON value.",
+    "Evaluate JavaScript in the page; returns its JSON value.",
     _eval,
-    {"expression": param("string", "JavaScript expression; promises are awaited.")},
+    {"expression": param("string", "Promises are awaited.")},
     required=("expression",),
     page=True,
 )

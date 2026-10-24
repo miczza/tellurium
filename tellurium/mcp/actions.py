@@ -202,19 +202,19 @@ def _free_path(folder: Path, suggested: str) -> Path:
     return candidate
 
 
-_REF = param("string", "Element ref from the latest snapshot, e.g. 'e12'.")
-_HUMAN = param("boolean", "Human-like mouse and keyboard (default true).")
+_REF = param("string", "Snapshot ref, e.g. e12.")
+_HUMAN = param("boolean", "Default true.")
 
 TOOLS = [
     Tool("click", "Click an element.", _click, {"ref": _REF, "human": _HUMAN}, ("ref",), page=True),
     Tool(
         "fill",
-        "Replace the value of a text field with text; submit presses Enter after.",
+        "Replace a text field's value; submit presses Enter.",
         _fill,
         {
             "ref": _REF,
-            "text": param("string", "Text to type."),
-            "submit": param("boolean", "Press Enter after typing."),
+            "text": param("string"),
+            "submit": param("boolean"),
             "human": _HUMAN,
         },
         ("ref", "text"),
@@ -222,48 +222,48 @@ TOOLS = [
     ),
     Tool(
         "press",
-        "Press a key or combo ('Enter', 'Control+a'), in the focused element or in ref.",
+        "Press a key or combo ('Enter', 'Control+a') in the focused element or ref.",
         _press,
-        {"key": param("string", "Key or combo."), "ref": _REF},
+        {"key": param("string"), "ref": _REF},
         ("key",),
         page=True,
     ),
     Tool(
         "select-option",
-        "Choose an option of a <select> by value or visible label (human: arrow keys).",
+        "Choose a <select> option by value or label.",
         _select_option,
-        {"ref": _REF, "value": param("string", "Option value or label.")},
+        {"ref": _REF, "value": param("string")},
         ("ref", "value"),
         page=True,
     ),
     Tool(
         "check",
-        "Set a checkbox or radio (checked true by default).",
+        "Set a checkbox or radio (checked: default true).",
         _check,
-        {"ref": _REF, "checked": param("boolean", "Wanted state."), "human": _HUMAN},
+        {"ref": _REF, "checked": param("boolean"), "human": _HUMAN},
         ("ref",),
         page=True,
     ),
     Tool("hover", "Move the mouse over an element.", _hover, {"ref": _REF}, ("ref",), page=True),
     Tool(
         "scroll",
-        "Scroll an element into view (ref), or the page up/down by amount pixels.",
+        "Scroll ref into view, or the page by amount px.",
         _scroll,
         {
             "ref": _REF,
-            "direction": param("string", "Page direction.", enum=["up", "down"]),
-            "amount": param("integer", f"Pixels (default {SCROLL_DEFAULT})."),
+            "direction": param("string", enum=["up", "down"]),
+            "amount": param("integer", f"Default {SCROLL_DEFAULT}."),
             "human": _HUMAN,
         },
         page=True,
     ),
     Tool(
         "download",
-        "Click a ref that starts a download, wait for it and return the saved file's path.",
+        "Click a ref that starts a download; returns the saved path.",
         _download,
         {
             "ref": _REF,
-            "timeout": param("number", f"Seconds (default {DOWNLOAD_DEFAULT})."),
+            "timeout": param("number", f"Seconds, default {DOWNLOAD_DEFAULT}."),
             "human": _HUMAN,
         },
         ("ref",),

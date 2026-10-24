@@ -275,3 +275,21 @@ async def test_close_all_cancels_a_launch_that_hangs(tmp_path, monkeypatch):
     assert rolled_back.is_set()
     with pytest.raises(asyncio.CancelledError):
         await opening
+
+
+def test_tool_schemas_stay_small(tmp_path: Path):
+    """What every agent pays in tokens on connect: at most shuttle's 7.6 KB."""
+    import json
+
+    from mcp import types
+
+    tools = build_tools(ServerConfig(home=tmp_path))
+    listed = [
+        types.Tool(name=t.name, description=t.description, input_schema=t.input_schema())
+        for t in tools
+    ]
+    dumped = json.dumps([t.model_dump(by_alias=True, exclude_none=True) for t in listed])
+    print(f"tool schemas: {len(dumped)} bytes")
+    assert len(dumped) <= 7600
+    target_ids = {json.dumps(t.input_schema()["properties"]["targetId"]) for t in tools if t.page}
+    assert target_ids == {'{"type": "string"}'}  # explained once, in the instructions

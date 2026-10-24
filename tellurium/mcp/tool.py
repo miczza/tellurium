@@ -11,7 +11,7 @@ from tellurium.mcp.results import Reply, ToolError
 Handler = Callable[[Any, dict[str, Any]], Awaitable[Reply]]
 
 TARGET_ID = "targetId"
-_TARGET_PARAM = {"type": "string", "description": "Tab id from session-open, tab-open or tab-list."}
+_TARGET_PARAM = {"type": "string"}  # explained once, in the server instructions
 _PYTHON_TYPES: dict[str, tuple[type, ...]] = {
     "string": (str,),
     "integer": (int,),
@@ -24,11 +24,14 @@ class ToolArgumentError(ToolError):
     """The arguments do not match the tool's schema."""
 
 
-def param(kind: str, description: str, *, enum: list[str] | None = None) -> dict[str, Any]:
-    """A JSON-schema property of *kind* (string, integer, number, boolean)."""
+def param(kind: str, description: str = "", *, enum: list[str] | None = None) -> dict[str, Any]:
+    """A JSON-schema property of *kind* (string, integer, number, boolean); every
+    byte of *description* is paid in tokens by each agent that connects."""
     if kind not in _PYTHON_TYPES:
         raise ValueError(f"unsupported parameter type {kind!r}")
-    schema: dict[str, Any] = {"type": kind, "description": description}
+    schema: dict[str, Any] = {"type": kind}
+    if description:
+        schema["description"] = description
     if enum is not None:
         schema["enum"] = list(enum)
     return schema

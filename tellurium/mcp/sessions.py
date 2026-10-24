@@ -300,36 +300,35 @@ async def _tab_close(pool: SessionPool, args: dict[str, Any]) -> Reply:
     return Reply(f"closed tab {args['targetId']}", {"targetId": args["targetId"], "ok": True})
 
 
-_SESSION_ID = param("string", "Session id from session-open or session-list.")
+_SESSION_ID = param("string")
 
 TOOLS = [
     Tool(
         "session-open",
-        "Open a browser session and return its sessionId and first tab's targetId. "
-        "With name, a saved identity (cookies, storage, fingerprint seed) that comes "
-        "back next time; without, a throwaway one. Opening an open name returns it.",
+        "Open a browser; returns sessionId and its first tab's targetId. A name "
+        "keeps the identity (cookies, storage, seed) across runs.",
         _session_open,
-        {"name": param("string", "Saved session name, e.g. 'github'. Omit for throwaway.")},
+        {"name": param("string", "Omit for a throwaway session.")},
         timeout=120.0,
     ),
     Tool("session-list", "List open sessions and their tab ids.", _session_list),
     Tool(
         "session-close",
-        "Close a session and its browser; a named one is saved first.",
+        "Close a session; a named one is saved.",
         _session_close,
         {"sessionId": _SESSION_ID},
         required=("sessionId",),
     ),
     Tool(
         "tab-open",
-        "Open a new tab in a session (at url, else blank) and return its targetId.",
+        "Open a tab; returns its targetId.",
         _tab_open,
-        {"sessionId": _SESSION_ID, "url": param("string", "Address to load.")},
+        {"sessionId": _SESSION_ID, "url": param("string")},
         required=("sessionId",),
     ),
     Tool(
         "tab-list",
-        "List open tabs (popups included) with url and title, of one session or all.",
+        "List tabs (popups too) with url and title.",
         _tab_list,
         {"sessionId": _SESSION_ID},
     ),
