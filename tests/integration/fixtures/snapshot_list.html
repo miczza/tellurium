@@ -5,7 +5,8 @@
   <h1>Items</h1>
   <ul id="items"></ul>
   <script>
-    // 1000 items x 5 nodes (li, span, text, button, text) = 5000 DOM nodes.
+    // 1000 items x 5 nodes (li, span, text, button, text) = 5000 DOM nodes
+    // (3000 elements): the spec's "page of 5000 nodes".
     const ul = document.getElementById('items');
     const frag = document.createDocumentFragment();
     for (let i = 0; i < 1000; i++) {

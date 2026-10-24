@@ -7,9 +7,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `tellurium.browser.snapshot`: accessibility snapshot of a page
-  (`Accessibility.getFullAXTree`, same-process iframes stitched in, OOPIFs as
-  `- iframe "<url>" [oopif]` placeholders).
+- `tellurium.browser.snapshot`: accessibility snapshot of a page for LLM
+  agents. `take_snapshot()` renders a compact tree (`- button "Sign in"
+  [ref=e3]`, values, `checked`/`disabled`/`expanded`/`level` states) with
+  `interactive=`, `selector=`, `depth=` and `max_chars=` (cut with an explicit
+  `[truncated: N more lines]` line); `take_snapshot_nodes()` returns the same
+  as `SnapshotNode` trees. Built on `Accessibility.getFullAXTree`, without
+  `Runtime.enable`; same-process iframes are stitched in, OOPIFs show as
+  `- iframe "<url>" [oopif]`.
 - `tellurium.browser.refs`: per-tab `RefMap` (`ref ↔ backendDOMNodeId`, stable
   within a document, stale after a main-frame navigation, numbers never reused)
   and `resolve_ref()` into a normal `Element`.

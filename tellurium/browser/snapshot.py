@@ -24,9 +24,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin
 
+from tellurium.browser.handles import StaleElementError
 from tellurium.cdp.types import CDPError
 
 if TYPE_CHECKING:
+    from tellurium.browser.refs import RefMap
     from tellurium.cdp.transport._session import Session
 
 # Bound of each CDP command of a snapshot; a 5000-node tree answers in ~0.1 s.
@@ -403,3 +405,62 @@ def render(nodes: list[SnapshotNode], *, max_chars: int | None = None) -> str:
         kept.append(line)
         size += len(line) + 1
     return text  # unreachable: the text did not fit
+
+
+# ---------------------------------------------------------------------------
+# Taking a snapshot of a tab
+
+
+async def _backend_id_of(session: Session, selector: str, timeout: float) -> int:
+    doc = await _send(session, "DOM.getDocument", {"depth": 0}, timeout)
+    query = {"nodeId": doc["root"]["nodeId"], "selector": selector}
+    node_id = (await _send(session, "DOM.querySelector", query, timeout)).get("nodeId", 0)
+    if not node_id:
+        raise LookupError(f"No element matching {selector!r}")
+    described = await _send(session, "DOM.describeNode", {"nodeId": node_id}, timeout)
+    return described["node"]["backendNodeId"]
+
+
+async def take_snapshot_nodes(
+    session: Session,
+    refs: RefMap,
+    *,
+    interactive: bool = False,
+    selector: str | None = None,
+    depth: int | None = None,
+    timeout: float = SNAPSHOT_TIMEOUT,
+) -> list[SnapshotNode]:
+    """Snapshot the page behind *session* as :class:`SnapshotNode` trees.
+
+    Refs come from *refs* (the tab's map). *selector* scopes to the first
+    matching element (``LookupError`` if none). A tree fetched while the main
+    frame navigated is fetched again, so refs always name the current document.
+    """
+    if depth is not None and depth < 0:
+        raise ValueError(f"depth must be >= 0, got {depth}")
+    for _ in range(3):
+        generation = refs.generation
+        root = await _backend_id_of(session, selector, timeout) if selector else None
+        tree = await fetch_tree(session, timeout=timeout)
+        if refs.generation == generation:
+            return build_nodes(tree, refs.ref_for, interactive=interactive, root=root, depth=depth)
+    raise StaleElementError("The page kept navigating while it was being snapshotted")
+
+
+async def take_snapshot(
+    session: Session,
+    refs: RefMap,
+    *,
+    interactive: bool = False,
+    selector: str | None = None,
+    depth: int | None = None,
+    max_chars: int | None = None,
+    timeout: float = SNAPSHOT_TIMEOUT,
+) -> str:
+    """Snapshot the page behind *session* as text (see :func:`render`)."""
+    if max_chars is not None and max_chars < 1:
+        raise ValueError(f"max_chars must be >= 1, got {max_chars}")
+    nodes = await take_snapshot_nodes(
+        session, refs, interactive=interactive, selector=selector, depth=depth, timeout=timeout
+    )
+    return render(nodes, max_chars=max_chars)
