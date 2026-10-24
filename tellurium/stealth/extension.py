@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -20,7 +21,11 @@ def load_script(name: str, params: dict | None = None) -> str:
 
 
 def create_stealth_extension(scripts: list[str], matches: list[str] | None = None) -> str:
-    """Create a temp directory with a Chrome extension. Returns the path."""
+    """Create a temp directory with a Chrome extension. Returns the path.
+
+    The caller owns the directory: :class:`~tellurium.stealth.engine.StealthEngine`
+    removes it with :func:`remove_stealth_extension`.
+    """
     if matches is None:
         matches = ["<all_urls>"]
 
@@ -49,3 +54,8 @@ def create_stealth_extension(scripts: list[str], matches: list[str] | None = Non
         f.write(content)
 
     return ext_dir
+
+
+def remove_stealth_extension(path: str) -> None:
+    """Delete an extension directory made by :func:`create_stealth_extension`."""
+    shutil.rmtree(path, ignore_errors=True)

@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import weakref
 
 from tellurium.browser.engine import BrowserEngine
-from tellurium.stealth.extension import create_stealth_extension, load_script
+from tellurium.stealth.extension import (
+    create_stealth_extension,
+    load_script,
+    remove_stealth_extension,
+)
 from tellurium.stealth.profile import StealthProfile
 
 logger = logging.getLogger("tellurium")
@@ -32,6 +37,7 @@ class StealthEngine:
         self._headless = headless
         self._has_proxy = has_proxy
         self._extension_dir: str | None = None
+        self._extension_cleanup: weakref.finalize | None = None
         # Auto-attach is armed on the root session *and* on every page
         # session; guard against patching the same target twice should both
         # ever deliver the same sessionId.
@@ -46,8 +52,20 @@ class StealthEngine:
         if not scripts:
             return None
 
+        self.close()  # a rebuild replaces the previous directory
         self._extension_dir = create_stealth_extension(scripts)
+        # The engine owns the directory: it goes with the engine, which goes
+        # with its Browser (after close() or a failed launch), or at exit.
+        self._extension_cleanup = weakref.finalize(
+            self, remove_stealth_extension, self._extension_dir
+        )
         return self._extension_dir
+
+    def close(self) -> None:
+        """Delete the extension directory now (idempotent)."""
+        if self._extension_cleanup is not None:
+            self._extension_cleanup()
+            self._extension_cleanup = None
 
     async def apply_to_session(self, session, is_oopif: bool = False) -> None:
         """Apply stealth fixes to a CDP session (tab or OOPIF)."""

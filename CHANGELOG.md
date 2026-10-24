@@ -199,6 +199,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A stealth launch no longer leaves `/tmp/tellurium_ext_*` behind: the stealth
+  engine owns its extension directory and deletes it when it goes away with its
+  `Browser` (after `close()` or a failed launch) or at interpreter exit;
+  `StealthEngine.close()` deletes it at once.
 - `Element.click(human=True)`, `hover()`, `drag_to()` and
   `scroll_into_view(human=True)` take the element's box from Chrome's layout
   (`DOM.getContentQuads`, new `tellurium.browser.geometry`): page coordinates
