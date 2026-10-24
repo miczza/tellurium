@@ -143,6 +143,44 @@ async def test_covered_oopif_target_is_not_hittable(browser, local_server):
     assert await tab.eval("document.title") == "Host"
 
 
+@pytest.mark.parametrize("query", ["?zoom=1.5", "?zoom=0.8&nested"])
+async def test_human_input_in_a_zoomed_oopif_reaches_its_target(browser, local_server, query):
+    """The widget's own coordinates are scaled by the zoom: an unscaled click meant
+    for Email lands on "Forget me"."""
+    tab = browser.main_tab
+    await _open(tab, local_server, query)
+    text = await _snapshot_with(tab, '- button "Forget me"')
+    email = await tab.ref(_ref_of(text, '- textbox "Email"'))
+    zoom = float(query.split("=")[1].split("&")[0])
+    box = await content_box(await tab.ref(_ref_of(text, '- button "Sign in"')))
+    assert box["x"] == pytest.approx((_WIDGET_ORIGIN[0] + 10) * zoom, abs=2)
+    assert box["width"] == pytest.approx(120 * zoom, abs=2)
+    await email.click(human=True)
+    await email.type("ada@example.com")
+    await (await tab.ref(_ref_of(text, '- button "Sign in"'))).click(human=True)
+    after = await tab.snapshot()
+    assert '"signed in as ada@example.com"' in after, after
+    if "nested" in query:
+        deep = await tab.ref(_ref_of(text, '- button "Go deep"'))
+        await deep.click(human=True)
+        await _snapshot_with(tab, '- button "Gone deep"')
+    assert await tab.eval("document.title") == "Host"
+
+
+@pytest.mark.parametrize("query", ["?low", "?low&zoom=1.5"])
+async def test_human_clicks_below_the_fold(browser, local_server, query):
+    """Chrome hit-tests in document coordinates: the check must follow the scroll,
+    in the host and in the widget alike."""
+    tab = browser.main_tab
+    await _open(tab, local_server, query)
+    text = await _snapshot_with(tab, "Sign in")
+    await (await tab.ref(_ref_of(text, '- button "Sign in"'))).click(human=True)
+    assert '"signed in as"' in await tab.snapshot()
+    assert await tab.eval("document.title") == "Host"
+    await (await tab.ref(_ref_of(text, '- button "Cancel"'))).click(human=True)
+    assert await tab.eval("document.title") == "cancelled"
+
+
 async def test_oopif_inside_an_oopif(any_browser, local_server):
     tab = any_browser.main_tab
     await _open(tab, local_server, "?nested")

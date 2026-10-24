@@ -17,6 +17,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   box up to the tab, and the hit check before a pointer press (`human=True`
   clicks, `hover`, `drag_to`) checks every document on the way: the press
   reaches the target or raises `ElementNotHittableError`, never another element.
+  A CSS zoom on a cross-site iframe scales the boxes and the check with it.
 - `Tab.snapshot()` / `Tab.snapshot_nodes()`: the accessibility snapshot of the
   tab (`interactive=`, `selector=`, `depth=`, `max_chars=`, plus `max_nodes=`
   and `snapshot_timeout=`). `Tab.ref("e3")` and `Tab.select("@e3")` turn a
@@ -192,6 +193,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   out of `examples/fingerprint_tests/`.
 
 ### Fixed
+
+- The hit check before a pointer press (`human=True` clicks, `hover`,
+  `drag_to`) asked Chrome about the wrong point once the page was scrolled
+  (`DOM.getNodeForLocation` takes document coordinates, not viewport ones), so
+  a target below the fold raised `ElementNotHittableError` or was checked
+  against another spot; the frame's scroll is now added.
 
 - `Element.click(human=True)`, `hover()`, `drag_to()` and
   `scroll_into_view(human=True)` take the element's box from Chrome's layout

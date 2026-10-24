@@ -73,12 +73,12 @@ def linked_session(frame_id: str) -> Any | None:
     return next((child for child in found if alive(child)), None)
 
 
-def _chain(session: Any) -> list[tuple[Any, str]]:
-    """``(parent session, frame id)`` of each cross-site frame from *session* up to
-    the tab, innermost first; empty for the tab's own session."""
-    chain: list[tuple[Any, str]] = []
+def _chain(session: Any) -> list[tuple[Any, Any, str]]:
+    """``(session, parent session, frame id)`` of each cross-site frame from *session*
+    up to the tab, innermost first; empty for the tab's own session."""
+    chain: list[tuple[Any, Any, str]] = []
     while (link := _LINKS.get(session)) is not None and len(chain) < _MAX_FRAMES:
-        chain.append(link)
+        chain.append((session, *link))
         session = link[0]
     return chain
 
@@ -99,8 +99,15 @@ async def _largest_box(session: Any, params: dict, what: str) -> dict[str, float
     return max(boxes, key=lambda box: box["width"] * box["height"])
 
 
-async def _frame_owner(parent: Any, frame_id: str) -> tuple[int, dict[str, float]]:
-    """Backend id and content box (in *parent*'s frame) of the ``<iframe>`` of *frame_id*."""
+async def _zoom(session: Any) -> float:
+    """CSS pixels to device-independent pixels in *session*'s frame (CSS zoom included)."""
+    metrics = await send_on_handle(session, "Page.getLayoutMetrics", {})
+    return float(metrics.get("cssVisualViewport", {}).get("zoom") or 1.0)
+
+
+async def _frame_owner(child: Any, parent: Any, frame_id: str) -> tuple[int, dict, float]:
+    """Backend id and content box (in *parent*'s frame) of the ``<iframe>`` of *frame_id*,
+    and the scale from *child*'s CSS pixels to *parent*'s (a CSS zoom on the way)."""
     owner = await send_on_handle(parent, "DOM.getFrameOwner", {"frameId": frame_id})
     backend = owner["backendNodeId"]
     # the frame's document starts inside border and padding: the box model's content quad
@@ -109,7 +116,8 @@ async def _frame_owner(parent: Any, frame_id: str) -> tuple[int, dict[str, float
     box = _box(model["model"]["content"])
     if box["width"] <= 0 or box["height"] <= 0:
         raise StaleElementError("Element's frame has no box on the page (hidden or empty)")
-    return backend, box
+    child_zoom, parent_zoom = await asyncio.gather(_zoom(child), _zoom(parent))
+    return backend, box, child_zoom / parent_zoom
 
 
 async def content_box(element: Element) -> dict[str, float]:
@@ -121,9 +129,14 @@ async def content_box(element: Element) -> dict[str, float]:
     """
     object_id = await element._resolve()
     box = await _largest_box(element._session, {"objectId": object_id}, "Element")
-    for parent, frame_id in _chain(element._session):
-        _, frame = await _frame_owner(parent, frame_id)
-        box = {**box, "x": box["x"] + frame["x"], "y": box["y"] + frame["y"]}
+    for link in _chain(element._session):
+        _, frame, scale = await _frame_owner(*link)
+        box = {
+            "x": frame["x"] + box["x"] * scale,
+            "y": frame["y"] + box["y"] * scale,
+            "width": box["width"] * scale,
+            "height": box["height"] * scale,
+        }
     return box
 
 
@@ -193,7 +206,10 @@ async def _holds(element: Element, target: int, node: int, frame_id: str) -> boo
     return answer.get("result", {}).get("value") is True
 
 
-async def _describe(session: Any, backend: int) -> str:
+async def _describe(session: Any, hit: dict | None) -> str:
+    if hit is None:
+        return "no element"
+    backend = hit["backendNodeId"]
     try:
         node = await session.send(
             "DOM.describeNode", {"backendNodeId": backend}, timeout=HANDLE_TIMEOUT
@@ -211,11 +227,19 @@ async def _describe(session: Any, backend: int) -> str:
     return f"<{label}>"
 
 
-async def _hit(session: Any, x: float, y: float) -> dict:
-    """The node *session*'s frame hit-tests at (x, y) of that frame, as a click would."""
-    point = {"x": round(x), "y": round(y)}
+async def _hit(session: Any, x: float, y: float) -> dict | None:
+    """The node *session*'s frame hit-tests at (x, y) of its viewport, as a click would;
+    ``None`` when there is none. Chrome takes document coordinates: the scroll is added."""
+    view = (await send_on_handle(session, "Page.getLayoutMetrics", {})).get("cssLayoutViewport")
+    point = {
+        "x": round(x + (view or {}).get("pageX", 0)),
+        "y": round(y + (view or {}).get("pageY", 0)),
+    }
     params = point | {"includeUserAgentShadowDOM": True, "ignorePointerEventsNone": False}
-    return await session.send("DOM.getNodeForLocation", params, timeout=HANDLE_TIMEOUT)
+    try:
+        return await session.send("DOM.getNodeForLocation", params, timeout=HANDLE_TIMEOUT)
+    except CDPError:  # "No node found at given location": outside the page
+        return None
 
 
 def _not_hittable(x: float, y: float, on_top: str) -> ElementNotHittableError:
@@ -231,13 +255,16 @@ async def ensure_hit(element: Element, x: float, y: float) -> None:
     labels, or inside them (through frames and shadow roots). Across a cross-site frame
     each document on the way must hit the ``<iframe>`` that leads to the element."""
     top_x, top_y = x, y
-    for parent, frame_id in reversed(_chain(element._session)):  # from the tab down
-        owner, frame = await _frame_owner(parent, frame_id)
+    for link in reversed(_chain(element._session)):  # from the tab down
+        owner, frame, scale = await _frame_owner(*link)
+        parent = link[1]
         hit = await _hit(parent, x, y)
-        if hit["backendNodeId"] != owner:
-            raise _not_hittable(top_x, top_y, await _describe(parent, hit["backendNodeId"]))
-        x, y = x - frame["x"], y - frame["y"]
+        if hit is None or hit["backendNodeId"] != owner:
+            raise _not_hittable(top_x, top_y, await _describe(parent, hit))
+        x, y = (x - frame["x"]) / scale, (y - frame["y"]) / scale
     hit = await _hit(element._session, x, y)
+    if hit is None:
+        raise _not_hittable(top_x, top_y, "no element")
     target = (await _send(element, "DOM.describeNode", {"objectId": await element._resolve()}))[
         "node"
     ]["backendNodeId"]
@@ -253,7 +280,7 @@ async def ensure_hit(element: Element, x: float, y: float) -> None:
             break
         owner = await _send(element, "DOM.getFrameOwner", {"frameId": frame_id})
         node, frame_id = owner["backendNodeId"], parents[frame_id]
-    raise _not_hittable(top_x, top_y, await _describe(element._session, hit["backendNodeId"]))
+    raise _not_hittable(top_x, top_y, await _describe(element._session, hit))
 
 
 def _parents(tree: dict, parent: str = "") -> dict[str, str]:
