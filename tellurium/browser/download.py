@@ -342,15 +342,19 @@ class TabFrames:
     """The frame ids of one tab's page, kept from its ``Page`` frame events, so a
     download started by one of its same-process iframes reaches the tab's waiter.
 
-    Every frame reports ``Page.frameNavigated``, even an iframe left on its
-    initial ``about:blank``. Frame ids are unique across the browser: a kept id
-    never names another tab's frame. A removed iframe leaves the set; a
-    main-frame navigation drops the old document's frames.
+    An iframe joins on ``Page.frameAttached``: one that never commits a document
+    (its src is a download, or a page of another site, an OOPIF from the start)
+    sends no ``Page.frameNavigated`` to the tab's session. Iframes nested inside
+    a cross-site iframe are reported to that iframe's own session only, and are
+    not covered. Frame ids are unique across the browser: a kept id never names
+    another tab's frame. A removed iframe leaves the set; a main-frame
+    navigation drops the old document's frames.
     """
 
     def __init__(self, session: Any, main_frame_id: str) -> None:
         self._main = main_frame_id
         self._ids = {main_frame_id}
+        session.on("Page.frameAttached", self._on_attached)
         session.on("Page.frameNavigated", self._on_navigated)
         session.on("Page.frameDetached", self._on_detached)
 
@@ -369,6 +373,10 @@ class TabFrames:
             self._ids = {self._main}
         elif frame.get("id"):
             self._ids.add(frame["id"])
+
+    def _on_attached(self, params: dict) -> None:
+        if params.get("frameId"):
+            self._ids.add(params["frameId"])
 
     def _on_detached(self, params: dict) -> None:
         # "swap": the frame moves to another process under the same id, still ours

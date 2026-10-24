@@ -27,7 +27,8 @@ def test_frames_follow_navigations_and_detaches():
     frames = TabFrames(session, "MAIN")
     session.emit("Page.frameNavigated", _navigated("A", "MAIN"))
     session.emit("Page.frameNavigated", _navigated("B", "MAIN"))
-    assert "A" in frames and "B" in frames and "" not in frames
+    session.emit("Page.frameAttached", {"frameId": "OOPIF", "parentFrameId": "MAIN"})
+    assert "A" in frames and "B" in frames and "OOPIF" in frames and "" not in frames
     session.emit("Page.frameDetached", {"frameId": "A", "reason": "remove"})
     session.emit("Page.frameDetached", {"frameId": "B", "reason": "swap"})
     session.emit("Page.frameDetached", {"frameId": "MAIN", "reason": "remove"})

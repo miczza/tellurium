@@ -98,6 +98,20 @@ async def test_download_from_a_blank_iframe_of_a_blank_page(browser, local_serve
     assert (await info.value).suggested_filename == "b.csv"
 
 
+@pytest.mark.parametrize("site", ["same", "cross"])
+async def test_download_from_an_iframe_that_never_commits(browser, local_server, site):
+    """An iframe whose src is a download (or a page of another site, an OOPIF from the
+    start) reports no frameNavigated to the tab's session: only frameAttached."""
+    tab = await browser.get(local_server + "/basic.html")
+    origin = local_server if site == "same" else local_server.replace("127.0.0.1", "localhost")
+    async with tab.expect_download(timeout=10) as info:
+        await tab.eval(
+            "const f = document.createElement('iframe');"
+            f"f.src = '{origin}/download/{site}.csv'; document.body.append(f); 1"
+        )
+    assert (await info.value).suggested_filename == f"{site}.csv"
+
+
 async def test_a_removed_iframe_leaves_the_tab_frames(browser, local_server):
     tab = await browser.get(local_server + "/download.html")
     tree = await tab.send_cdp("Page.getFrameTree")
