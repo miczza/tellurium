@@ -1,11 +1,13 @@
 import http.server
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 
 import pytest
 
 FIXTURES_DIR = str(Path(__file__).parent / "fixtures")
+DOWNLOAD_BODY = b"id,name\n1,tellurium\n"
 
 
 class _FixtureHandler(http.server.SimpleHTTPRequestHandler):
@@ -13,6 +15,8 @@ class _FixtureHandler(http.server.SimpleHTTPRequestHandler):
 
     * ``/slow/<ms>/<name>`` — an empty 200 after a delay
     * ``/redirect/<path>`` — a 302 to ``/<path>``
+    * ``/download/<name>`` — an attachment named *name* (``DOWNLOAD_BODY``)
+    * ``/download-slow/<name>`` — an attachment trickling for ~30 s
     """
 
     def __init__(self, *a, **kw):
@@ -26,6 +30,10 @@ class _FixtureHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if len(parts) >= 3 and parts[1] in ("download", "download-slow"):
+            name = urllib.parse.unquote(parts[2])
+            self._attachment(name, slow=parts[1] == "download-slow")
+            return
         if len(parts) >= 3 and parts[1] == "redirect":
             self.send_response(302)
             self.send_header("Location", "/" + "/".join(parts[2:]))
@@ -33,6 +41,22 @@ class _FixtureHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             return
         super().do_GET()
+
+    def _attachment(self, name, slow):
+        chunks = [b"x" * 1024] * 300 if slow else [DOWNLOAD_BODY]
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+        self.send_header("Content-Length", str(sum(map(len, chunks))))
+        self.end_headers()
+        try:
+            for chunk in chunks:
+                self.wfile.write(chunk)
+                self.wfile.flush()
+                if slow:
+                    time.sleep(0.1)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # the download was canceled
 
     def log_message(self, *args):
         pass

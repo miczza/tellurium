@@ -20,6 +20,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and `resolve_ref()` into a normal `Element`.
 - Generated CDP bindings for the `Accessibility` domain
   (`tellurium.cdp.domains.accessibility`).
+- Downloads: `Browser.launch(downloads_dir=None)` and
+  `Browser.new_context(downloads_dir=None)` accept every download into a
+  folder per browser context (a temporary one, removed on `close()`, unless a
+  folder is given; `BrowserContext.downloads_dir` tells which).
+  `tellurium.browser.download` adds `Download` (`url`, `suggested_filename`,
+  `state`, `path()`, `save_as()`, `cancel()`), `DownloadError` and
+  `DownloadWaiter`, which waits for the next download of the frames it
+  accepts. `Browser.close()` and `BrowserContext.close()` cancel unfinished
+  downloads first (no partial `.crdownload` file is left in a kept folder) and
+  fail their waits with `DownloadError`; so does Chrome exiting or crashing,
+  at once instead of at the timeout. `Download.context_id` names the context
+  a download comes from; a relative `downloads_dir` is made absolute; a
+  waiter's filter that raises fails that waiter alone.
+
 - `tellurium download-browser --browser patched --allow-unverified` installs a
   release without a matching `SHA256SUMS` (mirrors, local builds); the same
   flag on `update-browser` and `verify-browser --reinstall`, and

@@ -65,6 +65,8 @@ def _owner(tmp_path, transport: _Transport) -> BrowserProcess:
     owner.forwarder = _Forwarder()
     owner.temp_profile = str(tmp_path / "profile")
     (tmp_path / "profile").mkdir()
+    owner.downloads_tmp = str(tmp_path / "downloads")
+    (tmp_path / "downloads").mkdir()
     return owner
 
 
@@ -94,6 +96,7 @@ async def test_close_finishes_across_repeated_cancellation(tmp_path):
     assert transport.closed
     assert forwarder.stopped
     assert not (tmp_path / "profile").exists()
+    assert not (tmp_path / "downloads").exists()
 
 
 async def test_the_cdp_reader_is_stopped_first(tmp_path):
