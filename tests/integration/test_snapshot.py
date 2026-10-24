@@ -282,3 +282,17 @@ async def test_selector_on_a_node_without_ax_is_a_lookup_error(browser, local_se
     await tab.get(f"{local_server}/snapshot_rerender.html")
     with pytest.raises(LookupError, match="accessibility"):
         await take_snapshot(tab._session, RefMap(), selector=selector)
+
+
+async def test_human_actions_on_a_node_in_a_stitched_iframe_hit_that_node(browser, local_server):
+    """Coordinates of an iframe's node are page coordinates, not the frame's: the
+    click must not land on "Delete account" fixed at (0, 0) of the page."""
+    tab = browser.main_tab
+    refs = _watched(tab)
+    await tab.get(f"{local_server}/snapshot_frame_danger.html")
+    text = await take_snapshot(tab._session, refs)
+    save = await resolve_ref(tab._session, tab, refs, _ref_of(text, '- button "Save"'))
+    await save.hover()
+    assert await (await tab.select("#hover")).text() == "save"
+    await save.click(human=True)
+    assert await (await tab.select("#status")).text() == "saved"

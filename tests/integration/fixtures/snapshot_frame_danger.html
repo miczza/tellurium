@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Frame and danger</title>
+<style>
+  body { margin: 0; }
+  #danger { position: fixed; left: 0; top: 0; width: 80px; height: 80px; }
+  #frame { position: absolute; left: 400px; top: 300px; width: 300px; height: 200px; border: 0; }
+</style>
+</head>
+<body>
+  <button id="danger" onclick="document.getElementById('status').textContent = 'deleted'"
+          onmouseover="document.getElementById('hover').textContent = 'danger'">Delete account</button>
+  <iframe id="frame" title="Editor" src="snapshot_frame_save.html"></iframe>
+  <p id="status" style="margin-top: 120px">idle</p>
+  <p id="hover">none</p>
+</body>
+</html>

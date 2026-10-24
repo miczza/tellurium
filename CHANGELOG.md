@@ -151,6 +151,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Element.click(human=True)`, `hover()`, `drag_to()` and
+  `scroll_into_view(human=True)` take the element's box from Chrome's layout
+  (`DOM.getContentQuads`, new `tellurium.browser.geometry`): page coordinates
+  also for a node inside a same-process iframe (the frame-relative
+  `getBoundingClientRect` sent the click elsewhere on the page), and a value
+  page JS cannot fake. A node without a box raises `StaleElementError` instead
+  of clicking near (0, 0); the human click reads the box again right before
+  the press and sends nothing if the node was replaced or moved meanwhile.
 - `reinstall()` (and `tellurium verify-browser --reinstall`) no longer deletes
   the installed version before the new copy is downloaded and verified: a failed
   download leaves the install usable.

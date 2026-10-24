@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import random
 from typing import TYPE_CHECKING, Any
 
+from tellurium.browser import geometry
 from tellurium.browser.handles import elements_from_array, handles_of, resolve_node, send_on_handle
 
 if TYPE_CHECKING:
@@ -158,9 +158,8 @@ class Element:
         return Element(self._session, self._tab, object_id=object_id)
 
     async def _center(self) -> tuple[float, float]:
-        """Return the (x, y) centre of the element's bounding box."""
-        box = await self.bounding_box()
-        return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+        """The (x, y) centre of the element's box, in page coordinates (Chrome's layout)."""
+        return geometry.center(await geometry.content_box(self))
 
     # ------------------------------------------------------------------
     # Properties
@@ -321,11 +320,7 @@ class Element:
         if not human:
             await self._call("function() { this.click(); }")
         else:
-            await self.scroll_into_view()
-            box = await self.bounding_box_isolated()
-            x = box["x"] + box["width"] / 2 + random.uniform(-3, 3)
-            y = box["y"] + box["height"] / 2 + random.uniform(-3, 3)
-            await self._tab.mouse_click(x, y, human=True)  # Uses Wind Mouse trajectory
+            await geometry.human_click(self)  # Wind Mouse trajectory, box checked before press
 
     async def type(
         self,
@@ -381,11 +376,9 @@ class Element:
 
     async def scroll_into_view(self, human: bool = False) -> None:
         if human:
-            box = await self.bounding_box_isolated()
+            box = await geometry.content_box(self)  # top-level viewport coordinates
             viewport_height = await self._tab.eval("window.innerHeight")
-            scroll_y = await self._tab.eval("window.scrollY")
-            target_y = box["y"] - (viewport_height or 800) / 3
-            delta = target_y - (scroll_y or 0)
+            delta = box["y"] - (viewport_height or 800) / 3
             if abs(delta) > 50:
                 await self._tab.scroll(delta_y=delta, human=True)
         else:
