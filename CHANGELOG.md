@@ -22,7 +22,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   tell the agent what to do next (stale ref: take a new snapshot; covered
   element: what is on top; page too large: use `selector=` or
   `interactive=true`). Closing stdin, SIGTERM or SIGINT closes every browser
-  and saves every named session.
+  and saves every named session, those still launching included (a launch gets
+  30 s, then is cancelled and rolled back); a `session-close` cut by its timeout
+  keeps closing and the session leaves the pool only once closed.
 - `Tab.snapshot()` / `Tab.snapshot_nodes()`: the accessibility snapshot of the
   tab (`interactive=`, `selector=`, `depth=`, `max_chars=`, plus `max_nodes=`
   and `snapshot_timeout=`). `Tab.ref("e3")` and `Tab.select("@e3")` turn a

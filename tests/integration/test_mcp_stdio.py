@@ -12,9 +12,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -194,21 +197,40 @@ def _chrome_using(path: Path) -> int:
     return int(found.stdout.strip() or 0)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
-def test_sigterm_closes_and_saves_every_session(tmp_path):
+@pytest.fixture
+def short_tmp():
+    """An empty TMPDIR for the server: short, Chrome's singleton socket path has a limit."""
+    path = Path(tempfile.mkdtemp(prefix="tm", dir="/tmp"))
+    yield path
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def _start(home: Path, tmp: Path) -> subprocess.Popen:
     proc = subprocess.Popen(
         [str(_TELLURIUM), "mcp"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env={**os.environ, "TELLURIUM_HOME": str(tmp_path)},
+        env={**os.environ, "TELLURIUM_HOME": str(home), "TMPDIR": str(tmp)},
         text=True,
     )
+    hello = {"protocolVersion": "2025-06-18", "capabilities": {}}
+    hello["clientInfo"] = {"name": "test", "version": "1"}
+    assert "result" in _rpc(proc, {"id": 1, "method": "initialize", "params": hello})
+    _rpc(proc, {"method": "notifications/initialized"})
+    return proc
+
+
+def _stop(proc: subprocess.Popen) -> None:
+    if proc.poll() is None:
+        proc.kill()
+        proc.wait()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+def test_sigterm_closes_and_saves_every_session(tmp_path, short_tmp):
+    proc = _start(tmp_path, short_tmp)
     try:
-        hello = {"protocolVersion": "2025-06-18", "capabilities": {}}
-        hello["clientInfo"] = {"name": "test", "version": "1"}
-        assert "result" in _rpc(proc, {"id": 1, "method": "initialize", "params": hello})
-        _rpc(proc, {"method": "notifications/initialized"})
         call = {"name": "session-open", "arguments": {"name": "work"}}
         opened = _rpc(proc, {"id": 2, "method": "tools/call", "params": call})
         assert opened["result"]["isError"] is False
@@ -219,7 +241,26 @@ def test_sigterm_closes_and_saves_every_session(tmp_path):
         assert proc.wait(timeout=30) == 0, proc.stderr.read()
         assert _chrome_using(profile) == 0
         assert (profile / "session.json").is_file()
+        assert list(short_tmp.iterdir()) == []
     finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait()
+        _stop(proc)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+@pytest.mark.parametrize("delay", [0.05, 0.4, 1.0])
+def test_sigterm_during_session_open_leaves_nothing_behind(tmp_path, short_tmp, delay):
+    tmp = short_tmp
+    proc = _start(tmp_path, tmp)
+    try:
+        call = {"name": "session-open", "arguments": {"name": "work"}}
+        proc.stdin.write(
+            json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": call}) + "\n"
+        )
+        proc.stdin.flush()
+        time.sleep(delay)  # Chrome is starting
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=60) == 0, proc.stderr.read()
+        assert _chrome_using(tmp_path / "sessions" / "work") == 0
+        assert list(tmp.iterdir()) == []
+    finally:
+        _stop(proc)

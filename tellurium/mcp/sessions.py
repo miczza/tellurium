@@ -29,6 +29,8 @@ _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 _TEMP_PREFIX = "temp-"
 # A tab's live state is a nicety in listings: never wait long for it.
 _LIST_TIMEOUT = 2.0
+# At shutdown a launch in flight gets this long to finish before it is cancelled.
+LAUNCH_GRACE = 30.0
 
 
 class BrowserSession:
@@ -54,13 +56,20 @@ class BrowserSession:
 
 
 class SessionPool:
-    """Owns every browser the server opened; ``async with`` closes them all."""
+    """Owns every browser the server opened; ``async with`` closes them all.
+
+    Launches and closes run as tasks the pool keeps: a tool call that times out
+    or a shutdown that comes mid-launch never leaves a browser nobody closes.
+    """
 
     def __init__(self, config: ServerConfig):
         self.config = config
         self._sessions: dict[str, BrowserSession] = {}
         self._tabs: dict[str, tuple[BrowserSession, Tab]] = {}
-        self._lock = asyncio.Lock()  # one launch or close at a time: one profile, one Chrome
+        self._lock = asyncio.Lock()  # one launch at a time: one profile, one Chrome
+        self._launching: set[asyncio.Task] = set()
+        self._closing: dict[str, asyncio.Task] = {}
+        self._shutting_down = False
         self._next_temp = 0
         self._next_tab = 0
 
@@ -78,11 +87,21 @@ class SessionPool:
         if name is not None:
             _check_name(name)
         async with self._lock:
+            if name is not None and name in self._closing:
+                await asyncio.shield(self._closing[name])  # its profile is still in use
+            if self._shutting_down:
+                raise ToolError("The server is shutting down")
             if name is not None and name in self._sessions:
                 return self._sessions[name], False
-            opened = await (self._launch_named(name) if name else self._launch_temp())
-            self._sessions[opened.id] = opened
-            return opened, True
+            launch = asyncio.ensure_future(self._launch(name))
+            self._launching.add(launch)
+            launch.add_done_callback(self._launching.discard)
+            return await launch, True
+
+    async def _launch(self, name: str | None) -> BrowserSession:
+        opened = await (self._launch_named(name) if name else self._launch_temp())
+        self._sessions[opened.id] = opened  # in the pool before anyone can cancel us
+        return opened
 
     def _launch_options(self) -> dict[str, Any]:
         return {"headless": not self.config.headed, "stealth": True}
@@ -123,21 +142,43 @@ class SessionPool:
         return list(self._sessions.values())
 
     async def close(self, session_id: str) -> BrowserSession:
-        async with self._lock:
-            closing = self.get(session_id)
-            del self._sessions[session_id]
+        """Close (and save) a session. It stays in the pool until it is closed;
+        if this call is cancelled the close goes on, and close_all waits for it."""
+        closing = self.get(session_id)
+        task = self._closing.get(session_id)
+        if task is None:
+            task = asyncio.ensure_future(self._close(closing))
+            self._closing[session_id] = task
+        await asyncio.shield(task)
+        return closing
+
+    async def _close(self, closing: BrowserSession) -> None:
+        try:
+            await closing.close()
+        finally:
+            self._sessions.pop(closing.id, None)
+            self._closing.pop(closing.id, None)
             for tid in [t for t, (s, _) in self._tabs.items() if s is closing]:
                 del self._tabs[tid]
-            await closing.close()
-            return closing
 
-    async def close_all(self) -> None:
-        """Close (and save) every session; one failing does not stop the others."""
+    async def close_all(self, launch_grace: float = LAUNCH_GRACE) -> None:
+        """Close (and save) every session, those still launching included; one
+        failing does not stop the others. A launch gets *launch_grace* s to end,
+        then it is cancelled (its rollback closes what it started)."""
+        self._shutting_down = True
+        if self._launching:
+            _, late = await asyncio.wait(set(self._launching), timeout=launch_grace)
+            for task in late:
+                task.cancel()
+            if late:
+                await asyncio.wait(late)
         for session_id in list(self._sessions):
             try:
                 await self.close(session_id)
             except Exception:  # noqa: BLE001 - shutdown: log and go on
                 logger.exception("closing session %s failed", session_id)
+        if self._closing:
+            await asyncio.wait(set(self._closing.values()))
 
     # -- tabs ------------------------------------------------------------
 

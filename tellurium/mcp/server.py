@@ -8,6 +8,7 @@ depend on it.
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import os
 import signal
@@ -137,6 +138,7 @@ def run(config: ServerConfig, transport: str = "stdio") -> None:
             # The stdio transport reads stdin in a worker thread that no
             # cancellation reaches, so the loop could never finish; every
             # resource the server owns (browsers, profiles, pipes) is closed.
+            gc.collect()  # what closed browsers leave to finalizers (stealth extension dirs)
             sys.stderr.flush()
             os._exit(0)
 
