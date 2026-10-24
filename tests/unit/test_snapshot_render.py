@@ -314,8 +314,11 @@ class _SnapshotSession:
 
     async def send(self, method, params=None, timeout=None):
         self.calls.append(method)
-        if method == "Memory.getDOMCounters":
-            return {"documents": 1, "nodes": self.dom_nodes, "jsEventListeners": 0}
+        if method == "DOM.getDocument":
+            return {"root": {"nodeId": 1}}
+        if method == "DOM.performSearch":
+            assert params == {"query": "//node()"}  # every node of the live documents
+            return {"searchId": "s1", "resultCount": self.dom_nodes}
         if method == "Accessibility.getFullAXTree":
             return {"nodes": _tree("form").nodes}
         return {}
@@ -346,9 +349,22 @@ async def test_too_large_page_is_refused_before_fetching():
     from tellurium.browser import snapshot
 
     session = _SnapshotSession(dom_nodes=snapshot.MAX_DOM_NODES + 1)
-    with pytest.raises(snapshot.SnapshotTooLargeError, match="selector="):
+    with pytest.raises(snapshot.SnapshotTooLargeError) as raised:
         await snapshot.take_snapshot(session, RefMap())
+    assert f"{snapshot.MAX_DOM_NODES + 1} DOM nodes" in str(raised.value)
+    assert "selector=" in str(raised.value) and "max_nodes=" in str(raised.value)
     assert "Accessibility.getFullAXTree" not in session.calls
+    assert "DOM.discardSearchResults" in session.calls
+
+
+@pytest.mark.parametrize("max_nodes", [None, 100_000])
+async def test_max_nodes_raises_or_lifts_the_limit(max_nodes):
+    from tellurium.browser import snapshot
+
+    session = _SnapshotSession(dom_nodes=60_000)
+    text = await snapshot.take_snapshot(session, RefMap(), max_nodes=max_nodes)
+    assert text == FORM
+    assert ("DOM.performSearch" in session.calls) is (max_nodes is not None)
 
 
 def test_max_chars_is_kept_even_below_the_signal_length():

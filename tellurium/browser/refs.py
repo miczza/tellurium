@@ -29,6 +29,7 @@ from tellurium.cdp.types import CDPError
 
 if TYPE_CHECKING:
     from tellurium.browser.element import Element
+    from tellurium.browser.snapshot import SnapshotNode
     from tellurium.browser.tab import Tab
     from tellurium.cdp.transport._session import Session
 
@@ -41,6 +42,11 @@ def parse_ref(text: str) -> str | None:
     """``"e3"`` for ``"e3"`` or ``"@e3"``; ``None`` if *text* is not a ref."""
     match = _REF.fullmatch(text.strip())
     return f"e{match.group(1)}" if match else None
+
+
+def pending_ref(backend_node_id: int, frame_id: str = "") -> str:
+    """A placeholder ref, settled later by :meth:`RefMap.settle`."""
+    return f"#{backend_node_id}#{frame_id}"
 
 
 class RefMap:
@@ -93,6 +99,15 @@ class RefMap:
                 f"Ref {parsed} belongs to a previous document: take a new snapshot"
             )
         raise LookupError(f"No element with ref {parsed}: take a snapshot first")
+
+    def settle(self, nodes: list[SnapshotNode]) -> None:
+        """Swap the :func:`pending_ref` refs of a snapshot built off the event loop for
+        real ones, in document order (the map itself is only touched on the loop)."""
+        for node in nodes:
+            if node.ref and node.ref.startswith("#"):
+                backend_node_id, frame_id = node.ref[1:].split("#", 1)
+                node.ref = self.ref_for(int(backend_node_id), frame_id)
+            self.settle(node.children)
 
     def reset(self) -> None:
         """Start a new generation: every ref handed out so far turns stale."""

@@ -326,3 +326,38 @@ async def test_rerender_while_the_pointer_travels_sends_no_click(browser, local_
     with pytest.raises(StaleElementError):
         await save.click(human=True)
     assert await (await tab.select("#status")).text() == "idle"
+
+
+async def test_detached_garbage_does_not_count_toward_the_limit(browser, local_server):
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/snapshot_form.html")
+    await tab.eval("window.junk = Array.from({length: 70000}, () => document.createElement('div'))")
+    text = await take_snapshot(tab._session, RefMap())
+    assert '- button "Sign in" [ref=' in text
+
+
+async def test_max_nodes_lifts_the_limit_and_the_error_says_how(browser, local_server):
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/snapshot_huge.html")
+    with pytest.raises(SnapshotTooLargeError, match=r"60\d\d\d DOM nodes.*max_nodes="):
+        await take_snapshot(tab._session, RefMap())
+    text = await take_snapshot(tab._session, RefMap(), max_nodes=100_000, max_chars=500)
+    assert '- button "Row 0" [ref=' in text
+
+
+@pytest.mark.parametrize("selector", ["body", "html"])
+async def test_body_and_html_selectors_give_the_whole_page(browser, local_server, selector):
+    tab = browser.main_tab
+    refs = _watched(tab)
+    await tab.get(f"{local_server}/snapshot_form.html")
+    whole = await take_snapshot(tab._session, refs)
+    assert await take_snapshot(tab._session, refs, selector=selector) == whole
+
+
+async def test_selector_on_a_huge_subtree_is_refused_with_a_clear_error(browser, local_server):
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/snapshot_huge.html")
+    start = time.perf_counter()
+    with pytest.raises(SnapshotTooLargeError, match="selector="):
+        await take_snapshot(tab._session, RefMap(), selector="#rows")
+    assert time.perf_counter() - start < 12

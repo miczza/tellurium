@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin
 
 from tellurium.browser.handles import StaleElementError
+from tellurium.browser.refs import pending_ref
 from tellurium.cdp.types import CDPError
 
 if TYPE_CHECKING:
@@ -27,10 +28,11 @@ if TYPE_CHECKING:
 
 # Bound of each CDP command of a snapshot; a 5000-node tree answers in ~0.1 s.
 SNAPSHOT_TIMEOUT = 30.0
-# Bigger pages are refused (pass ``selector=``): Chrome needs ~1 s and ~50 MB
-# of JSON for 50000 nodes, parsed on the event loop by the transport.
+# Default ``max_nodes``: Chrome needs ~1 s and ~50 MB of JSON for 50000 nodes,
+# parsed on the event loop by the transport. Over it, ``selector=`` scopes the
+# fetch to a subtree (queryAXTree, superlinear: bounded by _QUERY_TIMEOUT).
 MAX_DOM_NODES = 50_000
-MAX_AX_NODES = 120_000
+_QUERY_TIMEOUT = 5.0
 # Iframes nested deeper than this are shown without their content.
 _MAX_FRAME_NESTING = 8
 _DISABLE_TIMEOUT = 2.0
@@ -105,22 +107,16 @@ def _role(node: dict[str, Any]) -> str:
 
 
 def _document_url(nodes: list[dict[str, Any]]) -> str:
-    for node in nodes:
-        if _role(node) == "RootWebArea":
-            for prop in node.get("properties", []):
-                if prop.get("name") == "url":
-                    return str(prop.get("value", {}).get("value") or "")
-    return ""
+    return str(_props(next((n for n in nodes if _role(n) == "RootWebArea"), {})).get("url") or "")
 
 
 async def _frame_of(
     session: Session, backend_node_id: int, base_url: str, nesting: int, timeout: float
 ) -> AXTree | str | None:
     """The document of the ``<iframe>`` *backend_node_id*: tree, OOPIF URL or ``None``."""
+    params = {"backendNodeId": backend_node_id}
     try:
-        described = await _send(
-            session, "DOM.describeNode", {"backendNodeId": backend_node_id}, timeout
-        )
+        described = await _send(session, "DOM.describeNode", params, timeout)
     except CDPError:  # detached meanwhile
         return None
     node = described.get("node", {})
@@ -147,27 +143,20 @@ async def fetch_tree(
     timeout: float = SNAPSHOT_TIMEOUT,
     _nesting: int = 0,
 ) -> AXTree:
-    """Fetch the AX tree of a document (the main frame by default) and its iframes.
-
-    With *root* (a backend node id) only that node's subtree is fetched
-    (``Accessibility.queryAXTree``), at a cost proportional to the subtree.
-    """
+    """Fetch the AX tree of a document (the main frame by default) and its iframes;
+    with *root* (a backend node id) only that node's subtree (``queryAXTree``)."""
     if root is not None:
         method, params = "Accessibility.queryAXTree", {"backendNodeId": root}
     else:
         method, params = "Accessibility.getFullAXTree", {"frameId": frame_id} if frame_id else {}
     result = await _send(session, method, params, timeout)
     nodes = result.get("nodes", [])
-    iframes = [
-        node["backendDOMNodeId"]
-        for node in nodes
-        if _role(node) == "Iframe" and not node.get("ignored") and node.get("backendDOMNodeId")
-    ]
-    tree = AXTree(nodes=nodes)
+    frames = [n for n in nodes if _role(n) == "Iframe" and not n.get("ignored")]
+    iframes = [bid for n in frames if (bid := n.get("backendDOMNodeId"))]
+    tree, base_url = AXTree(nodes=nodes), _document_url(nodes)
     if iframes:
-        base_url = _document_url(nodes)
         subs = await asyncio.gather(
-            *(_frame_of(session, bid, base_url, _nesting, timeout) for bid in iframes)
+            *(_frame_of(session, b, base_url, _nesting, timeout) for b in iframes)
         )
         tree.frames = {bid: sub for bid, sub in zip(iframes, subs, strict=True) if sub is not None}
     return tree
@@ -403,52 +392,58 @@ async def _backend_id_of(session: Session, selector: str, timeout: float) -> int
     return described["node"]["backendNodeId"]
 
 
-async def _check_size(session: Session, timeout: float) -> None:
+async def _count_nodes(session: Session, timeout: float) -> int:
+    """Nodes of the live documents (iframes of the process included), counted by
+    Chrome: no garbage, no page JS."""
+    await _send(session, "DOM.getDocument", {"depth": 0}, timeout)
+    search = await _send(session, "DOM.performSearch", {"query": "//node()"}, timeout)
+    await _send(session, "DOM.discardSearchResults", {"searchId": search["searchId"]}, timeout)
+    return search["resultCount"]
+
+
+def _too_large(count: int, what: str, max_nodes: int) -> SnapshotTooLargeError:
+    return SnapshotTooLargeError(
+        f"{what} has {count} DOM nodes, over max_nodes={max_nodes}: pass selector= to"
+        " snapshot a part of it, or a higher max_nodes= (None: no limit)"
+    )
+
+
+async def _fetch_scoped(
+    session: Session, root: int | None, max_nodes: int | None, timeout: float
+) -> AXTree:
+    """The whole tree when the page is within *max_nodes* (linear in the page), else
+    only *root*'s subtree, bounded in time and size (queryAXTree is superlinear)."""
+    count = await _count_nodes(session, timeout) if max_nodes is not None else 0
+    if max_nodes is None or count <= max_nodes:
+        return await fetch_tree(session, timeout=timeout)
+    if root is None:
+        raise _too_large(count, "The page", max_nodes)
     try:
-        counters = await _send(session, "Memory.getDOMCounters", {}, timeout)
-    except CDPError:  # not available: the AX node count still bounds the work
-        return
-    if counters.get("nodes", 0) > MAX_DOM_NODES:
+        tree = await fetch_tree(session, root=root, timeout=min(timeout, _QUERY_TIMEOUT))
+    except TimeoutError:
         raise SnapshotTooLargeError(
-            f"The page has {counters['nodes']} DOM nodes, over the snapshot limit of"
-            f" {MAX_DOM_NODES}: pass selector= to snapshot a part of it"
-        )
-
-
-def _pending_ref(backend_node_id: int, frame_id: str) -> str:
-    return f"#{backend_node_id}#{frame_id}"
-
-
-def _assign_refs(nodes: list[SnapshotNode], refs: RefMap) -> None:
-    """Swap the pending refs of an off-loop build for real ones, in document order."""
-    for node in nodes:
-        if node.ref and node.ref.startswith("#"):
-            backend_node_id, frame_id = node.ref[1:].split("#", 1)
-            node.ref = refs.ref_for(int(backend_node_id), frame_id)
-        _assign_refs(node.children, refs)
+            f"The selected part of a {count}-node page took over {_QUERY_TIMEOUT:.0f} s:"
+            " pass a narrower selector="
+        ) from None
+    if (dom := sum(1 for n in tree.nodes if n.get("backendDOMNodeId"))) > max_nodes:
+        raise _too_large(dom, "The selected part", max_nodes)
+    return tree
 
 
 async def _snapshot_once(
-    session: Session, selector: str | None, timeout: float, **options: Any
+    session: Session, selector: str | None, max_nodes: int | None, timeout: float, **opts: Any
 ) -> list[SnapshotNode]:
     root = await _backend_id_of(session, selector, timeout) if selector else None
-    if root is None:
-        await _check_size(session, timeout)
-    tree = await fetch_tree(session, root=root, timeout=timeout)
-    if len(tree.nodes) > MAX_AX_NODES:
-        raise SnapshotTooLargeError(
-            f"{len(tree.nodes)} accessibility nodes, over the snapshot limit of"
-            f" {MAX_AX_NODES}: pass a narrower selector="
-        )
-    if root is not None and not any(
-        n.get("backendDOMNodeId") == root and not n.get("ignored") for n in tree.nodes
-    ):
+    tree = await _fetch_scoped(session, root, max_nodes, timeout)
+    found = [n for n in tree.nodes if root is not None and n.get("backendDOMNodeId") == root]
+    nodes = await asyncio.to_thread(build_nodes, tree, pending_ref, root=root, **opts)
+    # an element Chrome ignores (body, html) still scopes; one it does not show is an error
+    if root is not None and (not found or (found[0].get("ignored") and not nodes)):
         raise LookupError(
             f"The element matching {selector!r} is not in the accessibility tree"
             " (hidden, aria-hidden or not rendered)"
         )
-    # pruning a big tree takes tens of ms: off the event loop
-    return await asyncio.to_thread(build_nodes, tree, _pending_ref, root=root, **options)
+    return nodes
 
 
 async def take_snapshot_nodes(
@@ -458,25 +453,24 @@ async def take_snapshot_nodes(
     interactive: bool = False,
     selector: str | None = None,
     depth: int | None = None,
+    max_nodes: int | None = MAX_DOM_NODES,
     timeout: float = SNAPSHOT_TIMEOUT,
 ) -> list[SnapshotNode]:
     """Snapshot the page behind *session* as :class:`SnapshotNode` trees, refs from *refs*.
 
-    *selector* scopes to the first match's subtree (``LookupError`` if none or not
-    in the AX tree). Over :data:`MAX_DOM_NODES`, without *selector*, raises
-    :class:`SnapshotTooLargeError`. A tree fetched during a main-frame navigation
-    is fetched again, so refs always name the current document.
+    *selector* scopes to the first match's subtree (``LookupError`` if none or not in
+    the AX tree). Over *max_nodes* DOM nodes (``None``: no limit) it raises
+    :class:`SnapshotTooLargeError`, unless *selector* names a small enough part.
     """
     if depth is not None and depth < 0:
         raise ValueError(f"depth must be >= 0, got {depth}")
     try:
         for _ in range(3):
             generation = refs.generation
-            nodes = await _snapshot_once(
-                session, selector, timeout, interactive=interactive, depth=depth
-            )
+            opts = {"interactive": interactive, "depth": depth}
+            nodes = await _snapshot_once(session, selector, max_nodes, timeout, **opts)
             if refs.generation == generation:
-                _assign_refs(nodes, refs)
+                refs.settle(nodes)
                 return nodes
         raise StaleElementError("The page kept navigating while it was being snapshotted")
     finally:
@@ -495,10 +489,10 @@ async def take_snapshot(
     selector: str | None = None,
     depth: int | None = None,
     max_chars: int | None = None,
+    max_nodes: int | None = MAX_DOM_NODES,
     timeout: float = SNAPSHOT_TIMEOUT,
 ) -> str:
     """Snapshot the page behind *session* as text (see :func:`render`)."""
-    nodes = await take_snapshot_nodes(
-        session, refs, interactive=interactive, selector=selector, depth=depth, timeout=timeout
-    )
+    opts = {"interactive": interactive, "selector": selector, "depth": depth}
+    nodes = await take_snapshot_nodes(session, refs, **opts, max_nodes=max_nodes, timeout=timeout)
     return render(nodes, max_chars=max_chars)

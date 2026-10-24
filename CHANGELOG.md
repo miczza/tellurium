@@ -18,8 +18,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   forge lines or refs. Built on `Accessibility.getFullAXTree` (`queryAXTree`
   for `selector=`, at the cost of the subtree), without `Runtime.enable`, and
   `Accessibility.disable` afterwards; pruning runs off the event loop. Pages
-  over 50000 DOM nodes raise `SnapshotTooLargeError` unless scoped with
-  `selector=`; a selector on an element outside the accessibility tree raises
+  over `max_nodes=` DOM nodes (default 50000, counted by Chrome in the live
+  documents only; `None` for no limit) raise `SnapshotTooLargeError` with the
+  count, unless `selector=` names a small enough part (a slow subtree fails
+  after 5 s with the same error). `selector="body"`/`"html"` give the whole
+  page; a selector on an element outside the accessibility tree raises
   `LookupError`. Same-process iframes are stitched in, OOPIFs show as
   `- iframe "<url>" [oopif]`; the AX nesting walked is bounded across stitched
   iframes, so a hostile page cannot exhaust the recursion.
