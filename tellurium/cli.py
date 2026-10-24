@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from tellurium.browser import _cache
+from tellurium.mcp import command as mcp_command
 
 
 def _cache_dir() -> Path:
@@ -57,7 +58,6 @@ def main():
         help="Use MaxMind GeoLite2-Country instead of DB-IP Lite",
     )
 
-    # stealth-test
     st_parser = sub.add_parser("stealth-test", help="Test stealth against detection sites")
     st_parser.add_argument("--browser", default="stock", choices=["stock", "patched"])
     st_parser.add_argument(
@@ -65,10 +65,8 @@ def main():
     )
     st_parser.add_argument("--headed", action="store_true", help="Run with a visible window")
 
-    # info
     sub.add_parser("info", help="Show Tellurium info")
 
-    # list-browsers
     sub.add_parser("list-browsers", help="List installed browser versions")
 
     # update-browser
@@ -85,15 +83,7 @@ def main():
     verify_parser.add_argument("--reinstall", action="store_true", help="Reinstall if corrupt")
     for p in (dl_parser, upd_parser, verify_parser):
         p.add_argument("--allow-unverified", action="store_true", help="Skip SHA256SUMS")
-
-    # mcp
-    mcp_parser = sub.add_parser(
-        "mcp", help="Run tellurium as an MCP server on stdio (needs tellurium[mcp])"
-    )
-    mcp_parser.add_argument("--headed", action="store_true", help="Show the browser windows")
-    mcp_parser.add_argument(
-        "--allow-eval", action="store_true", help="List the eval tool (always on with stdio)"
-    )
+    mcp_command.register(sub)
 
     args = parser.parse_args()
 
@@ -115,26 +105,10 @@ def main():
         _prune_browsers(args.keep)
     elif args.command == "verify-browser":
         _verify_browser(args.reinstall, args.allow_unverified)
-    elif args.command == "mcp":
-        _mcp(headed=args.headed)
+    elif hasattr(args, "run"):  # subcommands that bring their own handler
+        args.run(args)
     else:
         parser.print_help()
-
-
-def _mcp(*, headed: bool) -> None:
-    """Serve MCP on stdio until the client leaves (``eval`` is on: a local client)."""
-    try:
-        from tellurium.mcp import server
-        from tellurium.mcp.config import ServerConfig, default_home
-    except ModuleNotFoundError as exc:
-        if (exc.name or "").partition(".")[0] != "mcp":
-            raise
-        print(
-            "tellurium mcp needs the MCP SDK: pip install 'tellurium[mcp]'",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-    server.run(ServerConfig(home=default_home(), headed=headed, allow_eval=True), "stdio")
 
 
 def _protocol_path():
