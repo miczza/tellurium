@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Hit targets</title>
+<style>
+  body { margin: 0; }
+  #wrap { position: relative; margin: 40px; width: 200px; }
+  #glass { position: absolute; inset: 0; pointer-events: none; background: rgba(0, 0, 0, 0.05); }
+  .switch { position: relative; display: inline-block; margin: 40px; }
+  .switch input { position: absolute; left: 0; top: 0; width: 40px; height: 20px; opacity: 0; margin: 0; }
+  .switch label { display: inline-block; position: relative; width: 40px; height: 20px; background: #ccc; }
+</style>
+</head>
+<body>
+  <div id="wrap">
+    <button id="c4" onclick="document.getElementById('status').textContent = 'c4'">Under glass</button>
+    <div id="glass"></div>
+  </div>
+  <div class="switch"><input id="c2" type="checkbox"><label for="c2" aria-label="Dark mode"></label></div>
+  <p id="status">idle</p>
+</body>
+</html>

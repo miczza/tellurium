@@ -397,7 +397,8 @@ class Element:
         sx, sy = await self._center()
         await target.scroll_into_view()
         tx, ty = await target._center()
-
+        await geometry.ensure_hit(target, tx, ty)  # both ends hittable before the press
+        await geometry.ensure_hit(self, sx, sy)
         await self._tab.mouse_move(sx, sy)
         await self._tab._dispatch_mouse(
             {

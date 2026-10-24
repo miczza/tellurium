@@ -29,10 +29,12 @@ class ElementNotHittableError(RuntimeError):
 _MAX_FRAMES = 8
 # The aim point wanders this far from the centre, at most a quarter of the box.
 _JITTER = 3.0
-# True when *node* is this element or inside it, shadow roots included.
+# True when *node* is this element, one of its <label>s, or inside them (shadow
+# roots included): a click there reaches the element, as a person's would.
 _HOLDS = """function(node) {
+  const owners = [this, ...(this.labels || [])];
   for (let n = node; n; n = n.parentNode || (n instanceof ShadowRoot ? n.host : null)) {
-    if (n === this) return true;
+    if (owners.includes(n)) return true;
   }
   return false;
 }"""
@@ -142,13 +144,14 @@ async def _describe(element: Element, backend: int) -> str:
 
 
 async def ensure_hit(element: Element, x: float, y: float) -> None:
-    """Raise :class:`ElementNotHittableError` unless the node Chrome hit-tests at (x, y)
-    is *element* or inside it (through frames and shadow roots)."""
+    """Raise :class:`ElementNotHittableError` unless the node Chrome hit-tests at (x, y),
+    as a click would (``pointer-events: none`` let through), is *element*, one of its
+    labels, or inside them (through frames and shadow roots)."""
     point = {"x": round(x), "y": round(y)}
     hit = await _send(
         element,
         "DOM.getNodeForLocation",
-        point | {"includeUserAgentShadowDOM": True, "ignorePointerEventsNone": True},
+        point | {"includeUserAgentShadowDOM": True, "ignorePointerEventsNone": False},
     )
     target = (await _send(element, "DOM.describeNode", {"objectId": await element._resolve()}))[
         "node"

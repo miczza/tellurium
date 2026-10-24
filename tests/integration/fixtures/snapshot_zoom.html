@@ -10,7 +10,8 @@
 </style>
 </head>
 <body>
-  <button id="danger" onclick="document.getElementById('status').textContent = 'deleted'">Delete account</button>
+  <button id="danger" onclick="document.getElementById('status').textContent = 'deleted'"
+          onmousedown="document.getElementById('status').textContent = 'pressed'">Delete account</button>
   <div id="holder"><iframe id="frame" title="Editor" src="snapshot_zoom_frame.html"></iframe></div>
   <div id="cover" onclick="document.getElementById('status').textContent = 'overlay'"></div>
   <p id="status" style="margin-top: 400px">idle</p>

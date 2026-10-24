@@ -401,3 +401,33 @@ async def test_tree_too_slow_to_fetch_is_refused_in_time(browser, local_server):
     # the tab is still usable afterwards
     text = await take_snapshot(tab._session, RefMap(), selector="h1")
     assert text.startswith('- heading "Web component"')
+
+
+async def test_human_click_goes_through_what_a_person_clicks_through(browser, local_server):
+    """A pointer-events:none overlay does not stop a real click, nor does a custom
+    checkbox whose transparent input sits under its own <label for>."""
+    tab = browser.main_tab
+    refs = _watched(tab)
+    await tab.get(f"{local_server}/snapshot_hit.html")
+    text = await take_snapshot(tab._session, refs)
+    under_glass = await resolve_ref(tab._session, tab, refs, _ref_of(text, '- button "Under glass"'))
+    await under_glass.click(human=True)
+    assert await (await tab.select("#status")).text() == "c4"
+    switch = await resolve_ref(tab._session, tab, refs, _ref_of(text, '- checkbox "Dark mode"'))
+    await switch.hover()
+    await switch.click(human=True)
+    assert await switch.is_checked()
+
+
+@pytest.mark.parametrize("mode", ["frame", "ancestor"])
+async def test_drag_from_a_zoomed_frame_sends_no_press_elsewhere(browser, local_server, mode):
+    from tellurium.browser.geometry import ElementNotHittableError
+
+    tab = browser.main_tab
+    refs = _watched(tab)
+    await tab.get(f"{local_server}/snapshot_zoom.html?{mode}")
+    text = await take_snapshot(tab._session, refs)
+    save = await resolve_ref(tab._session, tab, refs, _ref_of(text, '- button "Save"'))
+    with pytest.raises(ElementNotHittableError):
+        await save.drag_to(await tab.select("#status"))
+    assert await (await tab.select("#status")).text() == "idle"

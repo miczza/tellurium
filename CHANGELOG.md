@@ -166,10 +166,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   of clicking near (0, 0); the human click reads the box again right before
   the press and sends nothing if the node was replaced or moved meanwhile.
   Before the press (and before `hover()` moves the pointer) Chrome hit-tests the
-  point (`DOM.getNodeForLocation`): unless the node there is the element or
-  inside it (through frames and shadow roots), no event is sent and
+  point (`DOM.getNodeForLocation`, as a click would: `pointer-events: none`
+  overlays let through): unless the node there is the element, one of its
+  labels (custom checkboxes), or inside them (through frames and shadow roots),
+  no event is sent and
   `ElementNotHittableError` names what is on top (an overlay, or a frame under
-  CSS `zoom`, whose quads Chrome reports unscaled).
+  CSS `zoom`, whose quads Chrome reports unscaled). `drag_to()` checks both
+  ends before pressing.
 - `reinstall()` (and `tellurium verify-browser --reinstall`) no longer deletes
   the installed version before the new copy is downloaded and verified: a failed
   download leaves the install usable.
