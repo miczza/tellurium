@@ -25,7 +25,7 @@
     if (query.has('zoom')) frame.style.zoom = query.get('zoom');
     // ?low: the widget below the fold too
     if (query.has('low')) frame.style.top = '1200px';
-    const pass = ['nested', 'zoom'].filter((key) => query.has(key)).join('&');
+    const pass = ['nested', 'zoom', 'tall'].filter((key) => query.has(key)).join('&');
     frame.src = location.protocol + '//' + host + ':' + location.port + '/oopif_login.html'
       + (pass ? '?' + pass : '');
   </script>

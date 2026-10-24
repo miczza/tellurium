@@ -286,3 +286,33 @@ async def test_oopif_handle_is_released_in_the_oopif(browser, local_server):
     await signin.release()
     with pytest.raises(CDPError, match="Could not find object"):
         await session.send("Runtime.getProperties", {"objectId": object_id})
+
+
+async def test_oopif_that_navigates_by_itself(browser, local_server):
+    """The widget goes to its next step: its old refs are stale, its new ones work."""
+    tab = browser.main_tab
+    await _open(tab, local_server)
+    text = await _snapshot_with(tab, "Next step")
+    old = _ref_of(text, '- button "Sign in"')
+    await (await tab.ref(_ref_of(text, '- link "Next step"'))).click()
+    text = await _snapshot_with(tab, '- button "Continue"')
+    assert "Sign in" not in text
+    with pytest.raises(StaleElementError):
+        await (await tab.ref(old)).click()
+    await (await tab.ref(_ref_of(text, '- button "Continue"'))).click(human=True)
+    await _snapshot_with(tab, '- button "Continued"')
+    assert await tab.eval("document.title") == "Host"
+
+
+async def test_human_click_in_a_scrolled_oopif_in_a_scrolled_page(browser, local_server):
+    tab = browser.main_tab
+    await _open(tab, local_server, "?low&tall")
+    text = await _snapshot_with(tab, '- button "Far away"')
+    far = await tab.ref(_ref_of(text, '- button "Far away"'))
+    await far.click(human=True)
+    assert '"far"' in await tab.snapshot()
+    widget_scroll = await far._call(
+        "function() { return this.ownerDocument.scrollingElement.scrollTop; }"
+    )
+    assert widget_scroll > 0 and await tab.eval("scrollY") > 0
+    assert await tab.eval("document.title") == "Host"

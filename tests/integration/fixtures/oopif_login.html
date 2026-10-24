@@ -15,11 +15,16 @@
     'signed in as ' + document.getElementById('email').value">Sign in</button>
   <input id="email" aria-label="Email">
   <p id="state">signed out</p>
+  <a id="next" href="oopif_next.html" style="position: absolute; left: 10px; top: 150px">Next step</a>
+  <button id="far" style="display: none; position: absolute; left: 10px; top: 900px"
+    onclick="document.getElementById('state').textContent = 'far'">Far away</button>
   <button id="forget" onclick="document.getElementById('state').textContent = 'forgotten'">Forget me</button>
   <script>
     const query = new URLSearchParams(location.search);
     // ?zoom: where an unscaled click meant for Email lands in the zoomed widget
     if (query.has('zoom')) document.getElementById('forget').style.display = 'block';
+    // ?tall: a button below the widget's own fold (the widget scrolls inside the page)
+    if (query.has('tall')) document.getElementById('far').style.display = 'block';
     // ?nested: one more frame, back on 127.0.0.1 (the host's site, another renderer
     // than this widget's): an OOPIF inside an OOPIF.
     if (query.has('nested')) {
