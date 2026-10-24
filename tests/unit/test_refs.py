@@ -169,3 +169,58 @@ def test_refs_remember_their_frame_until_reset():
     assert refs.frame_of("e999") == "" and refs.frame_of("junk") == ""
     refs.reset()
     assert refs.frame_of(ref) == ""
+
+
+def test_same_backend_id_in_another_renderer_gets_its_own_ref():
+    refs = RefMap()
+    top = refs.ref_for(7, "main")
+    inner = refs.ref_for(7, "oopif", "S1")
+    assert inner != top
+    assert refs.ref_for(7, "oopif", "S1") == inner and refs.ref_for(7) == top
+    assert refs.lookup(inner) == 7 and refs.frame_of(inner) == "oopif"
+
+
+def test_refs_remember_the_session_of_their_document_until_reset():
+    refs, oopif = RefMap(), object()
+    refs.bind("S1", oopif)
+    inner, top = refs.ref_for(3, "f", "S1"), refs.ref_for(3, "main")
+    assert refs.session_of(inner) is oopif
+    assert refs.session_of(top) is None and refs.session_of("e999") is None
+    refs.reset()
+    assert refs.session_of(inner) is None
+
+
+def test_settle_keeps_the_owner_of_pending_refs():
+    from tellurium.browser.refs import pending_ref
+    from tellurium.browser.snapshot import SnapshotNode
+
+    refs = RefMap()
+    nodes = [SnapshotNode(pending_ref(5, "main"), "button", "a")]
+    nodes[0].children = [SnapshotNode(pending_ref(5, "inner", "S1"), "button", "b")]
+    refs.settle(nodes)
+    assert nodes[0].ref == "e1" and nodes[0].children[0].ref == "e2"
+    assert refs.frame_of("e2") == "inner" and refs.ref_for(5, "x", "S1") == "e2"
+
+
+async def test_resolve_ref_asks_the_session_of_the_ref_document():
+    from tellurium.browser.refs import resolve_ref
+
+    refs, tab_session, oopif = RefMap(), _FakeSession(), _FakeSession()
+    refs.bind("S1", oopif)
+    element = await resolve_ref(tab_session, _FakeTab(), refs, refs.ref_for(42, "f", "S1"))
+    assert tab_session.calls == []
+    assert oopif.calls[0] == ("DOM.resolveNode", {"backendNodeId": 42})
+    assert element._session is oopif
+
+
+async def test_ref_in_a_frame_whose_session_is_gone_is_stale():
+    from tellurium.browser.refs import resolve_ref
+
+    class _Gone:
+        async def send(self, method, params=None, timeout=None):
+            raise ConnectionError("Target detached (session S1)")
+
+    refs = RefMap()
+    refs.bind("S1", _Gone())
+    with pytest.raises(StaleElementError, match="take a new snapshot"):
+        await resolve_ref(_FakeSession(), _FakeTab(), refs, refs.ref_for(42, "f", "S1"))

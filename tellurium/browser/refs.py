@@ -8,7 +8,9 @@ mapping ``ref ↔ backendDOMNodeId``:
 * a main-frame navigation starts a new *generation*: every ref issued before
   it raises :class:`StaleElementError`;
 * ref numbers are never reused within a tab, so an old ref can never land on
-  a node of a later document (backend ids may repeat across renderers).
+  a node of a later document (backend ids may repeat across renderers);
+* a node of a cross-site iframe (OOPIF) is keyed by its renderer's session too,
+  and its ref resolves through that session.
 
 A ref resolves with ``DOM.resolveNode`` into the tab's handle group, giving a
 normal :class:`Element`.
@@ -44,9 +46,9 @@ def parse_ref(text: str) -> str | None:
     return f"e{match.group(1)}" if match else None
 
 
-def pending_ref(backend_node_id: int, frame_id: str = "") -> str:
+def pending_ref(backend_node_id: int, frame_id: str = "", owner: str = "") -> str:
     """A placeholder ref, settled later by :meth:`RefMap.settle`."""
-    return f"#{backend_node_id}#{frame_id}"
+    return f"#{backend_node_id}#{frame_id}#{owner}"
 
 
 class RefMap:
@@ -56,22 +58,26 @@ class RefMap:
         self._generation = 0
         self._next = 1  # number of the next ref handed out
         self._first = 1  # first ref number of the current generation
-        self._ref_of: dict[int, int] = {}  # backendDOMNodeId -> ref number
-        self._node_of: dict[int, int] = {}  # ref number -> backendDOMNodeId
+        # an owner names the renderer session of a node ("" for the tab's own)
+        self._ref_of: dict[tuple[str, int], int] = {}  # (owner, backendDOMNodeId) -> number
+        self._node_of: dict[int, tuple[str, int]] = {}  # ref number -> (owner, backend id)
         self._frame_of: dict[int, str] = {}  # ref number -> frame id ("" unknown)
+        self._sessions: dict[str, Any] = {}  # owner -> its Session
 
     @property
     def generation(self) -> int:
         """Bumped by every :meth:`reset` (main-frame navigation)."""
         return self._generation
 
-    def ref_for(self, backend_node_id: int, frame_id: str = "") -> str:
-        """The ref of *backend_node_id* (in frame *frame_id*), new on first sight."""
-        number = self._ref_of.get(backend_node_id)
+    def ref_for(self, backend_node_id: int, frame_id: str = "", owner: str = "") -> str:
+        """The ref of *backend_node_id* (in frame *frame_id*, of the renderer session
+        *owner*, ``""`` for the tab's own), new on first sight."""
+        key = (owner, backend_node_id)
+        number = self._ref_of.get(key)
         if number is None:
             number, self._next = self._next, self._next + 1
-            self._ref_of[backend_node_id] = number
-            self._node_of[number] = backend_node_id
+            self._ref_of[key] = number
+            self._node_of[number] = key
         if frame_id:
             self._frame_of[number] = frame_id
         return f"e{number}"
@@ -80,6 +86,16 @@ class RefMap:
         """The frame id of the node behind *ref*, ``""`` if not known."""
         parsed = parse_ref(ref)
         return self._frame_of.get(int(parsed[1:]), "") if parsed else ""
+
+    def bind(self, owner: str, session: Session | Any) -> None:
+        """Remember *session* as the renderer session named *owner* in refs."""
+        self._sessions[owner] = session
+
+    def session_of(self, ref: str) -> Session | Any | None:
+        """The session of the document of *ref*; ``None`` for the tab's own (or unknown)."""
+        parsed = parse_ref(ref)
+        key = self._node_of.get(int(parsed[1:])) if parsed else None
+        return self._sessions.get(key[0]) if key and key[0] else None
 
     def lookup(self, ref: str) -> int:
         """The backend node id of *ref* (``"e3"`` or ``"@e3"``).
@@ -93,7 +109,7 @@ class RefMap:
         number = int(parsed[1:])
         node = self._node_of.get(number)
         if node is not None:
-            return node
+            return node[1]
         if number < self._first:
             raise StaleElementError(
                 f"Ref {parsed} belongs to a previous document: take a new snapshot"
@@ -105,8 +121,8 @@ class RefMap:
         real ones, in document order (the map itself is only touched on the loop)."""
         for node in nodes:
             if node.ref and node.ref.startswith("#"):
-                backend_node_id, frame_id = node.ref[1:].split("#", 1)
-                node.ref = self.ref_for(int(backend_node_id), frame_id)
+                backend_node_id, frame_id, owner = node.ref[1:].split("#", 2)
+                node.ref = self.ref_for(int(backend_node_id), frame_id, owner)
             self.settle(node.children)
 
     def reset(self) -> None:
@@ -116,6 +132,7 @@ class RefMap:
         self._ref_of.clear()
         self._node_of.clear()
         self._frame_of.clear()
+        self._sessions.clear()
 
     def on_frame_navigated(self, params: dict) -> None:
         """``Page.frameNavigated`` handler: reset on a main-frame navigation."""
@@ -123,17 +140,34 @@ class RefMap:
             self.reset()
 
 
+async def frame_world(tab: Tab | Any, session: Session | Any, frame_id: str) -> int | None:
+    """The tab's isolated world in *frame_id*, made through *session*: an OOPIF's world
+    can only be made by its own session. ``None`` when there is none (page world)."""
+    from tellurium.stealth._isolated import _HSIM_WORLD_NAME, get_hsim_world
+
+    if session is getattr(tab, "_session", session) or not frame_id:
+        return await get_hsim_world(tab, frame_id=frame_id)
+    if (cached := tab._hsim_worlds.get(frame_id)) is not None:
+        return cached
+    params = {"frameId": frame_id, "worldName": _HSIM_WORLD_NAME, "grantUniversalAccess": False}
+    try:
+        made = await session.send("Page.createIsolatedWorld", params, timeout=HANDLE_TIMEOUT)
+    except (CDPError, ConnectionError, TimeoutError):  # frame gone: the page world
+        return None
+    if (context := made.get("executionContextId")) is not None:
+        tab._hsim_worlds[frame_id] = context
+    return context
+
+
 async def _connected(
     session: Session, tab: Tab | Any, backend_node_id: int, frame_id: str, object_id: str
 ) -> bool:
     """``isConnected`` read in the tab's isolated world, where page JS cannot redefine
     it; in the page's own world only when no isolated world is available."""
-    from tellurium.stealth._isolated import get_hsim_world
-
     handles, isolated = handles_of(tab), None
     if hasattr(tab, "_hsim_worlds"):
         frame_id = frame_id or getattr(tab, "_frame_id", "")
-        context = await get_hsim_world(tab, frame_id=frame_id)
+        context = await frame_world(tab, session, frame_id)
         params: dict[str, Any] = {"backendNodeId": backend_node_id, "executionContextId": context}
         if handles is not None:
             params["objectGroup"] = handles.name
@@ -155,9 +189,10 @@ async def _connected(
 async def resolve_ref(session: Session, tab: Tab | Any, refs: RefMap, ref: str) -> Element:
     """Resolve *ref* into an :class:`Element` in *tab*'s handle group.
 
-    Raises :class:`StaleElementError` when the ref is from another document,
-    or when the document changed while it was being resolved; ``LookupError``
-    when the ref does not exist.
+    *session* is the tab's; a ref of a cross-site iframe resolves through that
+    iframe's session. Raises :class:`StaleElementError` when the ref is from
+    another document, when the document changed while it was being resolved, or
+    when its iframe went away; ``LookupError`` when the ref does not exist.
     """
     from tellurium.browser.element import Element
 
@@ -167,7 +202,17 @@ async def resolve_ref(session: Session, tab: Tab | Any, refs: RefMap, ref: str) 
     handles = handles_of(tab)
     if handles is not None:
         params["objectGroup"] = handles.name
-    result = await send_on_handle(session, "DOM.resolveNode", params)
+    own = refs.session_of(ref)
+    session = own if own is not None else session
+    try:
+        result = await send_on_handle(session, "DOM.resolveNode", params)
+    except ConnectionError as exc:
+        if own is None:
+            raise
+        # the iframe's renderer session was detached (navigated away or removed)
+        raise StaleElementError(
+            f"Ref {ref} is in a frame that went away: take a new snapshot"
+        ) from exc
     object_id = result["object"]["objectId"]
     try:
         # A node detached by a re-render or document.open() still resolves:
