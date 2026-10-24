@@ -205,3 +205,73 @@ async def test_unreadable_page_gives_up_at_the_deadline():
     before = await page_state.read(tab)
     after, navigated = await page_state.after_action(tab, before, settle=0, poll=0, wait=0.05)
     assert navigated is True and after.url == "about:blank"
+
+
+# --------------------------------------------------------------------------- #
+# The pool owns launches and closes in flight
+# --------------------------------------------------------------------------- #
+
+
+class _FakeSession:
+    persistent = False
+
+    def __init__(self, sid: str, close_delay: float = 0.0):
+        self.id, self.close_delay, self.closed = sid, close_delay, False
+
+    async def close(self):
+        await asyncio.sleep(self.close_delay)
+        self.closed = True
+
+
+async def test_session_close_cut_by_its_timeout_keeps_closing(tmp_path):
+    from tellurium.mcp.sessions import SessionPool
+
+    pool = SessionPool(ServerConfig(home=tmp_path))
+    slow = _FakeSession("x", close_delay=0.3)
+    pool._sessions["x"] = slow
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(pool.close("x"), 0.05)
+    assert pool.sessions() == [slow]  # still the pool's until it is closed
+    await pool.close_all()
+    assert slow.closed and pool.sessions() == []
+
+
+async def test_close_all_waits_for_a_launch_in_flight(tmp_path, monkeypatch):
+    from tellurium.mcp.sessions import SessionPool
+
+    pool = SessionPool(ServerConfig(home=tmp_path))
+    launched = _FakeSession("temp-1")
+
+    async def slow_launch():
+        await asyncio.sleep(0.2)
+        return launched
+
+    monkeypatch.setattr(pool, "_launch_temp", slow_launch)
+    opening = asyncio.ensure_future(pool.open(None))
+    await asyncio.sleep(0.05)
+    await pool.close_all()
+    assert launched.closed and pool.sessions() == []
+    assert (await opening)[0] is launched
+    with pytest.raises(Exception, match="shutting down"):
+        await pool.open(None)
+
+
+async def test_close_all_cancels_a_launch_that_hangs(tmp_path, monkeypatch):
+    from tellurium.mcp.sessions import SessionPool
+
+    pool = SessionPool(ServerConfig(home=tmp_path))
+    rolled_back = asyncio.Event()
+
+    async def hung_launch():
+        try:
+            await asyncio.sleep(60)
+        finally:
+            rolled_back.set()
+
+    monkeypatch.setattr(pool, "_launch_temp", hung_launch)
+    opening = asyncio.ensure_future(pool.open(None))
+    await asyncio.sleep(0.05)
+    await pool.close_all(launch_grace=0.05)
+    assert rolled_back.is_set()
+    with pytest.raises(asyncio.CancelledError):
+        await opening
