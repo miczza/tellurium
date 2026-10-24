@@ -130,3 +130,12 @@ async def test_css_selectors_still_work(browser, local_server):
     assert await (await tab.select("#email")).attr("id") == "email"
     with pytest.raises(TimeoutError):
         await tab.select("e3", timeout=0.3)  # without "@" it is a CSS type selector
+
+
+async def test_refs_with_stealth(stealth_browser, local_server):
+    tab = stealth_browser.main_tab
+    await tab.get(f"{local_server}/login.html")
+    text = await tab.snapshot(interactive=True)
+    user = re.findall(r"- textbox \[ref=(e\d+)\]", text)[0]
+    await (await tab.select(f"@{user}")).type("ada", human=True)
+    assert await tab.eval("document.getElementById('user').value") == "ada"
