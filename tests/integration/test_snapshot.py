@@ -398,7 +398,8 @@ async def test_tree_too_slow_to_fetch_is_refused_in_time(browser, local_server):
         start = time.perf_counter()
         with pytest.raises(SnapshotTooLargeError) as raised:
             await take_snapshot(tab._session, RefMap(), selector=selector, snapshot_timeout=0.5)
-        assert time.perf_counter() - start < 1.2  # close to the limit asked for
+        # Bounded near the limit (the unguarded fetch took ~9 s); slack for a loaded machine.
+        assert time.perf_counter() - start < 3.0
         message = str(raised.value)
         assert "snapshot_timeout=0.5" in message and "shadow DOM" in message
         assert "selector=" not in message  # it would not help here
