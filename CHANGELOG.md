@@ -17,8 +17,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `"@…"` selector.
 - `Tab.expect_download(timeout=30)`: `async with tab.expect_download() as
   info: ...` then `download = await info.value`. It takes the downloads of the
-  tab's main frame and of its same-process iframes (tracked from `Page` frame
-  events), never another tab's, and saves them in the folder of the tab's
+  tab's main frame and of its same-process iframes (tracked from
+  `Page.frameNavigated`/`frameDetached`; a removed iframe leaves the set), never another tab's, and saves them in the folder of the tab's
   browser context.
 - Exported from `tellurium`: `BrowserContext`, `Download`, `DownloadError`,
   `SnapshotNode`, `SnapshotTooLargeError`, `ElementNotHittableError`.

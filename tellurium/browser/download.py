@@ -334,15 +334,17 @@ class TabFrames:
     """The frame ids of one tab's page, kept from its ``Page`` frame events, so a
     download started by one of its same-process iframes reaches the tab's waiter.
 
-    Frame ids are unique across the browser: a kept id never names another
-    tab's frame. A main-frame navigation drops the old document's frames.
+    Every frame reports ``Page.frameNavigated``, even an iframe left on its
+    initial ``about:blank``. Frame ids are unique across the browser: a kept id
+    never names another tab's frame. A removed iframe leaves the set; a
+    main-frame navigation drops the old document's frames.
     """
 
     def __init__(self, session: Any, main_frame_id: str) -> None:
         self._main = main_frame_id
         self._ids = {main_frame_id}
-        session.on("Page.frameAttached", lambda p: self._ids.add(p.get("frameId", "")))
         session.on("Page.frameNavigated", self._on_navigated)
+        session.on("Page.frameDetached", self._on_detached)
 
     def __contains__(self, frame_id: object) -> bool:
         return bool(frame_id) and frame_id in self._ids
@@ -354,6 +356,11 @@ class TabFrames:
             self._ids = {self._main}
         elif frame.get("id"):
             self._ids.add(frame["id"])
+
+    def _on_detached(self, params: dict) -> None:
+        # "swap": the frame moves to another process under the same id, still ours
+        if params.get("reason") != "swap" and params.get("frameId") != self._main:
+            self._ids.discard(params.get("frameId", ""))
 
 
 def expect_tab_download(tab: Any, timeout: float = DEFAULT_TIMEOUT) -> DownloadWaiter:
