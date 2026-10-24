@@ -7,6 +7,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Generated CDP bindings for the `Accessibility` domain
+  (`tellurium.cdp.domains.accessibility`).
 - `tellurium download-browser --browser patched --allow-unverified` installs a
   release without a matching `SHA256SUMS` (mirrors, local builds); the same
   flag on `update-browser` and `verify-browser --reinstall`, and

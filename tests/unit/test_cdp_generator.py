@@ -117,3 +117,14 @@ def test_generated_types_are_functional():
     nr = result_type.from_json({"frameId": "F1"})
     assert nr.frame_id == "F1"
     assert nr.error_text is None
+
+
+def test_accessibility_domain_is_bundled_and_generated():
+    """A1: the snapshot reads the AX tree, so Accessibility ships generated."""
+    import importlib
+
+    assert "Accessibility" in CDPGenerator.BUNDLED_DOMAINS
+    module = importlib.import_module("tellurium.cdp.domains.accessibility")
+    assert callable(module.get_full_ax_tree)
+    assert callable(module.get_partial_ax_tree)
+    assert hasattr(module, "AXNode")

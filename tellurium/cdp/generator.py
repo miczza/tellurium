@@ -86,6 +86,7 @@ class CDPGenerator:
         "Storage",
         "Emulation",
         "Log",
+        "Accessibility",
     ]
 
     # CDP primitive type -> Python type annotation
