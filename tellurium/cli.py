@@ -86,6 +86,15 @@ def main():
     for p in (dl_parser, upd_parser, verify_parser):
         p.add_argument("--allow-unverified", action="store_true", help="Skip SHA256SUMS")
 
+    # mcp
+    mcp_parser = sub.add_parser(
+        "mcp", help="Run tellurium as an MCP server on stdio (needs tellurium[mcp])"
+    )
+    mcp_parser.add_argument("--headed", action="store_true", help="Show the browser windows")
+    mcp_parser.add_argument(
+        "--allow-eval", action="store_true", help="List the eval tool (always on with stdio)"
+    )
+
     args = parser.parse_args()
 
     if args.command == "update-cdp":
@@ -106,8 +115,26 @@ def main():
         _prune_browsers(args.keep)
     elif args.command == "verify-browser":
         _verify_browser(args.reinstall, args.allow_unverified)
+    elif args.command == "mcp":
+        _mcp(headed=args.headed)
     else:
         parser.print_help()
+
+
+def _mcp(*, headed: bool) -> None:
+    """Serve MCP on stdio until the client leaves (``eval`` is on: a local client)."""
+    try:
+        from tellurium.mcp import server
+        from tellurium.mcp.config import ServerConfig, default_home
+    except ModuleNotFoundError as exc:
+        if (exc.name or "").partition(".")[0] != "mcp":
+            raise
+        print(
+            "tellurium mcp needs the MCP SDK: pip install 'tellurium[mcp]'",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    server.run(ServerConfig(home=default_home(), headed=headed, allow_eval=True), "stdio")
 
 
 def _protocol_path():

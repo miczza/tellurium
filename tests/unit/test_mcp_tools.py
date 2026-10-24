@@ -135,3 +135,16 @@ def test_base_package_imports_without_mcp():
     )
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == "ok True"
+
+
+def test_cli_mcp_without_extra_prints_the_install_command():
+    done = _run_without_mcp(
+        """
+        sys.argv = ["tellurium", "mcp"]
+        from tellurium.cli import main
+        main()
+        """
+    )
+    assert done.returncode == 2
+    assert "pip install 'tellurium[mcp]'" in done.stderr
+    assert done.stdout == ""
