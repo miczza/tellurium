@@ -199,7 +199,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`DOM.getNodeForLocation` takes document coordinates, not viewport ones), so
   a target below the fold raised `ElementNotHittableError` or was checked
   against another spot; the frame's scroll is now added.
-
 - `Element.click(human=True)`, `hover()`, `drag_to()` and
   `scroll_into_view(human=True)` take the element's box from Chrome's layout
   (`DOM.getContentQuads`, new `tellurium.browser.geometry`): page coordinates

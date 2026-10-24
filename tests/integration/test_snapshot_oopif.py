@@ -82,6 +82,26 @@ async def test_snapshot_stitches_the_oopif_content(any_browser, local_server):
     assert '- button "Sign in" [ref=' in interactive and "iframe" not in interactive
 
 
+async def test_stealth_reuses_the_auto_attached_session(stealth_browser, local_server):
+    """Attaching a second session would let the engine patch the frame twice."""
+    tab = stealth_browser.main_tab
+    await _open(tab, local_server)
+    await _snapshot_with(tab, "Sign in")
+    await _open(tab, local_server)  # a new widget, a new frame
+    await _snapshot_with(tab, "Sign in")
+    router, port = tab._session._router, local_server.rsplit(":", 1)[1]
+    targets = (await router.root.send("Target.getTargets", {}))["targetInfos"]
+    (widget,) = [t for t in targets if t["url"].startswith(f"http://localhost:{port}")]
+    on_widget = 0
+    for session in [s for s in router._sessions.values() if s is not router.root]:
+        try:
+            info = await session.send("Target.getTargetInfo", {}, timeout=5)
+        except Exception:  # noqa: BLE001 — a worker or a closing target
+            continue
+        on_widget += info["targetInfo"]["targetId"] == widget["targetId"]
+    assert on_widget == 1
+
+
 async def test_oopif_refs_are_stable_and_distinct_from_the_host(browser, local_server):
     tab = browser.main_tab
     await _open(tab, local_server)
