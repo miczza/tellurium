@@ -7,6 +7,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `tellurium.browser.refs`: per-tab `RefMap` (`ref ↔ backendDOMNodeId`, stable
+  within a document, stale after a main-frame navigation, numbers never reused)
+  and `resolve_ref()` into a normal `Element`.
 - Generated CDP bindings for the `Accessibility` domain
   (`tellurium.cdp.domains.accessibility`).
 - `tellurium download-browser --browser patched --allow-unverified` installs a

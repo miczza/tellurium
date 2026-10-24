@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Long list</title></head>
+<body>
+  <h1>Items</h1>
+  <ul id="items"></ul>
+  <script>
+    // 1000 items x 5 nodes (li, span, text, button, text) = 5000 DOM nodes.
+    const ul = document.getElementById('items');
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < 1000; i++) {
+      const li = document.createElement('li');
+      const span = document.createElement('span');
+      span.textContent = 'Item ' + i;
+      const button = document.createElement('button');
+      button.textContent = 'Open ' + i;
+      li.append(span, button);
+      frag.append(li);
+    }
+    ul.append(frag);
+  </script>
+</body>
+</html>

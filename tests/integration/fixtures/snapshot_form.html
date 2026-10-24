@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Sign in</title></head>
+<body>
+  <nav><a href="/home">Home</a> <a href="/help">Help</a></nav>
+  <main>
+    <h1>Sign in</h1>
+    <div><div><span>Welcome back,</span> <span>please sign in.</span></div></div>
+    <form id="login" onsubmit="return false;">
+      <label for="email">Email</label>
+      <input id="email" type="email" value="ada@example.com">
+      <label for="password">Password</label>
+      <input id="password" type="password">
+      <label><input id="remember" type="checkbox" checked> Remember me</label>
+      <label for="lang">Language</label>
+      <select id="lang"><option>English</option><option selected>Italiano</option></select>
+      <button id="submit" type="submit">Sign in</button>
+      <button id="sso" type="button" disabled>Single sign-on</button>
+      <button id="more" type="button" aria-expanded="false">More options</button>
+    </form>
+    <h2>Need help?</h2>
+    <p>Write to <a href="mailto:help@example.com">support</a> any time.</p>
+  </main>
+</body>
+</html>
