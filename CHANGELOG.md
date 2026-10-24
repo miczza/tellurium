@@ -7,6 +7,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `tellurium mcp`: tellurium as an MCP server over stdio (extra `tellurium[mcp]`,
+  official `mcp` SDK). Tool arguments are a whitelist checked against each tool's
+  schema (an unknown argument is an error); domain errors come back as `isError`
+  results that tell the agent what to do next (stale ref: take a new snapshot;
+  covered element: what is on top; page too large: use `selector=` or
+  `interactive=true`).
 - `Tab.snapshot()` / `Tab.snapshot_nodes()`: the accessibility snapshot of the
   tab (`interactive=`, `selector=`, `depth=`, `max_chars=`, plus `max_nodes=`
   and `snapshot_timeout=`). `Tab.ref("e3")` and `Tab.select("@e3")` turn a
