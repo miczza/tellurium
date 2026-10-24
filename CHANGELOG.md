@@ -13,7 +13,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   snapshot ref into a normal `Element` (human input included): the same node
   keeps its ref across snapshots of one document, a main-frame navigation
   makes every earlier ref raise `StaleElementError`, an unknown ref raises
-  `LookupError` at once (a ref is never polled for).
+  `LookupError` at once (a ref is never polled for), as does a malformed
+  `"@…"` selector.
 - `Tab.expect_download(timeout=30)`: `async with tab.expect_download() as
   info: ...` then `download = await info.value`. It takes the downloads of the
   tab's main frame and of its same-process iframes (tracked from `Page` frame

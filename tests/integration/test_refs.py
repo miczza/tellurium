@@ -122,6 +122,14 @@ async def test_unknown_ref_is_a_lookup_error_without_waiting(browser, local_serv
         await tab.select("@e99999", timeout=30)  # a ref is never polled for
 
 
+@pytest.mark.parametrize("selector", ["@e0", "@x1", "@", "@e", "@ e3x"])
+async def test_a_malformed_ref_is_a_clear_lookup_error(browser, local_server, selector):
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/snapshot_form.html")
+    with pytest.raises(LookupError, match="not an element ref"):
+        await tab.select(selector)
+
+
 async def test_ref_of_a_rerendered_node_is_stale(browser, local_server):
     tab = browser.main_tab
     await tab.get(f"{local_server}/snapshot_rerender.html")

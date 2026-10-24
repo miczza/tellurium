@@ -28,7 +28,7 @@ from tellurium.browser.navigation import (
     url_matches,
     wait_for_main_frame,
 )
-from tellurium.browser.refs import RefMap, parse_ref, resolve_ref
+from tellurium.browser.refs import RefMap, resolve_ref
 from tellurium.browser.snapshot import FETCH_TIMEOUT, MAX_DOM_NODES, SnapshotNode, render
 from tellurium.browser.snapshot import take_snapshot_nodes as _snapshot_nodes
 from tellurium.cdp.types import CDPError
@@ -337,7 +337,7 @@ class Tab:
 
     async def select(self, selector: str, *, timeout: float = 10) -> Element:
         """Wait for a CSS-matching element and return it; ``"@e3"`` is :meth:`ref`."""
-        if selector.startswith("@") and parse_ref(selector):
+        if selector.startswith("@"):  # never CSS: a ref, or a LookupError naming the form
             return await self.ref(selector)
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
