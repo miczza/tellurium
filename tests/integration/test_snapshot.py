@@ -414,7 +414,9 @@ async def test_human_click_goes_through_what_a_person_clicks_through(browser, lo
     refs = _watched(tab)
     await tab.get(f"{local_server}/snapshot_hit.html")
     text = await take_snapshot(tab._session, refs)
-    under_glass = await resolve_ref(tab._session, tab, refs, _ref_of(text, '- button "Under glass"'))
+    under_glass = await resolve_ref(
+        tab._session, tab, refs, _ref_of(text, '- button "Under glass"')
+    )
     await under_glass.click(human=True)
     assert await (await tab.select("#status")).text() == "c4"
     switch = await resolve_ref(tab._session, tab, refs, _ref_of(text, '- checkbox "Dark mode"'))
