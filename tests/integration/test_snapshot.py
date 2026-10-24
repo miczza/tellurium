@@ -408,8 +408,10 @@ async def test_tree_too_slow_to_fetch_is_refused_in_time(browser, local_server):
         message = str(raised.value)
         assert "snapshot_timeout=0.5" in message and "shadow DOM" in message
         assert "selector=" not in message  # it would not help here
-    # the tab is still usable afterwards
-    text = await take_snapshot(tab._session, RefMap(), selector="h1")
+    # The tab is still usable afterwards. Not timed: on this page a selector still
+    # fetches the whole 120k-node AX tree (shadow DOM, see backlog), ~4-5 s on master.
+    assert await tab.eval("document.title") is not None
+    text = await take_snapshot(tab._session, RefMap(), selector="h1", snapshot_timeout=60)
     assert text.startswith('- heading "Web component"')
 
 
