@@ -248,3 +248,26 @@ async def test_placeholder_stays_when_the_oopif_cannot_be_reached(
     port = local_server.rsplit(":", 1)[1]
     text = await tab.snapshot()
     assert f'- iframe "http://localhost:{port}/oopif_login.html" [oopif]' in text
+
+
+async def test_oopif_session_attached_by_hand_is_reused_and_detached(browser, local_server):
+    """The router knows the target of every session: the snapshot reuses one already
+    attached, and a session attached through the page detaches cleanly."""
+    tab = browser.main_tab
+    await _open(tab, local_server)
+    await _snapshot_with(tab, "Sign in")
+    router, port = tab._session.router, local_server.rsplit(":", 1)[1]
+    targets = (await router.root.send("Target.getTargets", {}))["targetInfos"]
+    (widget,) = [t for t in targets if t["url"].startswith(f"http://localhost:{port}")]
+    used = router.session_for_target(widget["targetId"])
+    assert used is not None and not used.closed
+    await tab.snapshot()
+    assert router.session_for_target(widget["targetId"]) is used  # no second attach
+    extra = await router.attach(widget["targetId"], via=tab._session, timeout=5)
+    assert extra is not used and router.session_for_target(widget["targetId"]) is used
+    await router.detach(extra, via=tab._session)
+    for _ in range(50):
+        if extra.closed:
+            break
+        await asyncio.sleep(0.05)
+    assert extra.closed and not used.closed

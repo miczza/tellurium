@@ -56,21 +56,10 @@ _HOLDS = """function(node) {
 _LINKS: weakref.WeakKeyDictionary[Any, tuple[Any, str]] = weakref.WeakKeyDictionary()
 
 
-def alive(session: Any) -> bool:
-    """Whether *session* still reaches its target (not detached, browser not closed)."""
-    return getattr(session, "_closed_error", None) is None
-
-
 def link_frame(child: Any, parent: Any, frame_id: str) -> None:
     """Record that *child* is the session of the cross-site frame *frame_id*, whose
     ``<iframe>`` lives in *parent*'s document: its boxes are offset by that iframe's."""
     _LINKS[child] = (parent, frame_id)
-
-
-def linked_session(frame_id: str) -> Any | None:
-    """The live session recorded for the cross-site frame *frame_id*, if any."""
-    found = (child for child, (_, frame) in list(_LINKS.items()) if frame == frame_id)
-    return next((child for child in found if alive(child)), None)
 
 
 def _chain(session: Any) -> list[tuple[Any, Any, str]]:

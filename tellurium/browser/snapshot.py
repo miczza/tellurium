@@ -13,7 +13,6 @@ Accessibility, DOM and Target domains.
 from __future__ import annotations
 
 import asyncio
-import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -38,8 +37,8 @@ MAX_DOM_NODES = 50_000
 FETCH_TIMEOUT = 5.0
 # Iframes nested deeper than this are shown without their content.
 _MAX_FRAME_NESTING = 8
-# Target id of each session asked once (``""``: not a target with an id).
-_TARGET_OF: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
+# Wait for a cross-site iframe that auto-attach is attaching, before attaching it.
+_AUTO_ATTACH_WAIT = 1.0
 _DISABLE_TIMEOUT = 0.2  # sent either way: only the wait for the answer is cut
 # AX nesting walked at most, across stitched iframes too: two Python frames per
 # level keep the recursion far from the interpreter's limit (1000).
@@ -114,33 +113,20 @@ def _document_url(nodes: list[dict[str, Any]]) -> str:
     return str(_props(next((n for n in nodes if _role(n) == "RootWebArea"), {})).get("url") or "")
 
 
-async def _attached(session: Session, frame_id: str, timeout: float) -> Session | None:
-    """A session the browser already holds on target *frame_id* (stealth auto-attach)."""
-    router = session._router
-    unknown = [s for s in router._sessions.values() if s is not router.root and s not in _TARGET_OF]
-
-    async def ask(other: Session) -> None:
-        try:
-            info = await _send(other, "Target.getTargetInfo", {}, timeout)
-            _TARGET_OF[other] = info["targetInfo"]["targetId"]
-        except (CDPError, ConnectionError, TimeoutError, KeyError):
-            _TARGET_OF[other] = ""
-
-    await asyncio.gather(*map(ask, unknown))
-    alive = (s for s, target in _TARGET_OF.items() if target == frame_id and geometry.alive(s))
-    return next(alive, None)
-
-
 async def _oopif_session(session: Session, frame_id: str, timeout: float) -> Session:
-    """The session of the cross-site iframe *frame_id* under *session*: one already
-    attached, else a new one attached through *session*; Chrome detaches it when the
-    frame or the tab goes. Raises ``CDPError``, ``ConnectionError`` or ``TimeoutError``."""
-    child = geometry.linked_session(frame_id) or await _attached(session, frame_id, timeout)
+    """The session of the cross-site iframe *frame_id* under *session*: the one already
+    attached (stealth auto-attach, an earlier snapshot), else a new one attached
+    through *session*, which Chrome detaches with the frame or the tab. Raises
+    ``CDPError``, ``ConnectionError`` or ``TimeoutError``."""
+    router = session.router
+    child = router.session_for_target(frame_id)
+    if child is None and session.auto_attaches:  # Chrome is attaching it for the engine
+        child = await router.wait_for_target(frame_id, min(timeout, _AUTO_ATTACH_WAIT))
     if child is None:
-        params = {"targetId": frame_id, "flatten": True}
-        attached = await _send(session, "Target.attachToTarget", params, timeout)
-        child = session._router.register(attached["sessionId"])
-        _TARGET_OF[child] = frame_id
+        mine = await router.attach(frame_id, via=session, timeout=timeout)
+        child = router.session_for_target(frame_id) or mine
+        if child is not mine:  # attached meanwhile by someone else: one session per frame
+            await router.detach(mine, via=session)
     geometry.link_frame(child, session, frame_id)
     return child
 
@@ -162,7 +148,7 @@ async def _frame_of(
     if "contentDocument" not in node:  # the document lives in another renderer
         try:
             child = await _oopif_session(session, frame_id, timeout)
-            return await fetch_tree(child, **sub, _owner=child._session_id or "")
+            return await fetch_tree(child, **sub, _owner=child.session_id or "")
         except (CDPError, ConnectionError, TimeoutError, KeyError):
             attributes = node.get("attributes", [])
             src = dict(zip(attributes[::2], attributes[1::2], strict=False)).get("src", "")

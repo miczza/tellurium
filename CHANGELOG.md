@@ -18,6 +18,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   clicks, `hover`, `drag_to`) checks every document on the way: the press
   reaches the target or raises `ElementNotHittableError`, never another element.
   A CSS zoom on a cross-site iframe scales the boxes and the check with it.
+- CDP transport: `Session.session_id`, `Session.router`, `Session.closed` and
+  `Session.auto_attaches` (whether `Target.setAutoAttach` is on);
+  `SessionRouter.session_for_target(target_id)` and `wait_for_target()` (the
+  router records the target of every attached session); `SessionRouter.attach()`
+  takes `via=` (attach through a page session) and `timeout=` (a session Chrome
+  opens after the deadline or a cancellation is detached), `detach()` takes
+  `via=` and closes the session at once.
 - `Tab.snapshot()` / `Tab.snapshot_nodes()`: the accessibility snapshot of the
   tab (`interactive=`, `selector=`, `depth=`, `max_chars=`, plus `max_nodes=`
   and `snapshot_timeout=`). `Tab.ref("e3")` and `Tab.select("@e3")` turn a
