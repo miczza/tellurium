@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import sys
 from collections.abc import Awaitable, Callable, Iterable
@@ -96,30 +97,47 @@ async def _stdio(server: Server[Any]) -> None:
 TRANSPORTS: dict[str, Transport] = {"stdio": _stdio}
 
 
-async def serve(config: ServerConfig, transport: str = "stdio") -> None:
-    """Serve until the client goes away; then close every session, saving the
-    named ones (also when cancelled)."""
+async def serve(
+    config: ServerConfig, transport: str = "stdio", stop: asyncio.Event | None = None
+) -> bool:
+    """Serve until the client goes away or *stop* is set; then close every
+    session, saving the named ones (also when cancelled). True if *stop* ended it."""
     run_transport = TRANSPORTS[transport]
+    stop = stop or asyncio.Event()
     async with SessionPool(config) as pool:
-        await run_transport(build_server(pool, build_tools(config)))
+        serving = asyncio.ensure_future(run_transport(build_server(pool, build_tools(config))))
+        stopping = asyncio.ensure_future(stop.wait())
+        try:
+            await asyncio.wait({serving, stopping}, return_when=asyncio.FIRST_COMPLETED)
+        except BaseException:
+            serving.cancel()
+            raise
+        finally:
+            stopping.cancel()
+        if serving.done():
+            serving.result()
+            return False
+    return True  # *serving* stays parked on its stdin read: see run()
 
 
 def run(config: ServerConfig, transport: str = "stdio") -> None:
-    """Blocking entry point of ``tellurium mcp``. SIGTERM and SIGINT stop it the
-    same way the client closing stdin does: sessions are closed and saved."""
+    """Blocking entry point of ``tellurium mcp``. SIGTERM and SIGINT close and save
+    every session like the client closing stdin does, then end the process."""
     logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 
     async def main() -> None:
-        task = asyncio.current_task()
+        stop = asyncio.Event()
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             try:
-                loop.add_signal_handler(sig, task.cancel)
+                loop.add_signal_handler(sig, stop.set)
             except (NotImplementedError, RuntimeError):  # Windows
                 pass
-        try:
-            await serve(config, transport)
-        except asyncio.CancelledError:
-            pass
+        if await serve(config, transport, stop):
+            # The stdio transport reads stdin in a worker thread that no
+            # cancellation reaches, so the loop could never finish; every
+            # resource the server owns (browsers, profiles, pipes) is closed.
+            sys.stderr.flush()
+            os._exit(0)
 
     asyncio.run(main())
