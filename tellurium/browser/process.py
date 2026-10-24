@@ -1,7 +1,7 @@
 """The Chrome process and everything a launch creates around it.
 
-:class:`BrowserProcess` owns the proxy forwarder, the temporary profile, the
-Chrome process, its output sink and the CDP pipe transport, and releases them
+:class:`BrowserProcess` owns the proxy forwarder, the temporary profile and
+downloads folder, the Chrome process, its output sink and the CDP pipe transport, and releases them
 in a safe order whether the launch succeeded, failed or was cancelled.
 """
 
@@ -165,6 +165,7 @@ class BrowserProcess:
         self.forwarder: Any = None
         self.temp_profile: str | None = None
         self.chrome_tmp: str | None = None  # Chrome's TMPDIR
+        self.downloads_tmp: str | None = None  # default downloads folder
         self._output: OutputTail | None = None
         self._log_path: Path | None = None
         self._log_file: Any = None
@@ -176,6 +177,10 @@ class BrowserProcess:
     def make_temp_profile(self) -> str:
         self.temp_profile = tempfile.mkdtemp(prefix="tellurium_")
         return self.temp_profile
+
+    def make_downloads_dir(self) -> str:
+        self.downloads_tmp = tempfile.mkdtemp(prefix="tellurium_dl_")
+        return self.downloads_tmp
 
     async def spawn(
         self, chrome_path: str, flags: list[str], chrome_log: Path | None
@@ -246,7 +251,7 @@ class BrowserProcess:
         return ""
 
     async def close(self) -> None:
-        """Stop Chrome, then release its pipe, output, forwarder and profile.
+        """Stop Chrome, then release its pipe, output, forwarder and temp folders.
 
         Chrome is stopped *before* its pipe is closed: on Windows, closing a
         pipe handle with a read pending on it can block until Chrome exits.
@@ -274,7 +279,7 @@ class BrowserProcess:
         if self.forwarder is not None:
             forwarder, self.forwarder = self.forwarder, None
             cancelled |= await _settle("stop the proxy forwarder", forwarder.stop())
-        for attr in ("temp_profile", "chrome_tmp"):
+        for attr in ("temp_profile", "chrome_tmp", "downloads_tmp"):
             path = getattr(self, attr)
             if path is not None:
                 setattr(self, attr, None)

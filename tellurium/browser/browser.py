@@ -7,11 +7,13 @@ import dataclasses
 import logging
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from tellurium.browser.context import BrowserContext
 from tellurium.browser.cookie import Cookie, clear_jar, read_jar
 from tellurium.browser.dialog import check_policy
+from tellurium.browser.download import Downloads
 from tellurium.browser.engine import PatchedEngine, StockEngine
 from tellurium.browser.launcher import (
     _detect_chrome_version,
@@ -58,6 +60,7 @@ class Browser:
         self._stealth_idle = False
         self._mouse_profile = "normal"
         self._dialogs = "dismiss"  # policy for every tab, see Browser.launch
+        self._downloads = Downloads()  # folders, downloads in progress, waiters
         # Manual override applied to every session when stealth is off
         # (with stealth on the StealthEngine already owns the timezone).
         self._timezone_override: str | None = None
@@ -90,6 +93,7 @@ class Browser:
         mouse_profile: str = "normal",
         chrome_log: str | Path | None = None,
         dialogs: str = "dismiss",
+        downloads_dir: str | Path | None = None,
     ) -> Browser:
         """Launch a Chrome process and return a connected :class:`Browser`.
 
@@ -156,9 +160,13 @@ class Browser:
             What every tab does with a JavaScript dialog nobody handles with
             ``Tab.on_dialog``: ``"dismiss"`` (default; ``beforeunload`` is
             accepted), ``"accept"`` or ``"manual"`` (left open).
+        downloads_dir:
+            Folder that keeps the downloads (named by GUID; ``Download.save_as``
+            names them). By default a temporary folder removed by :meth:`close`.
 
         Launch is all-or-nothing: on failure or cancellation the process,
-        pipe, temporary profile and proxy forwarder are released. When
+        pipe, temporary profile, downloads folder and proxy forwarder are
+        released. When
         Chrome exits during launch, :class:`LaunchError` carries its exit
         code and last output (e.g. a profile already in use).
         """
@@ -189,10 +197,9 @@ class Browser:
         # IP literal (or its own 'disable', which drops every candidate), so
         # 'auto' must reach it already resolved and our 'disable' — no
         # spoofing — must leave the flag out entirely.
-        if webrtc_ip is not None:
-            resolved_webrtc_ip = resolve_webrtc_ip(webrtc_ip, proxy=proxy)
-        else:
-            resolved_webrtc_ip = None
+        resolved_webrtc_ip = (
+            resolve_webrtc_ip(webrtc_ip, proxy=proxy) if webrtc_ip is not None else None
+        )
 
         # 1. Select engine
         if browser == "patched":
@@ -252,8 +259,9 @@ class Browser:
                 await self._proc.start_forwarder(forwarder)
                 proxy_flag = f"http://127.0.0.1:{forwarder.port}"
 
-            # 4. User-data dir
+            # 4. User-data dir and downloads folder
             self._user_data_dir = user_data_dir or self._proc.make_temp_profile()
+            downloads = downloads_dir or self._proc.make_downloads_dir()
 
             # 5. Build stealth profile & engine (if stealth=True)
             stealth_engine = None
@@ -319,15 +327,8 @@ class Browser:
             if stealth and stealth_profile is not None:
                 engine_args = engine.build_args(stealth_profile)
             else:
-                profile_obj = None
-                if seed is not None:
-
-                    class _P:
-                        pass
-
-                    profile_obj = _P()
-                    profile_obj.seed = seed  # type: ignore[attr-defined]
-                engine_args = engine.build_args(profile_obj)
+                seeded = SimpleNamespace(seed=seed) if seed is not None else None
+                engine_args = engine.build_args(seeded)
 
             # 7. Stealth flags (extension + WebRTC)
             stealth_flags: list[str] = []
@@ -391,6 +392,7 @@ class Browser:
             self._router = SessionRouter(transport)
             self._dispatch_task = asyncio.create_task(self._router.run())
             self._proc.reader = self._dispatch_task
+            await self._downloads.start(self._router.root, downloads, downloads_dir is None)
 
             # 11. Wire stealth engine to router
             if stealth_engine is not None:
@@ -431,11 +433,8 @@ class Browser:
             # 12. Discover initial page target
             await self._router.root.send("Target.setDiscoverTargets", {"discover": True})
             targets_result = await self._router.root.send("Target.getTargets", {})
-            page_target = None
-            for t in targets_result.get("targetInfos", []):
-                if t.get("type") == "page":
-                    page_target = t
-                    break
+            infos = targets_result.get("targetInfos", [])
+            page_target = next((t for t in infos if t.get("type") == "page"), None)
 
             if page_target:
                 session = await self._router.attach(page_target["targetId"])
@@ -528,10 +527,7 @@ class Browser:
             return
         try:
             await session.send(
-                "Emulation.setTimezoneOverride",
-                {
-                    "timezoneId": self._timezone_override,
-                },
+                "Emulation.setTimezoneOverride", {"timezoneId": self._timezone_override}
             )
         except Exception as exc:  # noqa: BLE001 — a bad IANA id must not kill launch
             logger.warning(
@@ -764,15 +760,12 @@ class Browser:
     # Contexts
     # ------------------------------------------------------------------
 
-    async def new_context(self, proxy: str | None = None) -> BrowserContext:
-        """Create an isolated browser context (like incognito)."""
-        params: dict[str, Any] = {}
-        if proxy:
-            params["proxyServer"] = proxy
-        result = await self._router.root.send("Target.createBrowserContext", params)
-        context = BrowserContext(self, result["browserContextId"])
-        self._contexts[context.context_id] = context
-        return context
+    async def new_context(
+        self, proxy: str | None = None, downloads_dir: str | Path | None = None
+    ) -> BrowserContext:
+        """Create an isolated browser context (like incognito); see
+        :meth:`BrowserContext.create` for its downloads folder."""
+        return await BrowserContext.create(self, proxy, downloads_dir)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -784,6 +777,7 @@ class Browser:
         Every resource is released even if this call is cancelled meanwhile;
         the cancellation is re-raised afterwards.
         """
+        self._downloads.close()
         await self._proc.close()
 
     async def __aenter__(self) -> Browser:

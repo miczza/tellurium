@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from tellurium.browser.cookie import Cookie, clear_jar, read_jar
 
@@ -14,18 +15,47 @@ if TYPE_CHECKING:
 class BrowserContext:
     """An isolated browser context created via ``Target.createBrowserContext``.
 
-    Each context has its own cookie jar, local storage, and cache — similar
-    to an incognito window but programmatically controlled.
+    Each context has its own cookie jar, local storage, cache and downloads
+    folder — similar to an incognito window but programmatically controlled.
     """
 
-    def __init__(self, browser: Browser, context_id: str):
+    def __init__(self, browser: Browser, context_id: str, downloads_dir: Path | None = None):
         self._browser = browser
         self._context_id = context_id
+        self._downloads_dir = downloads_dir
         self._tabs: list[Tab] = []
+
+    @classmethod
+    async def create(
+        cls, browser: Browser, proxy: str | None = None, downloads_dir: str | Path | None = None
+    ) -> BrowserContext:
+        """Create a context in *browser*, with its downloads folder.
+
+        Without *downloads_dir* the folder is a subfolder of the browser's,
+        removed with the context when the browser's folder is temporary.
+        """
+        root = browser._router.root
+        params: dict[str, Any] = {"proxyServer": proxy} if proxy else {}
+        result = await root.send("Target.createBrowserContext", params)
+        context = cls(browser, result["browserContextId"])
+        browser._contexts[context.context_id] = context
+        try:
+            context._downloads_dir = await browser._downloads.add_context(
+                context.context_id, downloads_dir
+            )
+        except BaseException:
+            await context.close()
+            raise
+        return context
 
     @property
     def context_id(self) -> str:
         return self._context_id
+
+    @property
+    def downloads_dir(self) -> Path | None:
+        """The folder where this context's downloads are saved."""
+        return self._downloads_dir
 
     @property
     def tabs(self) -> list[Tab]:
@@ -70,14 +100,15 @@ class BrowserContext:
         )
 
     async def close(self) -> None:
-        """Dispose of this browser context and detach all its tabs."""
+        """Dispose of this browser context and detach all its tabs.
+
+        Its downloads folder is removed too when it is temporary.
+        """
         for tab in list(self._tabs):
             self._browser._forget_tab(tab._target_id)
         self._browser._contexts.pop(self._context_id, None)
         root = self._browser._router.root
-        await root.send(
-            "Target.disposeBrowserContext",
-            {
-                "browserContextId": self._context_id,
-            },
-        )
+        try:
+            await root.send("Target.disposeBrowserContext", {"browserContextId": self._context_id})
+        finally:
+            await self._browser._downloads.remove_context(self._context_id)

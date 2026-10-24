@@ -7,6 +7,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Downloads: `Browser.launch(downloads_dir=None)` and
+  `Browser.new_context(downloads_dir=None)` accept every download into a
+  folder per browser context (a temporary one, removed on `close()`, unless a
+  folder is given; `BrowserContext.downloads_dir` tells which).
+  `tellurium.browser.download` adds `Download` (`url`, `suggested_filename`,
+  `state`, `path()`, `save_as()`, `cancel()`), `DownloadError` and
+  `DownloadWaiter`, which waits for the next download of the frames it
+  accepts. `Browser.close()` fails pending waits with `DownloadError`.
+
 - `tellurium download-browser --browser patched --allow-unverified` installs a
   release without a matching `SHA256SUMS` (mirrors, local builds); the same
   flag on `update-browser` and `verify-browser --reinstall`, and
