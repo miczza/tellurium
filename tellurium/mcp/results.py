@@ -16,7 +16,7 @@ from tellurium.browser.handles import StaleElementError
 from tellurium.browser.launcher import LaunchError
 from tellurium.browser.navigation import NavigationError
 from tellurium.browser.snapshot import SnapshotTooLargeError
-from tellurium.cdp.types import TargetCrashedError
+from tellurium.cdp.types import CDPError, TargetCrashedError
 from tellurium.session.errors import SessionError
 
 
@@ -39,7 +39,7 @@ def explain(exc: BaseException) -> str:
     if isinstance(exc, ToolError):
         return str(exc)
     if isinstance(exc, StaleElementError):
-        return f"Stale ref: {exc}. The page changed: take a new snapshot and use its refs."
+        return _advise(f"Stale ref: {exc}", "The page changed: take a new snapshot")
     if isinstance(exc, ElementNotHittableError):
         return (
             f"Element covered, nothing was clicked: {exc}. Close the overlay, scroll, "
@@ -53,7 +53,11 @@ def explain(exc: BaseException) -> str:
     if isinstance(exc, KeyError):  # a LookupError, but never a ref problem
         return f"KeyError: {exc}"
     if isinstance(exc, LookupError):
-        return f"{exc}. Refs come from the latest snapshot of this tab."
+        if "ref" in str(exc).lower():
+            return _advise(str(exc), "Refs come from the latest snapshot of this tab")
+        return f"{exc}: check the CSS selector, or leave selector out"
+    if isinstance(exc, CDPError):
+        return _chrome_error(exc)
     if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
         return f"Timed out: {exc or 'the call took too long'}."
     if isinstance(exc, NavigationError):
@@ -65,10 +69,33 @@ def explain(exc: BaseException) -> str:
     if isinstance(exc, ConnectionError):
         return f"The tab or its browser is gone ({exc}): see tab-list and session-list."
     if isinstance(exc, LaunchError):
+        if "SingletonLock" in str(exc) or "ProcessSingleton" in str(exc):
+            return (
+                "This session is already open in another process (its profile is locked): "
+                "close it there, or open another name."
+            )
         return f"Chrome did not start: {exc}"
     if isinstance(exc, SessionError):
         return f"Session error: {exc}"
     return f"{type(exc).__name__}: {exc}"
+
+
+def _advise(message: str, advice: str) -> str:
+    """*message* plus *advice*, unless it already says to take a snapshot."""
+    if "snapshot" in message.lower():
+        return f"{message}."
+    return f"{message}. {advice}."
+
+
+def _chrome_error(exc: CDPError) -> str:
+    if "not focusable" in exc.message:
+        return (
+            "That element cannot take keyboard focus: fill and press need a text field "
+            "(textbox, searchbox, combobox) ref; click other elements instead."
+        )
+    if "invalid URL" in exc.message:
+        return "Invalid URL: give a full address such as https://example.com/."
+    return f"Chrome refused the command: {exc.message}"
 
 
 def success(reply: Reply) -> types.CallToolResult:

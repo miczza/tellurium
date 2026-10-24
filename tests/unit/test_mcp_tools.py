@@ -102,12 +102,40 @@ def test_snapshot_too_large_suggests_selector_or_interactive():
     assert "selector" in message and "interactive" in message
 
 
+def test_stale_ref_advice_is_given_once():
+    exc = StaleElementError("Ref @e3 belongs to a previous document: take a new snapshot")
+    assert explain(exc).lower().count("snapshot") == 1
+
+
 def test_unknown_ref_and_tool_errors_and_timeouts():
-    assert "snapshot" in explain(LookupError("No element with ref @e9: take a snapshot first"))
+    unknown = explain(LookupError("No element with ref @e9: take a snapshot first"))
+    assert unknown.lower().count("snapshot") == 1
     assert explain(ToolError("Unknown targetId 't9'")) == "Unknown targetId 't9'"
     assert "timed out" in explain(TimeoutError("waited 5s")).lower()
     assert "timed out" in explain(asyncio.TimeoutError()).lower()
     assert explain(ValueError("boom")) == "ValueError: boom"
+
+
+def test_selector_without_match_does_not_talk_about_refs():
+    message = explain(LookupError("No element matching '#nope'"))
+    assert "#nope" in message and "selector" in message and "ref" not in message.lower()
+
+
+def test_chrome_errors_are_translated():
+    from tellurium.browser.launcher import LaunchError
+    from tellurium.cdp.types import CDPError
+
+    focus = explain(CDPError("Element is not focusable", -32000))
+    assert "cannot take keyboard focus" in focus and "text field" in focus
+    url = explain(CDPError("Cannot navigate to invalid URL", -32000))
+    assert "Invalid URL" in url and "https://" in url
+    locked = explain(
+        LaunchError(
+            "Chrome exited during launch (exit code 21). Its last output:\n"
+            "Failed to create /x/SingletonLock: File exists (17)"
+        )
+    )
+    assert "already open in another process" in locked and "SingletonLock" not in locked
 
 
 # --------------------------------------------------------------------------- #

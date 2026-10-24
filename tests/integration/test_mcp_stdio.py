@@ -179,11 +179,26 @@ async def test_actions_tabs_and_errors(local_server, tmp_path):
         assert "unknown argument 'colour'" in await _error(
             client, "click", targetId=tid, ref=old, colour="red"
         )
-        assert "Refs come from" in await _error(client, "click", targetId=tid, ref="e999")
+        assert "take a snapshot" in await _error(client, "click", targetId=tid, ref="e999")
+        page = await _snapshot(client, tid)
+        heading = _ref(page, "heading", "Login")
+        assert "cannot take keyboard focus" in await _error(
+            client, "fill", targetId=tid, ref=heading, text="x"
+        )
+        nothing = await _error(client, "snapshot", targetId=tid, selector="#nope")
+        assert "#nope" in nothing and "ref" not in nothing.lower()
+        assert "Invalid URL" in await _error(client, "navigate", targetId=tid, url="notaurl")
         assert "session-list" in await _error(client, "tab-open", sessionId="nope")
         assert "Invalid session name" in await _error(client, "session-open", name="../x")
         missing = await _error(client, "wait-for", targetId=tid, text="never there", timeout=0.5)
         assert "Timed out" in missing
+
+
+async def test_a_session_open_in_another_server_is_reported_as_such(tmp_path):
+    async with _server(tmp_path) as first, _server(tmp_path) as second:
+        await _call(first, "session-open", name="work")
+        message = await _error(second, "session-open", name="work")
+        assert "already open in another process" in message
 
 
 def _rpc(proc: subprocess.Popen, message: dict) -> dict | None:
