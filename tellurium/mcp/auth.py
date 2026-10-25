@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, unquote, urlsplit
 
-TOKEN_FILE = "mcp-token"
 TOKEN_BYTES = 32
 ENDPOINT = "/mcp"
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{32,}")

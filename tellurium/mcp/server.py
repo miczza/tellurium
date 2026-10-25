@@ -1,8 +1,9 @@
 """The MCP server: the tool set, the dispatch of a call, and how it is served.
 
-The transport is a parameter of :func:`serve`: only ``"stdio"`` for now (no
-port opened, which suits the pipe-only design); the server itself does not
-depend on it.
+The transport is a parameter of :func:`serve`: ``"stdio"`` (no port opened,
+which suits the pipe-only design; one client, one session pool) or ``"http"``
+(Streamable HTTP behind a token, one session pool per MCP client: see
+:mod:`tellurium.mcp.http_transport`). The server itself does not depend on it.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import select
 import signal
 import sys
 from collections.abc import Awaitable, Callable, Iterable
+from contextlib import AbstractAsyncContextManager, nullcontext
 from typing import Any
 
 from mcp import types
@@ -49,11 +51,17 @@ More tabs: tab-open, tab-list (popups show up there), tab-close.
 session-close saves a named session; every session is saved when the server stops.
 """
 
-# A transport serves *server* until its client goes; it sets the event when it
-# learns the client is gone without the server loop noticing.
-Transport = Callable[[Server[Any], asyncio.Event], Awaitable[None]]
+# A transport serves *config* until its client goes or the event is set (it
+# sets it too when it learns the client is gone); True if the event ended it.
+Transport = Callable[[ServerConfig, asyncio.Event], Awaitable[bool]]
+# The pool a tool call runs against, held for the duration of the call.
+PoolFor = Callable[[Any], AbstractAsyncContextManager[Any]]
 # How often the stdio transport checks that the client still reads its replies.
 READER_POLL = 0.5
+
+
+class StartupError(Exception):
+    """The server cannot start as configured; the message says why."""
 
 
 def build_tools(config: ServerConfig) -> list[Tool]:
@@ -63,8 +71,12 @@ def build_tools(config: ServerConfig) -> list[Tool]:
     return tools
 
 
-def build_server(pool: Any, tools: Iterable[Tool]) -> Server[Any]:
-    """A low-level MCP server listing *tools* and running them against *pool*."""
+def build_server(
+    pool: Any, tools: Iterable[Tool], *, use_pool: PoolFor | None = None
+) -> Server[Any]:
+    """A low-level MCP server listing *tools* and running them against *pool*,
+    or against the pool ``use_pool(ctx)`` picks for each request."""
+    pool_for = use_pool or (lambda ctx: nullcontext(pool))
     by_name = {tool.name: tool for tool in tools}
     listing = types.ListToolsResult(
         tools=[
@@ -82,7 +94,8 @@ def build_server(pool: Any, tools: Iterable[Tool]) -> Server[Any]:
             return failure(f"Unknown tool {params.name!r}; tools: {', '.join(by_name)}")
         try:
             args = tool.check(params.arguments)
-            reply = await asyncio.wait_for(tool.handler(pool, args), tool.timeout)
+            async with pool_for(ctx) as pool:
+                reply = await asyncio.wait_for(tool.handler(pool, args), tool.timeout)
         except Exception as exc:  # noqa: BLE001 - every failure is a result, never a crash
             logger.debug("tool %s failed", tool.name, exc_info=True)
             return failure(explain(exc))
@@ -123,19 +136,10 @@ async def _until_reader_gone(fd: int, stop: asyncio.Event) -> None:
     stop.set()
 
 
-TRANSPORTS: dict[str, Transport] = {"stdio": _stdio}
-
-
-async def serve(
-    config: ServerConfig, transport: str = "stdio", stop: asyncio.Event | None = None
-) -> bool:
-    """Serve until the client goes away or *stop* is set; then close every
-    session, saving the named ones (also when cancelled). True if *stop* ended it."""
-    run_transport = TRANSPORTS[transport]
-    stop = stop or asyncio.Event()
+async def _serve_stdio(config: ServerConfig, stop: asyncio.Event) -> bool:
     async with SessionPool(config) as pool:
         server = build_server(pool, build_tools(config))
-        serving = asyncio.ensure_future(run_transport(server, stop))
+        serving = asyncio.ensure_future(_stdio(server, stop))
         stopping = asyncio.ensure_future(stop.wait())
         try:
             await asyncio.wait({serving, stopping}, return_when=asyncio.FIRST_COMPLETED)
@@ -150,9 +154,27 @@ async def serve(
     return True  # *serving* stays parked on its stdin read: see run()
 
 
+async def _serve_http(config: ServerConfig, stop: asyncio.Event) -> bool:
+    from tellurium.mcp import http_transport  # uvicorn only when HTTP is asked for
+
+    return await http_transport.serve(config, stop)
+
+
+TRANSPORTS: dict[str, Transport] = {"stdio": _serve_stdio, "http": _serve_http}
+
+
+async def serve(
+    config: ServerConfig, transport: str = "stdio", stop: asyncio.Event | None = None
+) -> bool:
+    """Serve until the client goes away or *stop* is set; then close every
+    session, saving the named ones (also when cancelled). True if *stop* ended it."""
+    return await TRANSPORTS[transport](config, stop or asyncio.Event())
+
+
 def run(config: ServerConfig, transport: str = "stdio") -> None:
     """Blocking entry point of ``tellurium mcp``. SIGTERM and SIGINT close and save
-    every session like the client closing stdin does, then end the process."""
+    every session like the client closing stdin does, then end the process.
+    A configuration the server cannot start with ends it with a message."""
     logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 
     async def main() -> None:
@@ -163,7 +185,7 @@ def run(config: ServerConfig, transport: str = "stdio") -> None:
                 loop.add_signal_handler(sig, stop.set)
             except (NotImplementedError, RuntimeError):  # Windows
                 pass
-        if await serve(config, transport, stop):
+        if await serve(config, transport, stop) and transport == "stdio":
             # The stdio transport reads stdin in a worker thread that no
             # cancellation reaches, so the loop could never finish; every
             # resource the server owns (browsers, profiles, pipes) is closed.
@@ -171,4 +193,8 @@ def run(config: ServerConfig, transport: str = "stdio") -> None:
             sys.stderr.flush()
             os._exit(0)
 
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except StartupError as exc:
+        print(f"tellurium mcp: {exc}", file=sys.stderr)
+        sys.exit(2)

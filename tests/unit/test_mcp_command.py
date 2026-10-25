@@ -1,0 +1,79 @@
+"""``tellurium mcp --http`` options on the command line, without serving."""
+
+from __future__ import annotations
+
+import pytest
+
+pytest.importorskip("mcp")
+
+from tellurium.mcp.config import DEFAULT_IDLE_TIMEOUT, HttpConfig  # noqa: E402
+
+
+@pytest.fixture
+def run(monkeypatch, tmp_path):
+    import tellurium.mcp.server as server
+    from tellurium.cli import main
+
+    seen: dict = {}
+    monkeypatch.setattr(server, "run", lambda config, transport: seen.update(c=config, t=transport))
+    monkeypatch.setenv("TELLURIUM_HOME", str(tmp_path))
+
+    def invoke(*argv: str):
+        monkeypatch.setattr("sys.argv", ["tellurium", "mcp", *argv])
+        main()
+        return seen["c"], seen["t"]
+
+    return invoke
+
+
+def test_http_defaults_loopback_no_eval_and_an_idle_timeout(run):
+    config, transport = run("--http", "127.0.0.1:8765")
+    assert transport == "http"
+    assert config.allow_eval is False
+    assert config.http == HttpConfig("127.0.0.1", 8765, frozenset(), DEFAULT_IDLE_TIMEOUT)
+
+
+def test_http_options(run):
+    config, _ = run(
+        "--http",
+        "localhost:0",
+        "--allow-eval",
+        "--allow-origin",
+        "https://App.example/",
+        "--allow-origin",
+        "http://127.0.0.1:3000",
+        "--idle-timeout",
+        "0",
+    )
+    assert config.allow_eval is True
+    assert config.http.origins == {"https://app.example", "http://127.0.0.1:3000"}
+    assert config.http.idle_timeout is None  # 0: never
+
+
+def test_stdio_keeps_eval_on(run):
+    config, transport = run()
+    assert transport == "stdio" and config.allow_eval is True and config.http is None
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (["--allow-origin", "https://a.example"], "need --http"),
+        (["--idle-timeout", "5"], "need --http"),
+        (["--http", "8765"], "HOST:PORT"),
+        (["--http", "127.0.0.1:1", "--allow-origin", "a.example"], "not an origin"),
+        (["--http", "127.0.0.1:1", "--idle-timeout", "-1"], "--idle-timeout"),
+        (["--http", "192.168.1.5:8765"], "--allow-remote"),
+    ],
+)
+def test_bad_options_exit_with_a_message(run, capsys, argv, message):
+    with pytest.raises(SystemExit) as exited:
+        run(*argv)
+    assert exited.value.code == 2
+    assert message in capsys.readouterr().err
+
+
+def test_non_loopback_bind_with_the_flag_warns(run, capsys):
+    config, _ = run("--http", "0.0.0.0:8765", "--allow-remote")
+    assert config.http.host == "0.0.0.0"
+    assert "WARNING" in capsys.readouterr().err

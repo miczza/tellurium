@@ -1,0 +1,315 @@
+"""``tellurium mcp --http`` as a real process, driven by the official MCP client
+over Streamable HTTP and by raw HTTP requests, with a real (headless) Chrome
+on local fixtures.
+
+What the spec's Esito 2 promises: requests without the token, with a wrong one,
+with the token in the URL or with a foreign Origin are refused; two clients do
+not see each other's sessions or tabs; a named session is one client's at a
+time; an idle client's sessions are closed and saved; eval is off on HTTP.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import os
+import re
+import signal
+import stat
+import sys
+import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import pytest
+
+pytest.importorskip("mcp")
+
+import httpx2  # noqa: E402
+from mcp import Client  # noqa: E402
+from mcp.client.streamable_http import streamable_http_client  # noqa: E402
+from mcp.shared._httpx_utils import create_mcp_http_client  # noqa: E402
+from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS  # noqa: E402
+
+_TELLURIUM = Path(sys.executable).with_name("tellurium")
+_LISTENING = re.compile(r"listening on (http://\S+/mcp)")
+_INIT = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": HANDSHAKE_PROTOCOL_VERSIONS[-1],
+        "capabilities": {},
+        "clientInfo": {"name": "raw", "version": "0"},
+    },
+}
+_ACCEPT = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+
+
+class _Server:
+    def __init__(self, proc: asyncio.subprocess.Process, url: str, home: Path):
+        self.proc, self.url, self.home = proc, url, home
+        self.stderr: list[str] = []
+
+    @property
+    def token(self) -> str:
+        return (self.home / "mcp-token").read_text().strip()
+
+    async def stop(self, timeout: float = 30) -> int:
+        if self.proc.returncode is None:
+            self.proc.send_signal(signal.SIGTERM)
+        try:
+            return await asyncio.wait_for(self.proc.wait(), timeout)
+        except TimeoutError:
+            self.proc.kill()
+            await self.proc.wait()
+            raise
+
+
+async def _spawn(home: Path, *options: str) -> asyncio.subprocess.Process:
+    return await asyncio.create_subprocess_exec(
+        str(_TELLURIUM),
+        "mcp",
+        *options,
+        env={**os.environ, "TELLURIUM_HOME": str(home)},
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+
+@asynccontextmanager
+async def _server(home: Path, *options: str) -> AsyncIterator[_Server]:
+    proc = await _spawn(home, "--http", "127.0.0.1:0", *options)
+    lines: list[str] = []
+    url = None
+    try:
+        while url is None:
+            line = await asyncio.wait_for(proc.stderr.readline(), 30)
+            if not line:
+                raise AssertionError(f"server exited: {''.join(lines)}")
+            lines.append(line.decode())
+            found = _LISTENING.search(lines[-1])
+            url = found and found.group(1)
+        server = _Server(proc, url, home)
+        server.stderr = lines
+
+        async def drain():
+            async for raw in proc.stderr:
+                lines.append(raw.decode())
+
+        draining = asyncio.ensure_future(drain())
+        try:
+            yield server
+        finally:
+            code = await server.stop()
+            await draining
+            assert code == 0, "".join(lines)
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+
+
+@asynccontextmanager
+async def _client(server: _Server, token: str | None = None) -> AsyncIterator[Client]:
+    headers = {"Authorization": f"Bearer {token or server.token}"}
+    async with create_mcp_http_client(headers=headers) as http:
+        async with Client(streamable_http_client(server.url, http_client=http)) as client:
+            yield client
+
+
+async def _call(client: Client, tool: str, **args):
+    result = await client.call_tool(tool, args)
+    assert not result.is_error, f"{tool} {args}: {result.content[0].text}"
+    return result.structured_content
+
+
+async def _error(client: Client, tool: str, **args) -> str:
+    result = await client.call_tool(tool, args)
+    assert result.is_error, f"{tool} {args} should fail: {result.content[0].text}"
+    return result.content[0].text
+
+
+async def _post(server: _Server, headers: dict[str, str], url: str | None = None):
+    async with httpx2.AsyncClient() as http:
+        return await http.post(url or server.url, json=_INIT, headers={**_ACCEPT, **headers})
+
+
+# --------------------------------------------------------------------------- #
+# The guard
+# --------------------------------------------------------------------------- #
+
+
+async def test_token_file_created_0600_and_requests_without_it_refused(tmp_path):
+    async with _server(tmp_path / "home") as server:
+        token_file = server.home / "mcp-token"
+        assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
+        token = server.token
+        assert token not in "".join(server.stderr)  # never printed
+
+        missing = await _post(server, {})
+        assert missing.status_code == 401
+        assert missing.headers["www-authenticate"] == "Bearer"
+        assert "Authorization: Bearer" in missing.json()["error"]["message"]
+
+        wrong = await _post(server, {"Authorization": f"Bearer {'x' * len(token)}"})
+        assert wrong.status_code == 401
+
+        in_url = await _post(server, {}, url=f"{server.url}?access_token={token}")
+        assert in_url.status_code == 400
+        in_url_too = await _post(
+            server, {"Authorization": f"Bearer {token}"}, url=f"{server.url}?token={token}"
+        )
+        assert in_url_too.status_code == 400
+
+        foreign = await _post(
+            server, {"Authorization": f"Bearer {token}", "Origin": "https://evil.example"}
+        )
+        assert foreign.status_code == 403
+
+        rebound = await _post(
+            server, {"Authorization": f"Bearer {token}", "Host": "evil.example:80"}
+        )
+        assert rebound.status_code == 403
+
+        good = await _post(server, {"Authorization": f"Bearer {token}"})
+        assert good.status_code == 200
+        assert good.headers.get("mcp-session-id")
+
+
+async def test_official_client_with_a_wrong_token_cannot_connect(tmp_path):
+    async with _server(tmp_path / "home") as server:
+        with pytest.raises(Exception):  # noqa: B017 - the SDK's error type is not ours to pin
+            async with _client(server, token="y" * 43) as client:
+                await client.list_tools()
+
+
+async def test_allowlisted_origin_passes(tmp_path):
+    async with _server(tmp_path / "home", "--allow-origin", "http://app.example") as server:
+        allowed = await _post(
+            server, {"Authorization": f"Bearer {server.token}", "Origin": "http://app.example"}
+        )
+        assert allowed.status_code == 200
+        other = await _post(
+            server, {"Authorization": f"Bearer {server.token}", "Origin": "http://app2.example"}
+        )
+        assert other.status_code == 403
+
+
+async def test_eval_is_off_on_http_unless_allowed(tmp_path):
+    async with _server(tmp_path / "home") as server, _client(server) as client:
+        assert client.protocol_version in HANDSHAKE_PROTOCOL_VERSIONS  # an MCP session
+        names = {t.name for t in (await client.list_tools()).tools}
+        assert "eval" not in names and "navigate" in names
+    async with _server(tmp_path / "home", "--allow-eval") as server, _client(server) as client:
+        assert "eval" in {t.name for t in (await client.list_tools()).tools}
+
+
+async def test_loose_token_file_stops_the_server(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    loose = home / "mcp-token"
+    loose.write_text("A" * 43)
+    loose.chmod(0o644)
+    proc = await _spawn(home, "--http", "127.0.0.1:0")
+    _, err = await asyncio.wait_for(proc.communicate(), 30)
+    assert proc.returncode == 2
+    assert b"chmod 600" in err
+
+
+async def test_non_loopback_bind_needs_a_flag(tmp_path):
+    proc = await _spawn(tmp_path / "home", "--http", "0.0.0.0:0")
+    _, err = await asyncio.wait_for(proc.communicate(), 30)
+    assert proc.returncode == 2
+    assert b"--allow-remote" in err
+
+
+# --------------------------------------------------------------------------- #
+# One browser per client
+# --------------------------------------------------------------------------- #
+
+
+async def test_two_clients_do_not_see_each_other(local_server, tmp_path):
+    async with _server(tmp_path / "home") as server:
+        async with _client(server) as a, _client(server) as b:
+            opened = await _call(a, "session-open")
+            sid, tid = opened["sessionId"], opened["targetId"]
+            await _call(a, "navigate", targetId=tid, url=f"{local_server}/basic.html")
+
+            assert (await _call(b, "session-list"))["sessions"] == []
+            assert (await _call(b, "tab-list"))["tabs"] == []
+            assert "Unknown or closed targetId" in await _error(b, "snapshot", targetId=tid)
+            assert "Unknown sessionId" in await _error(b, "session-close", sessionId=sid)
+            assert "Unknown sessionId" in await _error(b, "tab-open", sessionId=sid)
+
+            await _call(b, "session-open")  # ids are per client: b's may spell like a's
+            b_tabs = (await _call(b, "tab-list"))["tabs"]
+            assert len(b_tabs) == 1 and "basic.html" not in b_tabs[0]["url"]
+            a_tabs = (await _call(a, "tab-list"))["tabs"]
+            assert len(a_tabs) == 1 and a_tabs[0]["url"].endswith("/basic.html")
+
+            await _call(a, "session-open", name="github")
+            taken = await _error(b, "session-open", name="github")
+            assert "already open by another MCP client" in taken
+            await _call(a, "session-close", sessionId="github")
+            reopened = await _call(b, "session-open", name="github")
+            assert reopened["created"] is True
+
+
+async def _open_when_free(client: Client, name: str, within: float = 20):
+    """session-open *name* as soon as the client holding it has let it go."""
+    deadline = time.monotonic() + within
+    while True:
+        result = await client.call_tool("session-open", {"name": name})
+        if not result.is_error:
+            return result.structured_content
+        assert "another MCP client" in result.content[0].text, result.content[0].text
+        assert time.monotonic() < deadline, f"{name} was never released"
+        await asyncio.sleep(0.3)
+
+
+async def test_a_client_that_disconnects_has_its_browsers_closed(local_server, tmp_path):
+    async with _server(tmp_path / "home") as server:
+        async with _client(server) as a:
+            await _call(a, "session-open", name="github")
+        # Its MCP session ended (DELETE on close): the name is free again.
+        async with _client(server) as b:
+            assert (await _open_when_free(b, "github"))["created"] is True
+
+
+async def test_idle_client_sessions_are_closed_and_saved(local_server, tmp_path):
+    async with _server(tmp_path / "home", "--idle-timeout", "2", "--allow-eval") as server:
+        async with _client(server) as a, _client(server) as b:
+            tid = (await _call(a, "session-open", name="github"))["targetId"]
+            await _call(a, "navigate", targetId=tid, url=f"{local_server}/basic.html")
+            await _call(
+                a, "eval", targetId=tid, expression="document.cookie = 'kept=1; max-age=86400'"
+            )
+            # No call from a from now on (any call would be activity).
+            opened = await _open_when_free(b, "github")
+            await _call(
+                b, "navigate", targetId=opened["targetId"], url=f"{local_server}/basic.html"
+            )
+            cookies = await _call(
+                b, "eval", targetId=opened["targetId"], expression="document.cookie"
+            )
+            assert "kept=1" in cookies["value"]  # closed *and saved* by the idle timeout
+            # a is still connected: its old session is gone, it can open a new one.
+            assert (await _call(a, "session-list"))["sessions"] == []
+            assert (await _call(a, "session-open"))["created"] is True
+
+
+async def test_sigterm_closes_saves_and_exits(local_server, tmp_path):
+    home = tmp_path / "home"
+    async with _server(home) as server:
+        client = _client(server)
+        a = await client.__aenter__()
+        await _call(a, "session-open", name="github")
+        started = time.monotonic()
+        assert await server.stop() == 0
+        assert time.monotonic() - started < 20
+        with contextlib.suppress(Exception):  # the server is gone: its DELETE fails
+            await client.__aexit__(None, None, None)
+    assert (home / "sessions" / "github" / "session.json").exists()
