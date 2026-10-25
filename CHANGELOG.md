@@ -12,7 +12,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   install line). Twenty kebab-case tools: `session-open/list/close`,
   `tab-open/list/close`, `navigate`, `snapshot`, `click`, `fill`, `press`,
   `select-option`, `check`, `hover`, `scroll`, `wait-for`, `get-text`,
-  `screenshot` (image content), `download` (returns the saved path) and `eval`.
+  `screenshot` (image content; a full page is cut to 8000 px per side, said in
+  the result), `download` (returns the saved path) and `eval`.
   The whole tool listing is about 6.6 KB of schema. Page tools take a required `targetId`; arguments are a whitelist checked
   against each tool's schema (an unknown argument is an error); actions return
   `{ok, url, title, navigated}` and use human-like input unless `human: false`

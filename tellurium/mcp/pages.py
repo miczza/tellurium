@@ -4,6 +4,7 @@ wait-for, eval. Each takes the ``targetId`` of a tab."""
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import re
 from typing import Any
@@ -16,6 +17,8 @@ from tellurium.mcp.tool import Tool, param
 
 SNAPSHOT_CHARS = 30_000
 TEXT_CHARS = 20_000
+# Image clients refuse pictures larger than this per side.
+SHOT_MAX = 8000
 WAIT_DEFAULT = 10
 WAIT_MAX = 120
 _REF = re.compile(r"@?e\d+")
@@ -98,13 +101,35 @@ async def _get_text(pool: Any, args: dict[str, Any]) -> Reply:
 
 async def _screenshot(pool: Any, args: dict[str, Any]) -> Reply:
     tab = pool.tab(args["targetId"])
+    note, cropped = "", False
     if "ref" in args:
         image = await (await ref_element(tab, args["ref"])).screenshot()
+    elif args.get("fullPage"):
+        image, (width, height), cropped = await _full_page(tab)
+        if cropped:
+            note = f" (cropped to {SHOT_MAX} px per side; the page is {width}x{height})"
     else:
-        image = await tab.screenshot(full_page=args.get("fullPage", False), timeout=30)
+        image = await tab.screenshot(timeout=30)
     state = await page_state.read_or_none(tab) or page_state.PageState(tab.url, tab.title)
-    data = state_data(args["targetId"], state, bytes=len(image))
-    return Reply(f"screenshot of {state.url}", data, image=image)
+    data = state_data(args["targetId"], state, bytes=len(image), cropped=cropped)
+    return Reply(f"screenshot of {state.url}{note}", data, image=image)
+
+
+async def _full_page(tab: Tab) -> tuple[bytes, tuple[int, int], bool]:
+    """The whole page as PNG, but at most SHOT_MAX px per side (top-left part):
+    image clients refuse larger ones. Also the page size and whether it was cut."""
+    metrics = await tab.send_cdp("Page.getLayoutMetrics", {})
+    size = metrics.get("cssContentSize") or metrics.get("contentSize") or {}
+    width, height = int(size.get("width", 0)) or 1, int(size.get("height", 0)) or 1
+    clip = {"x": 0, "y": 0, "width": min(width, SHOT_MAX), "height": min(height, SHOT_MAX)}
+    ratio = float(await tab.eval("window.devicePixelRatio", timeout=5) or 1)
+    scale = min(1.0, 1 / ratio)  # a HiDPI screen would double the pixels past the cap
+    shot = await tab.send_cdp(
+        "Page.captureScreenshot",
+        {"format": "png", "captureBeyondViewport": True, "clip": {**clip, "scale": scale}},
+    )
+    cropped = width > SHOT_MAX or height > SHOT_MAX
+    return base64.b64decode(shot["data"]), (width, height), cropped
 
 
 async def _wait_for(pool: Any, args: dict[str, Any]) -> Reply:

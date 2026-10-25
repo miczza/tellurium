@@ -10,11 +10,13 @@ still saves it.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import re
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
@@ -188,7 +190,7 @@ async def test_actions_tabs_and_errors(local_server, tmp_path):
         )
         nothing = await _error(client, "snapshot", targetId=tid, selector="#nope")
         assert "#nope" in nothing and "ref" not in nothing.lower()
-        assert "Invalid URL" in await _error(client, "navigate", targetId=tid, url="notaurl")
+        assert "full address" in await _error(client, "navigate", targetId=tid, url="notaurl")
         assert "session-list" in await _error(client, "tab-open", sessionId="nope")
         assert "Invalid session name" in await _error(client, "session-open", name="../x")
         missing = await _error(client, "wait-for", targetId=tid, text="never there", timeout=0.5)
@@ -254,6 +256,25 @@ async def test_local_and_browser_urls_are_refused_by_default(local_server, tmp_p
         await _call(client, "navigate", targetId=tid, url="file:///etc/hostname")
         if hostname:
             assert hostname in await _text(client, tid)
+
+
+def _png_size(data: str) -> tuple[int, int]:
+    raw = base64.b64decode(data)
+    return struct.unpack(">II", raw[16:24])
+
+
+async def test_full_page_screenshot_is_capped_with_a_warning(local_server, tmp_path):
+    async with _server(tmp_path) as client:
+        tid = (await _call(client, "session-open")).structured_content["targetId"]
+        await _call(client, "navigate", targetId=tid, url=f"{local_server}/tall.html")
+        shot = await _call(client, "screenshot", targetId=tid, fullPage=True)
+        width, height = _png_size(shot.content[1].data)
+        assert height == 8000 and width <= 8000
+        assert "cropped" in shot.content[0].text and "20000" in shot.content[0].text
+        assert shot.structured_content["cropped"] is True
+        small = await _call(client, "screenshot", targetId=tid)
+        assert _png_size(small.content[1].data)[1] < 8000
+        assert small.structured_content["cropped"] is False
 
 
 _LISTEN = """
