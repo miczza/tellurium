@@ -238,6 +238,15 @@ tellurium mcp --http 127.0.0.1:8765
   (default 16) cap the browsers, each a Chrome, of one client and of the
   server; past a cap `session-open` says which one, and a closed session
   frees its place.
+- **Calls end within 240 s.** Replies are plain JSON, so nothing reaches the
+  client while a call runs, and the SDK client gives up after 300 s without
+  data. Over HTTP every tool call is cut at 240 s, and `download` accepts a
+  `timeout` of at most 110 s (it waits for the download, then for its save);
+  asking for more is an error that says so. For longer downloads, use the
+  stdio server.
+- **Slow or refused connections.** A request's headers must arrive within
+  5 s and its body within 10 s more. A refused request closes its connection
+  at once, so clients without the token cannot tie up the server.
 - **`--allow-local-urls`** and **`--headed`** work as on stdio.
 
 Claude Code:

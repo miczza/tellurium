@@ -72,10 +72,15 @@ def build_tools(config: ServerConfig) -> list[Tool]:
 
 
 def build_server(
-    pool: Any, tools: Iterable[Tool], *, use_pool: PoolFor | None = None
+    pool: Any,
+    tools: Iterable[Tool],
+    *,
+    use_pool: PoolFor | None = None,
+    max_call: float | None = None,
 ) -> Server[Any]:
     """A low-level MCP server listing *tools* and running them against *pool*,
-    or against the pool ``use_pool(ctx)`` picks for each request."""
+    or against the pool ``use_pool(ctx)`` picks for each request. *max_call*
+    caps every tool's own timeout."""
     pool_for = use_pool or (lambda ctx: nullcontext(pool))
     by_name = {tool.name: tool for tool in tools}
     listing = types.ListToolsResult(
@@ -95,7 +100,8 @@ def build_server(
         try:
             args = tool.check(params.arguments)
             async with pool_for(ctx) as pool:
-                reply = await asyncio.wait_for(tool.handler(pool, args), tool.timeout)
+                timeout = tool.timeout if max_call is None else min(tool.timeout, max_call)
+                reply = await asyncio.wait_for(tool.handler(pool, args), timeout)
         except Exception as exc:  # noqa: BLE001 - every failure is a result, never a crash
             logger.debug("tool %s failed", tool.name, exc_info=True)
             return failure(explain(exc))

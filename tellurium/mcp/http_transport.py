@@ -29,7 +29,7 @@ from uvicorn.protocols.http.h11_impl import H11Protocol
 
 from tellurium.mcp import auth
 from tellurium.mcp.clients import ClientPools
-from tellurium.mcp.config import HttpConfig, ServerConfig
+from tellurium.mcp.config import HTTP_CALL_MAX, HttpConfig, ServerConfig
 from tellurium.mcp.server import StartupError, build_server, build_tools
 
 logger = logging.getLogger(__name__)
@@ -222,7 +222,10 @@ async def serve(config: ServerConfig, stop: asyncio.Event) -> bool:
         guard = auth.Guard(token, auth.allowed_hosts(http.host), port)
         async with ClientPools(config, idle_timeout=http.idle_timeout) as clients:
             server = build_server(
-                None, build_tools(config), use_pool=lambda ctx: clients.use(client_id(ctx))
+                None,
+                build_tools(config),
+                use_pool=lambda ctx: clients.use(client_id(ctx)),
+                max_call=HTTP_CALL_MAX,
             )
             manager = StreamableHTTPSessionManager(
                 server,

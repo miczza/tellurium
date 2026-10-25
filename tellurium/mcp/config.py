@@ -13,6 +13,9 @@ DEFAULT_IDLE_TIMEOUT = 300.0
 # Browsers (each a Chrome) an HTTP client, and the whole server, may run at once.
 DEFAULT_SESSIONS_PER_CLIENT = 4
 DEFAULT_SESSIONS = 16
+# Seconds a tool call may take over HTTP: replies are plain JSON, with nothing
+# sent meanwhile, and the SDK client gives up after 300 s without data.
+HTTP_CALL_MAX = 240.0
 
 
 def default_home() -> Path:

@@ -16,12 +16,15 @@ from typing import Any
 
 from tellurium.browser.tab import Tab
 from tellurium.mcp import keys, page_state
+from tellurium.mcp.config import HTTP_CALL_MAX
 from tellurium.mcp.pages import ref_element, state_data
 from tellurium.mcp.results import Reply, ToolError
 from tellurium.mcp.tool import Tool, param
 
 DOWNLOAD_DEFAULT = 60
 DOWNLOAD_MAX = 600
+# Over HTTP a call ends within HTTP_CALL_MAX: the wait for the download, then its save.
+DOWNLOAD_MAX_HTTP = int((HTTP_CALL_MAX - 20) // 2)
 SCROLL_DEFAULT = 600
 
 # The option wanted, by value, else by the visible label (the snapshot shows labels):
@@ -165,10 +168,15 @@ async def _scroll(pool: Any, args: dict[str, Any]) -> Reply:
 
 
 async def _download(pool: Any, args: dict[str, Any]) -> Reply:
-    tab = pool.tab(args["targetId"])
     timeout = args.get("timeout", DOWNLOAD_DEFAULT)
+    if pool.config.http is not None and timeout > DOWNLOAD_MAX_HTTP:
+        raise ToolError(
+            f"timeout can be at most {DOWNLOAD_MAX_HTTP} seconds over HTTP (the client stops "
+            "waiting for a reply after 300 s): for a longer download use the stdio server"
+        )
     if not 0 < timeout <= DOWNLOAD_MAX:
         raise ToolError(f"timeout must be between 0 and {DOWNLOAD_MAX} seconds")
+    tab = pool.tab(args["targetId"])
     element = await ref_element(tab, args["ref"])
     async with tab.expect_download(timeout=timeout) as info:
         await element.click(human=_human(args))

@@ -44,6 +44,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   timeout, and the JPEG attempts share a 25 s budget (past it: an error suggesting `ref=`).
   Over HTTP, replies are plain JSON rather than SSE: SDK clients refuse an SSE event over
   1 MiB, which a screenshot easily is.
+  Over HTTP every tool call ends within 240 s (the SDK client gives up after 300 s without
+  data) and `download` accepts a `timeout` of at most 110 s, with an error saying so.
 - `tellurium mcp [--headed] [--allow-local-urls]`: tellurium as an MCP server over stdio (extra
   `tellurium[mcp]`, official `mcp` SDK; without the extra the command prints the
   install line). Twenty kebab-case tools: `session-open/list/close`,
