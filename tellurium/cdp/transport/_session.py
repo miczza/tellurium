@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import math
@@ -23,6 +24,28 @@ class Session:
         self._event_handlers: dict[str, list[callable]] = {}
         self._lock = asyncio.Lock()
         self._closed_error: ConnectionError | None = None
+        self._auto_attach = False
+
+    @property
+    def session_id(self) -> str | None:
+        """The CDP session id; ``None`` for the browser (root) session."""
+        return self._session_id
+
+    @property
+    def router(self) -> SessionRouter:
+        """The router multiplexing this session on the pipe."""
+        return self._router
+
+    @property
+    def closed(self) -> bool:
+        """Whether the session is gone (target detached or crashed, pipe closed)."""
+        return self._closed_error is not None
+
+    @property
+    def auto_attaches(self) -> bool:
+        """Whether ``Target.setAutoAttach`` is on here: Chrome attaches child targets
+        (cross-site iframes, workers) by itself, as the stealth engine asks."""
+        return self._auto_attach
 
     async def send(
         self,
@@ -54,9 +77,10 @@ class Session:
             await self._router._transport.send(json.dumps(msg).encode() + b"\0")
         limit = self._router.default_timeout if timeout is None else timeout
         try:
-            if limit == math.inf:
-                return await future
-            return await asyncio.wait_for(future, timeout=limit)
+            result = await (future if limit == math.inf else asyncio.wait_for(future, limit))
+            if method == "Target.setAutoAttach":
+                self._auto_attach = bool((params or {}).get("autoAttach"))
+            return result
         except asyncio.TimeoutError:
             # asyncio.wait_for cancels its internal waiter but leaves the
             # future pending. Remove msg_id from _pending so a late reply
@@ -127,6 +151,9 @@ class SessionRouter:
         self._sessions: dict[str | None, Session] = {}
         self._root = Session(self, session_id=None)
         self._sessions[None] = self._root
+        self._targets: dict[str, str] = {}  # session id -> target id, in attach order
+        self._target_waiters: dict[str, list[asyncio.Future]] = {}
+        self._tasks: set[asyncio.Task] = set()
 
     async def _allocate_id(self) -> int:
         async with self._id_lock:
@@ -148,19 +175,88 @@ class SessionRouter:
             self._sessions[session_id] = session
         return session
 
-    async def attach(self, target_id: str) -> Session:
-        result = await self._root.send(
-            "Target.attachToTarget", {"targetId": target_id, "flatten": True}
-        )
-        sid = result["sessionId"]
-        session = Session(self, session_id=sid)
-        self._sessions[sid] = session
-        return session
+    def session_for_target(self, target_id: str) -> Session | None:
+        """The live session attached to *target_id* (for a cross-site iframe, its frame
+        id), the first one attached when there are several; ``None`` if none is."""
+        for sid, target in self._targets.items():
+            if target == target_id:
+                return self.register(sid)
+        return None
 
-    async def detach(self, session: Session) -> None:
-        if session._session_id:
-            await self._root.send("Target.detachFromTarget", {"sessionId": session._session_id})
-            self._sessions.pop(session._session_id, None)
+    async def wait_for_target(self, target_id: str, timeout: float) -> Session | None:
+        """:meth:`session_for_target`, waiting up to *timeout* s for an attach."""
+        if (session := self.session_for_target(target_id)) is not None:
+            return session
+        future = asyncio.get_running_loop().create_future()
+        waiters = self._target_waiters.setdefault(target_id, [])
+        waiters.append(future)
+        try:
+            return await asyncio.wait_for(future, timeout)
+        except asyncio.TimeoutError:
+            return None
+        finally:
+            waiters.remove(future)
+            if not waiters:
+                self._target_waiters.pop(target_id, None)
+
+    async def attach(
+        self, target_id: str, *, via: Session | None = None, timeout: float | None = None
+    ) -> Session:
+        """Attach a new (flat) session to *target_id* through *via* (the root by
+        default): Chrome detaches it with *via*'s target. Past *timeout* s, or when
+        cancelled, ``TimeoutError``/cancellation, and a session Chrome opens anyway
+        is detached as soon as its id arrives."""
+        via = via or self._root
+        params = {"targetId": target_id, "flatten": True}
+        if timeout is None:  # the send's own deadline (default_timeout)
+            result = await via.send("Target.attachToTarget", params)
+        else:
+            request = asyncio.ensure_future(via.send("Target.attachToTarget", params))
+            try:
+                result = await asyncio.wait_for(asyncio.shield(request), timeout)
+            except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+                request.add_done_callback(functools.partial(self._drop_late_attach, via))
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                raise TimeoutError(f"Target.attachToTarget: no reply within {timeout:g}s") from None
+        sid = result["sessionId"]
+        self._targets.setdefault(sid, target_id)
+        return self.register(sid)
+
+    async def detach(self, session: Session, *, via: Session | None = None) -> None:
+        """Detach *session* (through *via*, the root by default) and forget it."""
+        if session.session_id:
+            await (via or self._root).send(
+                "Target.detachFromTarget", {"sessionId": session.session_id}
+            )
+            self._drop_session(session.session_id)
+
+    def _drop_late_attach(self, via: Session, request: asyncio.Future) -> None:
+        if request.cancelled() or request.exception() is not None:
+            return
+        sid = request.result().get("sessionId")
+        if sid:
+            self._targets.pop(sid, None)
+            task = asyncio.get_running_loop().create_task(self._detach_id(via, sid))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
+    async def _detach_id(self, via: Session, sid: str) -> None:
+        try:
+            await via.send("Target.detachFromTarget", {"sessionId": sid}, timeout=5.0)
+        except Exception:  # noqa: BLE001 — the target may be gone already
+            logger.debug("Could not detach late session %s", sid, exc_info=True)
+
+    def _note_attached(self, params: dict) -> None:
+        sid, target = params.get("sessionId"), params.get("targetInfo", {}).get("targetId")
+        if sid and target:
+            self._targets.setdefault(sid, target)
+
+    def _wake_waiters(self, params: dict) -> None:
+        target = params.get("targetInfo", {}).get("targetId", "")
+        for future in self._target_waiters.get(target, []):
+            if not future.done() and (session := self.session_for_target(target)):
+                future.set_result(session)
 
     async def run(self) -> None:
         try:
@@ -168,7 +264,12 @@ class SessionRouter:
                 msg = await self._transport.recv()
                 sid = msg.get("sessionId")
                 target = self._sessions.get(sid, self._root)
+                attached = msg.get("method") == "Target.attachedToTarget"
+                if attached:
+                    self._note_attached(msg.get("params", {}))
                 await target._handle_message(msg)
+                if attached:
+                    self._wake_waiters(msg.get("params", {}))
                 if msg.get("method") == "Target.detachedFromTarget":
                     self._drop_session(msg.get("params", {}).get("sessionId"))
         except (ConnectionError, EOFError):
@@ -182,6 +283,7 @@ class SessionRouter:
     def _drop_session(self, session_id: str | None) -> None:
         if session_id is None:
             return
+        self._targets.pop(session_id, None)
         session = self._sessions.pop(session_id, None)
         if session is not None:
             session._close(f"Target detached (session {session_id})")

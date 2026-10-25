@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Login widget</title>
+<style>
+  body { margin: 0; }
+  #signin { position: absolute; left: 10px; top: 10px; width: 120px; height: 40px; }
+  #email { position: absolute; left: 10px; top: 70px; width: 200px; }
+  #state { position: absolute; left: 10px; top: 110px; margin: 0; }
+  #forget { display: none; position: absolute; left: 10px; top: 52px; width: 200px; height: 16px; }
+  #deep { position: absolute; left: 240px; top: 10px; width: 160px; height: 100px; border: 0; }
+</style>
+</head>
+<body>
+  <button id="signin" onclick="document.getElementById('state').textContent =
+    'signed in as ' + document.getElementById('email').value">Sign in</button>
+  <input id="email" aria-label="Email">
+  <p id="state">signed out</p>
+  <a id="next" href="oopif_next.html" style="position: absolute; left: 10px; top: 150px">Next step</a>
+  <button id="far" style="display: none; position: absolute; left: 10px; top: 900px"
+    onclick="document.getElementById('state').textContent = 'far'">Far away</button>
+  <button id="forget" onclick="document.getElementById('state').textContent = 'forgotten'">Forget me</button>
+  <script>
+    const query = new URLSearchParams(location.search);
+    // ?zoom: where an unscaled click meant for Email lands in the zoomed widget
+    if (query.has('zoom')) document.getElementById('forget').style.display = 'block';
+    // ?tall: a button below the widget's own fold (the widget scrolls inside the page)
+    if (query.has('tall')) document.getElementById('far').style.display = 'block';
+    // ?nested: one more frame, back on 127.0.0.1 (the host's site, another renderer
+    // than this widget's): an OOPIF inside an OOPIF.
+    if (query.has('nested')) {
+      const deep = document.createElement('iframe');
+      deep.id = 'deep';
+      deep.title = 'Deep';
+      deep.src = location.protocol + '//127.0.0.1:' + location.port + '/oopif_deep.html';
+      document.body.appendChild(deep);
+    }
+  </script>
+</body>
+</html>

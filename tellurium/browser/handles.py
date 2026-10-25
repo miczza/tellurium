@@ -9,6 +9,9 @@ from the page. A tab therefore resolves every node into its own
 * ``Element.release()`` releases one handle at once;
 * the whole group is released on each main-frame navigation (the group then
   rotates) and on ``Tab.close()``.
+
+A node of a cross-site iframe lives in that iframe's session: its handle is
+released there, and the group on every session that holds some of it.
 """
 
 from __future__ import annotations
@@ -111,7 +114,7 @@ async def elements_from_array(session: Session, tab: Tab, array_object_id: str) 
     finally:
         handles = handles_of(tab)
         if handles is not None:
-            handles.discard(array_object_id)
+            handles.discard(array_object_id, session)
     elements: list[Element] = []
     for prop in props.get("result", []):
         if not prop.get("name", "").isdigit():
@@ -133,6 +136,8 @@ class HandleGroup:
         self._tasks: set[asyncio.Task] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._closed = False
+        self._where: dict[str, Session] = {}  # objectId -> its session, when not the tab's
+        self._others: list[Session] = []  # other sessions holding objects of the group
 
     @property
     def name(self) -> str:
@@ -142,25 +147,32 @@ class HandleGroup:
     def adopt(self, element: Element, object_id: str) -> weakref.finalize:
         """Release *object_id* when *element* is garbage-collected."""
         self._loop = self._loop or asyncio.get_running_loop()
+        self._note(object_id, getattr(element, "_session", None))
         finalizer = weakref.finalize(element, self._orphan, object_id, self.name)
         finalizer.atexit = False
         return finalizer
 
-    def discard(self, object_id: str) -> None:
-        """Release *object_id* soon (batched, best effort)."""
+    def discard(self, object_id: str, session: Session | None = None) -> None:
+        """Release *object_id* (of *session*, the tab's by default) soon (batched)."""
         self._loop = self._loop or asyncio.get_running_loop()
+        self._note(object_id, session)
         self._orphan(object_id, self.name)
 
     async def release(self, object_id: str) -> None:
         """Release one handle now (best effort)."""
-        await self._send("Runtime.releaseObject", {"objectId": object_id})
+        session = self._where.pop(object_id, None)
+        await self._send("Runtime.releaseObject", {"objectId": object_id}, session=session)
 
     def rotate(self) -> None:
         """Start a new group (main-frame navigation) and release the old one."""
-        old = self.name
+        old, sessions = self.name, [self._session, *self._others]
         self._generation += 1
         self._orphans = [(oid, group) for oid, group in self._orphans if group != old]
-        self._spawn(self._send("Runtime.releaseObjectGroup", {"objectGroup": old}))
+        self._where, self._others = {}, []
+        for session in sessions:
+            self._spawn(
+                self._send("Runtime.releaseObjectGroup", {"objectGroup": old}, session=session)
+            )
 
     async def drain(self) -> None:
         """Wait until every pending release has been sent and answered."""
@@ -177,11 +189,24 @@ class HandleGroup:
         self._orphans.clear()
         for task in list(self._tasks):
             task.cancel()
-        await self._send(
-            "Runtime.releaseObjectGroup", {"objectGroup": self.name}, timeout=_CLOSE_TIMEOUT
+        group = {"objectGroup": self.name}
+        await asyncio.gather(
+            *(
+                self._send("Runtime.releaseObjectGroup", group, _CLOSE_TIMEOUT, session=session)
+                for session in [self._session, *self._others]
+            )
         )
+        self._where, self._others = {}, []
 
     # ------------------------------------------------------------------
+
+    def _note(self, object_id: str, session: Session | None) -> None:
+        """Remember that *object_id* lives in *session*, when that is not the tab's."""
+        if session is None or session is self._session:
+            return
+        self._where[object_id] = session
+        if not any(other is session for other in self._others):
+            self._others.append(session)
 
     def _orphan(self, object_id: str, group: str) -> None:
         # A finalizer may run from any thread, or after the loop closed.
@@ -202,7 +227,9 @@ class HandleGroup:
         current = self.name
         await asyncio.gather(
             *(
-                self._send("Runtime.releaseObject", {"objectId": oid})
+                self._send(
+                    "Runtime.releaseObject", {"objectId": oid}, session=self._where.pop(oid, None)
+                )
                 for oid, group in batch
                 if group == current
             )
@@ -216,8 +243,16 @@ class HandleGroup:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _send(self, method: str, params: dict, timeout: float = _RELEASE_TIMEOUT) -> None:
+    async def _send(
+        self,
+        method: str,
+        params: dict,
+        timeout: float = _RELEASE_TIMEOUT,
+        *,
+        session: Session | None = None,
+    ) -> None:
         try:
-            await self._session.send(method, params, timeout=timeout)
+            target = self._session if session is None else session
+            await target.send(method, params, timeout=timeout)
         except Exception:  # noqa: BLE001 — the object or the target is already gone
             logger.debug("%s failed", method, exc_info=True)

@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Host</title>
+<style>
+  body { margin: 0; }
+  /* where the widget's own coordinates would land if read as the host's */
+  #danger { position: absolute; left: 0; top: 0; width: 320px; height: 220px; }
+  #login { position: absolute; left: 360px; top: 140px; width: 440px; height: 300px;
+           border: 4px solid #888; padding: 6px; }
+</style>
+</head>
+<body>
+  <button id="danger" onclick="document.title = 'deleted'">Delete account</button>
+  <iframe id="login" title="Login"></iframe>
+  <!-- below the fold: a click on it scrolls the page first -->
+  <button id="cancel" style="position: absolute; left: 20px; top: 1600px"
+    onclick="document.title = 'cancelled'">Cancel</button>
+  <script>
+    // Served from 127.0.0.1, the widget comes from localhost (or ?host=): another
+    // site, so site isolation puts it in its own renderer (an OOPIF).
+    const query = new URLSearchParams(location.search);
+    const host = query.get('host') || 'localhost';
+    const frame = document.getElementById('login');
+    // ?zoom=Z: CSS zoom on the iframe (its document is scaled, its quads are not)
+    if (query.has('zoom')) frame.style.zoom = query.get('zoom');
+    // ?transform=T[&origin=O]: a CSS transform on the iframe (its quads turn, its
+    // document's coordinates do not)
+    if (query.has('transform')) frame.style.transform = query.get('transform');
+    if (query.has('origin')) frame.style.transformOrigin = query.get('origin');
+    // ?low: the widget below the fold too
+    if (query.has('low')) frame.style.top = '1200px';
+    const pass = ['nested', 'zoom', 'tall'].filter((key) => query.has(key)).join('&');
+    frame.src = location.protocol + '//' + host + ':' + location.port + '/' + (query.get('page') || 'oopif_login.html')
+      + (pass ? '?' + pass : '');
+  </script>
+</body>
+</html>

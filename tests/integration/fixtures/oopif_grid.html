@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Grid widget</title>
+<style>
+  body { margin: 0; }
+  button { position: absolute; width: 70px; height: 40px; margin: 0; padding: 0; border: 0; }
+  #state { position: absolute; left: 10px; top: 200px; margin: 0; }
+</style>
+</head>
+<body>
+  <p id="state">idle</p>
+  <script>
+    // 24 buttons edge to edge, 6 per row from (10, 10): a click mapped with the wrong
+    // scale or angle lands on a neighbour, which says so in #state.
+    const names = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel',
+      'India', 'Juliet', 'Kilo', 'Lima', 'Mike', 'November', 'Oscar', 'Papa', 'Quebec',
+      'Romeo', 'Sierra', 'Tango', 'Uniform', 'Victor', 'Whiskey', 'Xray'];
+    names.forEach((name, i) => {
+      const button = document.createElement('button');
+      button.textContent = name;
+      button.style.left = (10 + (i % 6) * 70) + 'px';
+      button.style.top = (10 + Math.floor(i / 6) * 40) + 'px';
+      button.onclick = () => { document.getElementById('state').textContent = 'clicked ' + name; };
+      document.body.appendChild(button);
+    });
+  </script>
+</body>
+</html>
