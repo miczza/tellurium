@@ -36,11 +36,13 @@ async def test_languages_native_shape_under_stealth(header_server):
         langs = browser._stealth_profile.languages
         tab = await browser.new_tab(url)
         js_langs = await tab.eval("Array.from(navigator.languages)")
-        assert js_langs == langs
+        # Chrome 156+ exposes only the first language (Accept-Language reduction);
+        # earlier versions the whole list: a non-empty prefix of the profile's.
+        assert js_langs and js_langs == langs[: len(js_langs)]
         assert all(";" not in lang for lang in js_langs)
         header = seen["accept_language"]
         assert header.split(",")[0] == langs[0]
-        assert ";q=0.9" in header or len(langs) == 1
+        assert ";q=0.9" in header or len(js_langs) == 1
         assert ", " not in header and ";q=0.9;q=0.9" not in header
         worker_langs = await tab.eval(
             "new Promise(r => { const w = new Worker(URL.createObjectURL(new Blob(["
