@@ -183,16 +183,15 @@ def test_cli_mcp_without_extra_prints_the_install_command():
 # --------------------------------------------------------------------------- #
 
 
-def test_download_names_never_overwrite_or_escape(tmp_path):
+def test_download_names_are_reserved_never_reused_and_never_escape(tmp_path):
     from tellurium.mcp.actions import _free_path
 
     first = _free_path(tmp_path / "dl", "report.csv")
-    assert first == tmp_path / "dl" / "report.csv"
-    first.write_text("x")
+    assert first == tmp_path / "dl" / "report.csv" and first.exists()  # reserved at once
     assert _free_path(tmp_path / "dl", "report.csv").name == "report (1).csv"
     assert _free_path(tmp_path / "dl", "../../etc/passwd").parent == tmp_path / "dl"
-    for odd in ("", ".", ".."):
-        assert _free_path(tmp_path / "dl", odd).name == "download"
+    odd = [_free_path(tmp_path / "dl", name).name for name in ("", ".", "..")]
+    assert odd == ["download", "download (1)", "download (2)"]
 
 
 async def test_malformed_ref_is_refused_before_touching_the_page():

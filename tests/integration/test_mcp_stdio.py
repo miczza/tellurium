@@ -9,6 +9,7 @@ still saves it.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -192,6 +193,25 @@ async def test_actions_tabs_and_errors(local_server, tmp_path):
         assert "Invalid session name" in await _error(client, "session-open", name="../x")
         missing = await _error(client, "wait-for", targetId=tid, text="never there", timeout=0.5)
         assert "Timed out" in missing
+
+
+async def test_parallel_downloads_with_one_name_keep_both_files(local_server, tmp_path):
+    async with _server(tmp_path) as client:
+        opened = (await _call(client, "session-open")).structured_content
+        sid, first = opened["sessionId"], opened["targetId"]
+        url = f"{local_server}/download_late.html"
+        second = (await _call(client, "tab-open", sessionId=sid, url=url)).structured_content
+        await _call(client, "navigate", targetId=first, url=url)
+        refs = [
+            _ref(await _snapshot(client, t), "link", "Report") for t in (first, second["targetId"])
+        ]
+        results = await asyncio.gather(
+            _call(client, "download", targetId=first, ref=refs[0], human=False),
+            _call(client, "download", targetId=second["targetId"], ref=refs[1], human=False),
+        )
+        paths = {Path(r.structured_content["path"]) for r in results}
+        assert {p.name for p in paths} == {"report.csv", "report (1).csv"}
+        assert all(p.read_bytes() == DOWNLOAD_BODY for p in paths)
 
 
 _LISTEN = """

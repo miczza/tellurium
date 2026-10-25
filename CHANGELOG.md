@@ -19,7 +19,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`select-option` presses arrow keys on the focused list). `press` sends the key
   codes Chrome acts on (Enter submits) and refuses an unknown key.
   A named session is a `Session` in `~/.tellurium/sessions/<name>` (same
-  cookies, storage and seed next time); downloads go to `~/.tellurium/downloads/`;
+  cookies, storage and seed next time); downloads go to `~/.tellurium/downloads/` (each name reserved
+  atomically, so parallel downloads of `report.csv` keep both files);
   `TELLURIUM_HOME` moves both. Domain errors come back as `isError` results that
   tell the agent what to do next (stale ref: take a new snapshot; covered
   element: what is on top; page too large: use `selector=` or

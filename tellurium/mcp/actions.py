@@ -175,7 +175,11 @@ async def _download(pool: Any, args: dict[str, Any]) -> Reply:
     download = await info.value
     folder = pool.config.downloads_dir
     target = await asyncio.to_thread(_free_path, folder, download.suggested_filename)
-    saved = await download.save_as(target, timeout=timeout)
+    try:
+        saved = await download.save_as(target, timeout=timeout)
+    except BaseException:
+        await asyncio.to_thread(target.unlink, missing_ok=True)  # give the name back
+        raise
     size = await asyncio.to_thread(lambda: saved.stat().st_size)
     data = {
         "targetId": args["targetId"],
@@ -189,17 +193,21 @@ async def _download(pool: Any, args: dict[str, Any]) -> Reply:
 
 
 def _free_path(folder: Path, suggested: str) -> Path:
-    """``folder/<name>`` not yet taken: ``report.csv``, ``report (1).csv``, …"""
+    """Reserve ``folder/<name>``: ``report.csv``, else ``report (1).csv``, … The
+    file is created empty and exclusively, so two downloads never get one name."""
     folder.mkdir(parents=True, exist_ok=True)
     name = Path(suggested).name
     if name in ("", ".", ".."):
         name = "download"
     stem, suffix = Path(name).stem, Path(name).suffix
     candidate, n = folder / name, 0
-    while candidate.exists():
-        n += 1
-        candidate = folder / f"{stem} ({n}){suffix}"
-    return candidate
+    while True:
+        try:
+            with open(candidate, "x"):
+                return candidate
+        except FileExistsError:
+            n += 1
+            candidate = folder / f"{stem} ({n}){suffix}"
 
 
 _REF = param("string", "Snapshot ref, e.g. e12.")

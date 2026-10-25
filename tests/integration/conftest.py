@@ -17,6 +17,7 @@ class _FixtureHandler(http.server.SimpleHTTPRequestHandler):
     * ``/redirect/<path>`` — a 302 to ``/<path>``
     * ``/download/<name>`` — an attachment named *name* (``DOWNLOAD_BODY``)
     * ``/download-slow/<name>`` — an attachment trickling for ~30 s
+    * ``/download-late/<ms>/<name>`` — an attachment whose body comes after *ms*
     """
 
     def __init__(self, *a, **kw):
@@ -30,6 +31,9 @@ class _FixtureHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if len(parts) >= 4 and parts[1] == "download-late":
+            self._attachment(urllib.parse.unquote(parts[3]), slow=False, late=int(parts[2]))
+            return
         if len(parts) >= 3 and parts[1] in ("download", "download-slow"):
             name = urllib.parse.unquote(parts[2])
             self._attachment(name, slow=parts[1] == "download-slow")
@@ -42,13 +46,15 @@ class _FixtureHandler(http.server.SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
-    def _attachment(self, name, slow):
+    def _attachment(self, name, slow, late=0):
         chunks = [b"x" * 1024] * 300 if slow else [DOWNLOAD_BODY]
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Disposition", f'attachment; filename="{name}"')
         self.send_header("Content-Length", str(sum(map(len, chunks))))
         self.end_headers()
+        self.wfile.flush()
+        time.sleep(late / 1000)
         try:
             for chunk in chunks:
                 self.wfile.write(chunk)
