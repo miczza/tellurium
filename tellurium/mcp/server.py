@@ -11,6 +11,7 @@ import asyncio
 import gc
 import logging
 import os
+import select
 import signal
 import sys
 from collections.abc import Awaitable, Callable, Iterable
@@ -48,7 +49,11 @@ More tabs: tab-open, tab-list (popups show up there), tab-close.
 session-close saves a named session; every session is saved when the server stops.
 """
 
-Transport = Callable[[Server[Any]], Awaitable[None]]
+# A transport serves *server* until its client goes; it sets the event when it
+# learns the client is gone without the server loop noticing.
+Transport = Callable[[Server[Any], asyncio.Event], Awaitable[None]]
+# How often the stdio transport checks that the client still reads its replies.
+READER_POLL = 0.5
 
 
 def build_tools(config: ServerConfig) -> list[Tool]:
@@ -92,9 +97,30 @@ def build_server(pool: Any, tools: Iterable[Tool]) -> Server[Any]:
     )
 
 
-async def _stdio(server: Server[Any]) -> None:
-    async with stdio_server() as (read, write):
-        await server.run(read, write, server.create_initialization_options())
+async def _stdio(server: Server[Any], stop: asyncio.Event) -> None:
+    # Our own handle on the reply pipe, taken before the SDK moves fd 1 aside.
+    watched = os.dup(sys.stdout.fileno())
+    watcher = asyncio.ensure_future(_until_reader_gone(watched, stop))
+    try:
+        async with stdio_server() as (read, write):
+            await server.run(read, write, server.create_initialization_options())
+    finally:
+        watcher.cancel()
+        os.close(watched)
+
+
+async def _until_reader_gone(fd: int, stop: asyncio.Event) -> None:
+    """Set *stop* once nobody reads the pipe *fd* writes to (a client that closed
+    only its end of our stdout): replies could never arrive. POSIX pipes report
+    that as POLLERR on the writing end, without writing anything."""
+    if not hasattr(select, "poll"):
+        return  # Windows: the next reply fails instead
+    poller = select.poll()
+    poller.register(fd, 0)  # POLLERR / POLLHUP / POLLNVAL are always reported
+    while not poller.poll(0):
+        await asyncio.sleep(READER_POLL)
+    logger.warning("the client stopped reading replies: shutting down")
+    stop.set()
 
 
 TRANSPORTS: dict[str, Transport] = {"stdio": _stdio}
@@ -108,7 +134,8 @@ async def serve(
     run_transport = TRANSPORTS[transport]
     stop = stop or asyncio.Event()
     async with SessionPool(config) as pool:
-        serving = asyncio.ensure_future(run_transport(build_server(pool, build_tools(config))))
+        server = build_server(pool, build_tools(config))
+        serving = asyncio.ensure_future(run_transport(server, stop))
         stopping = asyncio.ensure_future(stop.wait())
         try:
             await asyncio.wait({serving, stopping}, return_when=asyncio.FIRST_COMPLETED)

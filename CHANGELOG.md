@@ -30,7 +30,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   element: what is on top; page too large: use `selector=` or
   `interactive=true`; an element that cannot take focus, an invalid URL, a
   selector with no match, a session whose profile another process holds).
-  Closing stdin, SIGTERM or SIGINT closes every browser
+  Closing stdin, closing only the reading end of the server's stdout,
+  SIGTERM or SIGINT closes every browser
   and saves every named session, those still launching included (a launch gets
   30 s, then is cancelled and rolled back); a `session-close` cut by its timeout
   keeps closing and the session leaves the pool only once closed.

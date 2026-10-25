@@ -185,7 +185,8 @@ storage, fingerprint seed). Without a name the session is throwaway.
 - Errors come back as tool errors that say what to do: a stale ref asks for a
   new snapshot, a covered element names what is on top, a page too large to
   snapshot suggests `selector=` or `interactive=true`.
-- When the client disconnects, or on SIGTERM/SIGINT, every browser is closed
+- When the client disconnects (or only stops reading replies), or on
+  SIGTERM/SIGINT, every browser is closed
   and every named session saved.
 - `navigate` and `tab-open` open only `http`, `https`, `about:blank` and `data:`
   URLs. `file:` (local files), `chrome:`, `chrome-extension:`, `devtools:`,

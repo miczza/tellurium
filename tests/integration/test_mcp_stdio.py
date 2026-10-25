@@ -400,3 +400,19 @@ def test_sigterm_during_session_open_leaves_nothing_behind(tmp_path, short_tmp, 
         assert list(tmp.iterdir()) == []
     finally:
         _stop(proc)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX pipes")
+def test_client_closing_only_its_reading_end_stops_the_server(tmp_path, short_tmp):
+    proc = _start(tmp_path, short_tmp)
+    try:
+        call = {"name": "session-open", "arguments": {"name": "work"}}
+        opened = _rpc(proc, {"id": 2, "method": "tools/call", "params": call})
+        assert opened["result"]["isError"] is False
+        proc.stdout.close()  # stdin stays open: only the replies have nowhere to go
+        assert proc.wait(timeout=20) == 0, proc.stderr.read()
+        assert _chrome_using(tmp_path / "sessions" / "work") == 0
+        assert (tmp_path / "sessions" / "work" / "session.json").is_file()
+        assert list(short_tmp.iterdir()) == []
+    finally:
+        _stop(proc)
