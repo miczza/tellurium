@@ -13,6 +13,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `Authorization: Bearer <token>`, loopback included, compared in constant time; a
   token in the URL is refused; `Origin` must be absent or allowlisted and `Host` must
   name the bind address (loopback names on loopback), against DNS rebinding.
+- `tellurium mcp`: a named session is held by one MCP client at a time; another client
+  opening the same name gets a clear error instead of a second Chrome on the profile.
 - `tellurium mcp [--headed] [--allow-local-urls]`: tellurium as an MCP server over stdio (extra
   `tellurium[mcp]`, official `mcp` SDK; without the extra the command prints the
   install line). Twenty kebab-case tools: `session-open/list/close`,

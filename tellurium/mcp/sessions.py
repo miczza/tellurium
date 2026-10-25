@@ -18,6 +18,7 @@ from typing import Any
 from tellurium.browser.browser import Browser
 from tellurium.browser.tab import Tab
 from tellurium.mcp import page_state, urls
+from tellurium.mcp.claims import SessionClaims
 from tellurium.mcp.config import ServerConfig
 from tellurium.mcp.results import Reply, ToolError
 from tellurium.mcp.tool import Tool, param
@@ -60,10 +61,13 @@ class SessionPool:
 
     Launches and closes run as tasks the pool keeps: a tool call that times out
     or a shutdown that comes mid-launch never leaves a browser nobody closes.
+    *claims*, shared by the pools of one server, keeps a named session to one
+    pool at a time.
     """
 
-    def __init__(self, config: ServerConfig):
+    def __init__(self, config: ServerConfig, claims: SessionClaims | None = None):
         self.config = config
+        self._claims = claims or SessionClaims()
         self._sessions: dict[str, BrowserSession] = {}
         self._tabs: dict[str, tuple[BrowserSession, Tab]] = {}
         self._lock = asyncio.Lock()  # one launch at a time: one profile, one Chrome
@@ -119,9 +123,11 @@ class SessionPool:
 
     async def _launch_named(self, name: str) -> BrowserSession:
         path = str(self.config.sessions_dir / name)
-        session = await asyncio.to_thread(Session, name, path=path)
+        self._claims.take(name, self)
         stack = AsyncExitStack()
+        stack.callback(self._claims.release, name, self)  # last out: after the save and close
         try:
+            session = await asyncio.to_thread(Session, name, path=path)
             browser = await stack.enter_async_context(session.start(**self._launch_options()))
             await asyncio.to_thread(session.save)  # the seed survives a crash
         except BaseException:
