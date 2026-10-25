@@ -56,6 +56,39 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and saves every named session, those still launching included (a launch gets
   30 s, then is cancelled and rolled back); a `session-close` cut by its timeout
   keeps closing and the session leaves the pool only once closed.
+- `Tab.snapshot()` reads cross-site iframes (OOPIFs) too: their content is
+  stitched under their `iframe` line, read through the frame's own CDP session
+  (the one stealth auto-attach holds, else one attached for it, which Chrome
+  detaches with the frame or the tab). The `- iframe "<url>" [oopif]` line is
+  left only for a frame that cannot be reached; a frame whose renderer does not
+  answer within the time left of `snapshot_timeout` (a script stuck in a loop)
+  shows as `- iframe "<url>" [oopif: not responding]` and the rest of the page
+  still arrives within the limit. `max_nodes` bounds the cross-site iframes too:
+  each frame is counted before its tree is read and gets what the page left;
+  one over it shows as `- iframe "<url>" [oopif: too large, N nodes]` and the
+  rest of the page still arrives (over the limit in the page's own renderer,
+  `SnapshotTooLargeError` as before). Refs of OOPIF nodes resolve and
+  act through that session and are bound to the frame's document (a ref whose
+  frame went away, or loaded another document, even in a new renderer whose
+  backend ids start again, raises `StaleElementError`; later snapshots hand out
+  new refs); `Element` boxes are mapped up to the tab through the
+  affine map of each `<iframe>` content quad (border, padding, CSS zoom and 2D
+  transforms such as `scale()` or `rotate()` alike), and the hit check before a
+  pointer press (`human=True` clicks, `hover`, `drag_to`) checks every document
+  on the way at the point mapped back into it: the press reaches the target or
+  raises `ElementNotHittableError`, never another element. A cross-site iframe
+  drawn in perspective or edge-on takes no pointer action
+  (`ElementNotHittableError`).
+- CDP transport: `Session.session_id`, `Session.router`, `Session.closed` and
+  `Session.auto_attaches` (whether `Target.setAutoAttach` is on);
+  `SessionRouter.session_for_target(target_id)` and `wait_for_target()` (the
+  router records the target of every attached session); `SessionRouter.attach()`
+  takes `via=` (attach through a page session) and `timeout=` (a session Chrome
+  opens after the deadline or a cancellation is detached), `detach()` takes
+  `via=` and closes the session at once.
+- The handle of an `Element` in a cross-site iframe is released on that
+  iframe's session (dropped, `release()`, or with its group on navigation and
+  `Tab.close()`), not on the tab's, where it stayed alive with its document.
 - `Tab.snapshot()` / `Tab.snapshot_nodes()`: the accessibility snapshot of the
   tab (`interactive=`, `selector=`, `depth=`, `max_chars=`, plus `max_nodes=`
   and `snapshot_timeout=`). `Tab.ref("e3")` and `Tab.select("@e3")` turn a
@@ -238,6 +271,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   engine owns its extension directory and deletes it when it goes away with its
   `Browser` (after `close()` or a failed launch) or at interpreter exit;
   `StealthEngine.close()` deletes it at once.
+- The hit check before a pointer press (`human=True` clicks, `hover`,
+  `drag_to`) asked Chrome about the wrong point once the page was scrolled
+  (`DOM.getNodeForLocation` takes document coordinates, not viewport ones), so
+  a target below the fold raised `ElementNotHittableError` or was checked
+  against another spot; the frame's scroll is now added.
 - `Element.click(human=True)`, `hover()`, `drag_to()` and
   `scroll_into_view(human=True)` take the element's box from Chrome's layout
   (`DOM.getContentQuads`, new `tellurium.browser.geometry`): page coordinates

@@ -1,25 +1,30 @@
 """Accessibility snapshot of a page, compact enough for an LLM.
 
 ``Accessibility.getFullAXTree`` (or ``queryAXTree`` for a ``selector=``) gives
-the AX nodes; pure functions prune them and render lines such as
-``- textbox "Email" [ref=e5]: "ada@example.com"``. Same-process iframes are
-stitched under their ``iframe`` node, an OOPIF shows as ``- iframe "<url>"
-[oopif]``. Refs come from the tab's :class:`~tellurium.browser.refs.RefMap`.
-No ``Runtime.enable``: only the Accessibility, DOM and Memory domains.
+the AX nodes; pure functions prune them into :class:`SnapshotNode` trees, which
+:mod:`~tellurium.browser.snapshot_text` renders as lines. Same-process iframes are
+stitched under their ``iframe`` node, and so are cross-site ones (OOPIFs), read
+through their own session; an OOPIF that cannot be reached shows as
+``- iframe "<url>" [oopif]``, one that does not answer within the time left of
+``snapshot_timeout`` as ``[oopif: not responding]``, one with more DOM nodes than
+``max_nodes`` leaves it as ``[oopif: too large, N nodes]`` (``max_nodes`` bounds the
+page's own renderer: over it, an error). Refs come from the tab's
+:class:`~tellurium.browser.refs.RefMap`. No ``Runtime.enable``: only the
+Accessibility, DOM and Target domains.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
-import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin
 
+from tellurium.browser import geometry
 from tellurium.browser.handles import StaleElementError
 from tellurium.browser.refs import pending_ref
+from tellurium.browser.snapshot_text import fuse, render, squash
 from tellurium.cdp.types import CDPError
 
 if TYPE_CHECKING:
@@ -35,6 +40,11 @@ MAX_DOM_NODES = 50_000
 FETCH_TIMEOUT = 5.0
 # Iframes nested deeper than this are shown without their content.
 _MAX_FRAME_NESTING = 8
+# Cross-site iframes must answer within this share of ``snapshot_timeout``: the rest
+# is left for building the snapshot of the page around them.
+_OOPIF_SHARE = 0.8
+# Wait for a cross-site iframe that auto-attach is attaching, before attaching it.
+_AUTO_ATTACH_WAIT = 1.0
 _DISABLE_TIMEOUT = 0.2  # sent either way: only the wait for the answer is cut
 # AX nesting walked at most, across stitched iframes too: two Python frames per
 # level keep the recursion far from the interpreter's limit (1000).
@@ -51,22 +61,39 @@ _INTERACTIVE = frozenset(
     "button link textbox searchbox checkbox radio switch combobox listbox option menuitem"
     " menuitemcheckbox menuitemradio slider spinbutton tab treeitem DisclosureTriangle".split()
 )
-_SPACES = re.compile(r"\s+")
-# Page text longer than this is cut in the rendering, with a ``[+N chars]`` signal.
-_MAX_TEXT = 300
-# Left raw by json.dumps: C1 controls, bidi marks/overrides/isolates, separators.
-_UNSAFE = re.compile("[\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]")
 
 
 class SnapshotTooLargeError(RuntimeError):
     """The page is over the snapshot size limit: snapshot a part with ``selector=``."""
 
 
+class _Unread(str):
+    """URL of a cross-site iframe left out of the snapshot; *state* says why."""
+
+    def __new__(cls, url: str, state: str) -> _Unread:
+        unread = super().__new__(cls, url)
+        unread.state = state
+        return unread
+
+
+class _TooLarge(Exception):
+    """A cross-site iframe has more DOM nodes than ``max_nodes`` leaves it."""
+
+
+@dataclass
+class _Bounds:
+    """What the cross-site iframes of one snapshot may still take: until *deadline*
+    (loop time) to answer, *nodes* DOM nodes under ``max_nodes``."""
+
+    deadline: float | None = None
+    nodes: float = float("inf")
+
+
 @dataclass
 class SnapshotNode:
     """One node of a snapshot. *ref* is ``None`` for text (``role == "text"``) and
-    for an OOPIF placeholder (``states == {"oopif": True}``, URL in *name*);
-    *states* may hold checked, pressed, expanded, disabled, selected, level."""
+    for an OOPIF placeholder (``states["oopif"]`` is ``True`` or why it was left out,
+    URL in *name*); *states* may hold checked, pressed, expanded, disabled, selected, level."""
 
     ref: str | None
     role: str
@@ -79,10 +106,16 @@ class SnapshotNode:
 @dataclass
 class AXTree:
     """The AX nodes of one document; *frames* maps an ``<iframe>``'s backend node id
-    to its document's tree (same process) or its URL (OOPIF, not fetched)."""
+    to its document's tree or its URL (an OOPIF that could not be reached).
+    *owner* names the renderer session read (``""``: the one snapshotted),
+    *session* is that session, *document* the loader id of an OOPIF's document,
+    read before its tree; none of them is in the JSON."""
 
     nodes: list[dict[str, Any]]
     frames: dict[int, AXTree | str] = field(default_factory=dict)
+    owner: str = ""
+    session: Any = field(default=None, repr=False, compare=False)
+    document: str = ""
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> AXTree:
@@ -110,10 +143,45 @@ def _document_url(nodes: list[dict[str, Any]]) -> str:
     return str(_props(next((n for n in nodes if _role(n) == "RootWebArea"), {})).get("url") or "")
 
 
+async def _oopif_session(session: Session, frame_id: str, timeout: float) -> Session:
+    """The session of the cross-site iframe *frame_id* under *session*: the one already
+    attached (stealth auto-attach, an earlier snapshot), else a new one attached
+    through *session*, which Chrome detaches with the frame or the tab. Raises
+    ``CDPError``, ``ConnectionError`` or ``TimeoutError``."""
+    router = session.router
+    child = router.session_for_target(frame_id)
+    if child is None and session.auto_attaches:  # Chrome is attaching it for the engine
+        child = await router.wait_for_target(frame_id, min(timeout, _AUTO_ATTACH_WAIT))
+    if child is None:
+        mine = await router.attach(frame_id, via=session, timeout=timeout)
+        child = router.session_for_target(frame_id) or mine
+        if child is not mine:  # attached meanwhile by someone else: one session per frame
+            await router.detach(mine, via=session)
+    geometry.link_frame(child, session, frame_id)
+    return child
+
+
+async def _oopif_tree(session: Session, frame_id: str, sub: dict) -> AXTree:
+    """The tree of the cross-site iframe *frame_id*, with its document's loader id."""
+    timeout, bounds = sub["timeout"], sub["_bounds"]
+    child = await _oopif_session(session, frame_id, timeout)
+    if bounds is not None and bounds.nodes != float("inf"):  # counted before it is read
+        if (count := await _count_nodes(child, timeout)) > bounds.nodes:
+            raise _TooLarge(count)
+        bounds.nodes -= count
+    loaded = await _send(child, "Page.getFrameTree", {}, timeout)
+    tree = await fetch_tree(child, **sub, _owner=child.session_id or "")
+    tree.document = str(loaded["frameTree"]["frame"].get("loaderId") or "")
+    return tree
+
+
 async def _frame_of(
-    session: Session, bid: int, base_url: str, nesting: int, timeout: float
+    session: Session, bid: int, base_url: str, owner: str, sub: dict
 ) -> AXTree | str | None:
-    """The document of the ``<iframe>`` with backend id *bid*: tree, OOPIF URL or ``None``."""
+    """The document of the ``<iframe>`` with backend id *bid*: tree, OOPIF URL or ``None``.
+    *sub* holds the :func:`fetch_tree` options of the frame; an OOPIF has until the
+    deadline of its ``_bounds`` to answer, its nested frames included."""
+    timeout, bounds = sub["timeout"], sub["_bounds"]
     try:
         described = await _send(session, "DOM.describeNode", {"backendNodeId": bid}, timeout)
     except CDPError:  # detached meanwhile
@@ -121,14 +189,24 @@ async def _frame_of(
     node = described.get("node", {})
     if not (frame_id := node.get("frameId")):
         return None
+    if sub["_nesting"] > _MAX_FRAME_NESTING:  # too deep: shown without content
+        return None
     if "contentDocument" not in node:  # the document lives in another renderer
         attributes = node.get("attributes", [])
         src = dict(zip(attributes[::2], attributes[1::2], strict=False)).get("src", "")
-        return urljoin(base_url, src) if src else "about:blank"
-    if nesting >= _MAX_FRAME_NESTING:  # too deep: shown without content
-        return None
+        url = urljoin(base_url, src) if src else "about:blank"
+        deadline = bounds.deadline if bounds else None
+        left = timeout if deadline is None else deadline - asyncio.get_running_loop().time()
+        try:
+            return await asyncio.wait_for(_oopif_tree(session, frame_id, sub), max(left, 0))
+        except (TimeoutError, asyncio.TimeoutError):  # a renderer stuck in a loop
+            return _Unread(url, "not responding")
+        except _TooLarge as large:  # an ad of 1e5 nodes: left out, the page still shows
+            return _Unread(url, f"too large, {large.args[0]} nodes")
+        except (CDPError, ConnectionError, KeyError):
+            return url
     try:
-        return await fetch_tree(session, frame_id=frame_id, timeout=timeout, _nesting=nesting + 1)
+        return await fetch_tree(session, frame_id=frame_id, **sub, _owner=owner)
     except CDPError:  # the frame went away between the two calls
         return None
 
@@ -140,9 +218,12 @@ async def fetch_tree(
     root: int | None = None,
     timeout: float = SNAPSHOT_TIMEOUT,
     _nesting: int = 0,
+    _owner: str = "",
+    _bounds: _Bounds | None = None,
 ) -> AXTree:
-    """Fetch the AX tree of a document (the main frame by default) and its iframes;
-    with *root* (a backend node id) only that node's subtree (``queryAXTree``)."""
+    """Fetch the AX tree of a document (the main frame by default) and its iframes,
+    cross-site ones too; with *root* (a backend node id) only that node's subtree
+    (``queryAXTree``)."""
     if root is not None:
         method, params = "Accessibility.queryAXTree", {"backendNodeId": root}
     else:
@@ -151,17 +232,14 @@ async def fetch_tree(
     nodes = result.get("nodes", [])
     frames = [n for n in nodes if _role(n) == "Iframe" and not n.get("ignored")]
     iframes = [bid for n in frames if (bid := n.get("backendDOMNodeId"))]
-    tree, base_url = AXTree(nodes=nodes), _document_url(nodes)
+    tree, base_url = AXTree(nodes=nodes, owner=_owner, session=session), _document_url(nodes)
     if iframes:
+        sub = {"timeout": timeout, "_nesting": _nesting + 1, "_bounds": _bounds}
         subs = await asyncio.gather(
-            *(_frame_of(session, b, base_url, _nesting, timeout) for b in iframes)
+            *(_frame_of(session, b, base_url, _owner, sub) for b in iframes)
         )
-        tree.frames = {bid: sub for bid, sub in zip(iframes, subs, strict=True) if sub is not None}
+        tree.frames = {bid: f for bid, f in zip(iframes, subs, strict=True) if f is not None}
     return tree
-
-
-def _text(value: Any) -> str:
-    return _SPACES.sub(" ", str(value)).strip()
 
 
 def _props(node: dict[str, Any]) -> dict[str, Any]:
@@ -213,7 +291,7 @@ class _Pruner:
     def emit(self, node: dict[str, Any], level: int, nesting: int = 0) -> list[SnapshotNode]:
         """The snapshot nodes standing for *node* placed at *level*."""
         role = _role(node)
-        name = _text((node.get("name") or {}).get("value") or "")
+        name = squash((node.get("name") or {}).get("value") or "")
         if role in _DROPPED:
             return []
         if node.get("ignored") or role == "RootWebArea" or (role in _TRANSPARENT and not name):
@@ -233,14 +311,16 @@ class _Pruner:
             return self.children(node, level, nesting)
         value = (node.get("value") or {}).get("value")
         snap = SnapshotNode(
-            ref=self.ref_for(bid, self.frame) if (bid := node.get("backendDOMNodeId")) else None,
+            ref=self.ref_for(bid, self.frame, self.tree.owner)
+            if (bid := node.get("backendDOMNodeId"))
+            else None,
             role=role,
             name=name,
             value=None if value in (None, "") else str(value),
             states=_states(props, role),
         )
         if role not in _LEAVES:
-            snap.children = _fuse(self.children(node, level + 1, nesting), name, snap.value)
+            snap.children = fuse(self.children(node, level + 1, nesting), name, snap.value)
         return [snap]
 
     def iframe(
@@ -249,52 +329,27 @@ class _Pruner:
         # *nesting* carries on into the frame: the limit is for the whole walk
         frame = self.tree.frames.get(node.get("backendDOMNodeId") or 0)
         if isinstance(frame, str):
-            return [SnapshotNode(None, "iframe", frame, states={"oopif": True})]
+            state = frame.state if isinstance(frame, _Unread) else True
+            return [SnapshotNode(None, "iframe", frame, states={"oopif": state})]
         inner = _Pruner(frame, self.ref_for, self.interactive, self.depth) if frame else None
         if self.interactive:
             return inner.walk(None, level, nesting) if inner else []
-        snap = SnapshotNode(self.ref_for(node["backendDOMNodeId"], self.frame), "iframe", name)
+        snap = SnapshotNode(
+            self.ref_for(node["backendDOMNodeId"], self.frame, self.tree.owner), "iframe", name
+        )
         snap.children = inner.walk(None, level + 1, nesting) if inner else []
         return [snap]
 
 
-def _is_text(node: SnapshotNode) -> bool:
-    return node.role == "text" and node.ref is None
-
-
-def _fuse(children: list[SnapshotNode], name: str, value: str | None) -> list[SnapshotNode]:
-    """Fuse adjacent text, collapse its spaces, drop text repeating a name (a label
-    next to its control, the content of a named node)."""
-    fused: list[SnapshotNode] = []
-    for child in children:
-        if _is_text(child) and fused and _is_text(fused[-1]):
-            fused[-1].name += " " + child.name
-        else:
-            fused.append(child)
-    for child in fused:
-        if _is_text(child):
-            child.name = _text(child.name)
-    out = []
-    for i, child in enumerate(fused):
-        if _is_text(child):
-            near = [s.name for s in fused[max(i - 1, 0) : i + 2] if not _is_text(s)]
-            if not child.name or child.name in near:
-                continue
-        out.append(child)
-    if out and all(_is_text(c) for c in out) and " ".join(c.name for c in out) in (name, value):
-        return []
-    return out
-
-
 def build_nodes(
     tree: AXTree,
-    ref_for: Callable[[int, str], str],
+    ref_for: Callable[[int, str, str], str],
     *,
     interactive: bool = False,
     root: int | None = None,
     depth: int | None = None,
 ) -> list[SnapshotNode]:
-    """Prune *tree* into snapshot nodes, naming each ``ref_for(backend_id, frame_id)``.
+    """Prune *tree* into snapshot nodes, naming each ``ref_for(backend_id, frame_id, owner)``.
 
     *interactive* keeps only what an agent can act on; *root* (a backend node
     id) scopes to that node's subtree; *depth* keeps that many levels (text
@@ -303,79 +358,7 @@ def build_nodes(
     if depth is not None and depth < 0:
         raise ValueError(f"depth must be >= 0, got {depth}")
     pruner = _Pruner(tree, ref_for, interactive, float("inf") if depth is None else depth)
-    return _fuse(pruner.walk(root, 0, 0), "", None)
-
-
-def _quote(text: str) -> str:
-    """Page text as a JSON string with control and bidi characters escaped, capped:
-    nothing a page writes can end the quotes, break the line or fake a ref."""
-    extra = len(text) - _MAX_TEXT
-    quoted = json.dumps(text[:_MAX_TEXT] + "…" if extra > 0 else text, ensure_ascii=False)
-    quoted = _UNSAFE.sub(lambda m: f"\\u{ord(m.group()):04x}", quoted)
-    return f"{quoted} [+{extra} chars]" if extra > 0 else quoted
-
-
-def _head(node: SnapshotNode) -> str:
-    parts = [node.role]
-    if node.name:
-        parts.append(_quote(node.name))
-    for key, state in node.states.items():
-        if key == "oopif":
-            parts.append("[oopif]")
-        elif key == "level":
-            parts.append(f"[level={state}]")
-        elif state is True:
-            parts.append(f"[{key}]")
-        elif key == "expanded" or state == "mixed":
-            parts.append(f"[{key}={str(state).lower()}]")
-    if node.ref:
-        parts.append(f"[ref={node.ref}]")
-    return " ".join(parts)
-
-
-def _lines(nodes: list[SnapshotNode], indent: str, out: list[str]) -> None:
-    for node in nodes:
-        if _is_text(node):
-            out.append(f"{indent}- text: {_quote(node.name)}")
-            continue
-        line, children = f"{indent}- {_head(node)}", node.children
-        if node.value is not None:
-            line += f": {_quote(_text(node.value))}"
-        elif len(children) == 1 and _is_text(children[0]):
-            line, children = f"{line}: {_quote(children[0].name)}", []
-        elif children:
-            line += ":"
-        out.append(line)
-        _lines(children, indent + "  ", out)
-
-
-def render(nodes: list[SnapshotNode], *, max_chars: int | None = None) -> str:
-    """Render *nodes* as ``- role "name" [state] [ref=eN]: "value"`` lines.
-
-    With *max_chars*, whole lines are kept while they fit and a last line
-    ``- [truncated: N more lines; ...]`` says what was cut; the result never
-    exceeds *max_chars* (shorter signals when it is tiny).
-    """
-    if max_chars is not None and max_chars < 1:
-        raise ValueError(f"max_chars must be >= 1, got {max_chars}")
-    lines: list[str] = []
-    _lines(nodes, "", lines)
-    text = "\n".join(lines)
-    if max_chars is None or len(text) <= max_chars:
-        return text
-    sizes = [0]
-    for line in lines:
-        sizes.append(sizes[-1] + len(line) + 1)
-    for marker in (
-        "- [truncated: {} more lines; narrow with selector=, depth= or interactive=True]",
-        "- [truncated: {} more lines]",
-        "- [truncated]",
-    ):
-        for kept in range(len(lines) - 1, -1, -1):
-            signal = marker.format(len(lines) - kept)
-            if sizes[kept] + len(signal) <= max_chars:
-                return "\n".join([*lines[:kept], signal])
-    return "…"
+    return fuse(pruner.walk(root, 0, 0), "", None)
 
 
 async def _backend_id_of(session: Session, selector: str, timeout: float) -> int:
@@ -405,19 +388,30 @@ def _too_large(count: int, what: str, max_nodes: int) -> SnapshotTooLargeError:
 
 async def _snapshot_once(
     session: Session, selector: str | None, limits: tuple, timeout: float, **opts: Any
-) -> list[SnapshotNode]:
-    """One snapshot, within ``snapshot_timeout`` from the first command: shadow roots
-    escape the node count, and a renderer busy with an earlier tree delays them all."""
-    seen: dict[str, Any] = {"count": "no", "scope": None}
+) -> tuple[list[SnapshotNode], dict[str, tuple[Session, str]]]:
+    """One snapshot and the OOPIF sessions read, by owner, within ``snapshot_timeout``
+    from the first command: shadow roots escape the node count, and a renderer busy
+    with an earlier tree delays them all."""
+    deadline = asyncio.get_running_loop().time() + limits[1] * _OOPIF_SHARE
+    seen: dict[str, Any] = {"count": "no", "scope": None, "sessions": {}, "deadline": deadline}
     steps = _steps(session, selector, limits[0], seen, timeout, opts)
     try:
-        return await asyncio.wait_for(steps, limits[1])
+        return await asyncio.wait_for(steps, limits[1]), seen["sessions"]
     except asyncio.TimeoutError:
         hint = "a narrower selector= or " if seen["scope"] else ""
         raise SnapshotTooLargeError(
             f"The snapshot took over snapshot_timeout={limits[1]:g} s ({seen['count']} DOM nodes"
             f" counted; shadow DOM is not): pass {hint}a higher snapshot_timeout="
         ) from None
+
+
+def _sessions_of(tree: AXTree) -> dict[str, tuple[Session, str]]:
+    """The OOPIF sessions read for *tree* and the loader id of their documents, by owner."""
+    found = {tree.owner: (tree.session, tree.document)} if tree.owner else {}
+    for sub in tree.frames.values():
+        if isinstance(sub, AXTree):
+            found |= _sessions_of(sub)
+    return found
 
 
 async def _steps(
@@ -431,8 +425,12 @@ async def _steps(
     if over and root is None:
         raise _too_large(count, "The page", max_nodes)
     scope = seen["scope"] = root if over else None
-    tree = await fetch_tree(session, root=scope, timeout=timeout)
-    if scope and (dom := sum(1 for n in tree.nodes if n.get("backendDOMNodeId"))) > max_nodes:
+    limit = float("inf") if max_nodes is None else max_nodes
+    # each cross-site iframe gets what is left; over it, its line says it was left out
+    bounds = _Bounds(seen["deadline"], limit - (0 if scope else count))
+    tree = await fetch_tree(session, root=scope, timeout=timeout, _bounds=bounds)
+    seen["sessions"] = _sessions_of(tree)
+    if scope and (dom := sum(1 for n in tree.nodes if n.get("backendDOMNodeId"))) > limit:
         raise _too_large(dom, "The selected part", max_nodes)
     found = [n for n in tree.nodes if root is not None and n.get("backendDOMNodeId") == root]
     nodes = await asyncio.to_thread(build_nodes, tree, pending_ref, root=root, **opts)
@@ -468,8 +466,10 @@ async def take_snapshot_nodes(
             generation = refs.generation
             opts = {"interactive": interactive, "depth": depth}
             limits = (max_nodes, snapshot_timeout)
-            nodes = await _snapshot_once(session, selector, limits, timeout, **opts)
+            nodes, sessions = await _snapshot_once(session, selector, limits, timeout, **opts)
             if refs.generation == generation:
+                for owner, (frame_session, document) in sessions.items():
+                    refs.bind(owner, frame_session, document)
                 refs.settle(nodes)
                 return nodes
         raise StaleElementError("The page kept navigating while it was being snapshotted")

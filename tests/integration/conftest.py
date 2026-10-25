@@ -85,6 +85,17 @@ def local_server():
     server.shutdown()
 
 
+@pytest.fixture(scope="session")
+def other_server():
+    """The same fixtures from 127.0.0.2: a third site, next to 127.0.0.1 and localhost."""
+    server = http.server.ThreadingHTTPServer(("127.0.0.2", 0), _FixtureHandler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.2:{port}"
+    server.shutdown()
+
+
 @pytest.fixture
 async def browser():
     from tellurium import Browser
@@ -99,6 +110,15 @@ async def stealth_browser():
     from tellurium import Browser
 
     b = await Browser.launch(headless=True, stealth=True)
+    yield b
+    await b.close()
+
+
+@pytest.fixture(params=[False, True], ids=["plain", "stealth"])
+async def any_browser(request):
+    from tellurium import Browser
+
+    b = await Browser.launch(headless=True, stealth=request.param)
     yield b
     await b.close()
 
