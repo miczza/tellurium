@@ -11,7 +11,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   stitched under their `iframe` line, read through the frame's own CDP session
   (the one stealth auto-attach holds, else one attached for it, which Chrome
   detaches with the frame or the tab). The `- iframe "<url>" [oopif]` line is
-  left only for a frame that cannot be reached. Refs of OOPIF nodes resolve and
+  left only for a frame that cannot be reached; a frame whose renderer does not
+  answer within the time left of `snapshot_timeout` (a script stuck in a loop)
+  shows as `- iframe "<url>" [oopif: not responding]` and the rest of the page
+  still arrives within the limit. Refs of OOPIF nodes resolve and
   act through that session and are bound to the frame's document (a ref whose
   frame went away, or loaded another document, even in a new renderer whose
   backend ids start again, raises `StaleElementError`; later snapshots hand out

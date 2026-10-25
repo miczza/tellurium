@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Busy widget</title></head>
+<body>
+  <button id="busy">Busy</button>
+  <script>
+    // Loaded, then stuck for good: its renderer answers no command any more.
+    addEventListener('load', () => setTimeout(() => { for (;;) {} }, 100));
+  </script>
+</body>
+</html>

@@ -1,4 +1,5 @@
-"""Text of a snapshot: the ``- role "name" [state] [ref=eN]: "value"`` lines.
+"""Text of a snapshot: the ``- role "name" [state] [ref=eN]: "value"`` lines, and
+the fusion of the page text pieces between them.
 
 Page text is quoted as JSON with control and bidi characters escaped and long
 strings capped, so nothing a page writes can break a line or fake a ref.
@@ -30,6 +31,30 @@ def is_text(node: SnapshotNode) -> bool:
     return node.role == "text" and node.ref is None
 
 
+def fuse(children: list[SnapshotNode], name: str, value: str | None) -> list[SnapshotNode]:
+    """Fuse adjacent text, collapse its spaces, drop text repeating a name (a label
+    next to its control, the content of a named node)."""
+    fused: list[SnapshotNode] = []
+    for child in children:
+        if is_text(child) and fused and is_text(fused[-1]):
+            fused[-1].name += " " + child.name
+        else:
+            fused.append(child)
+    for child in fused:
+        if is_text(child):
+            child.name = squash(child.name)
+    out = []
+    for i, child in enumerate(fused):
+        if is_text(child):
+            near = [s.name for s in fused[max(i - 1, 0) : i + 2] if not is_text(s)]
+            if not child.name or child.name in near:
+                continue
+        out.append(child)
+    if out and all(is_text(c) for c in out) and " ".join(c.name for c in out) in (name, value):
+        return []
+    return out
+
+
 def _quote(text: str) -> str:
     """Page text as a JSON string with control and bidi characters escaped, capped:
     nothing a page writes can end the quotes, break the line or fake a ref."""
@@ -45,7 +70,7 @@ def _head(node: SnapshotNode) -> str:
         parts.append(_quote(node.name))
     for key, state in node.states.items():
         if key == "oopif":
-            parts.append("[oopif]")
+            parts.append("[oopif]" if state is True else f"[oopif: {state}]")
         elif key == "level":
             parts.append(f"[level={state}]")
         elif state is True:

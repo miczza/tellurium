@@ -307,3 +307,18 @@ async def test_human_click_in_a_scrolled_oopif_in_a_scrolled_page(browser, local
     )
     assert widget_scroll > 0 and await tab.eval("scrollY") > 0
     assert await tab.eval("document.title") == "Host"
+
+
+async def test_stuck_oopif_does_not_hold_the_snapshot(any_browser, local_server):
+    """A third-party frame stuck in a loop answers nothing: it shows as not responding,
+    the rest of the page arrives within snapshot_timeout."""
+    tab = any_browser.main_tab
+    await _open(tab, local_server, "?page=oopif_busy.html")
+    await asyncio.sleep(0.5)  # loaded, then stuck
+    port = local_server.rsplit(":", 1)[1]
+    line = f'- iframe "http://localhost:{port}/oopif_busy.html" [oopif: not responding]'
+    for _ in range(2):  # a second snapshot is not held either
+        started = asyncio.get_running_loop().time()
+        text = await tab.snapshot(snapshot_timeout=3)
+        assert asyncio.get_running_loop().time() - started < 3
+        assert line in text and '- button "Delete account" [ref=' in text

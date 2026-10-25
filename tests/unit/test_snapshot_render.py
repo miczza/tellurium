@@ -180,6 +180,14 @@ def test_oopif_is_a_placeholder_line():
     )
 
 
+
+def test_oopif_that_did_not_answer_says_so():
+    from tellurium.browser.snapshot_text import render
+
+    node = SnapshotNode(None, "iframe", "http://x.test/", states={"oopif": "not responding"})
+    assert render([node]) == '- iframe "http://x.test/" [oopif: not responding]'
+
+
 # ----------------------------------------------------------------------------
 # Hand-made trees for the edge cases
 
