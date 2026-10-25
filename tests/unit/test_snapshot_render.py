@@ -180,7 +180,6 @@ def test_oopif_is_a_placeholder_line():
     )
 
 
-
 def test_oopif_that_did_not_answer_says_so():
     from tellurium.browser.snapshot_text import render
 
