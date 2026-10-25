@@ -75,3 +75,41 @@ def test_default_cap_is_5_mb_of_payload():
 def test_reply_carries_the_image_type():
     result = success(Reply("shot", {"ok": True}, image=b"\xff\xd8", image_type="image/jpeg"))
     assert result.content[1].mime_type == "image/jpeg"
+
+
+async def test_the_jpeg_retries_share_one_time_budget():
+    import asyncio
+    import time
+
+    class _Slow(_Capture):
+        async def __call__(self, fmt, quality, scale):
+            if fmt == "jpeg":
+                await asyncio.sleep(0.15)
+            return await super().__call__(fmt, quality, scale)
+
+    capture = _Slow(png=10**9, jpeg_ratio=1.0)
+    started = time.monotonic()
+    with pytest.raises(ToolError, match="in time"):
+        await screenshots.fit(capture, limit=10, shrink_budget=0.4)
+    assert time.monotonic() - started < 0.6
+    assert len(capture.calls) <= 4
+
+
+async def test_page_metrics_have_their_own_timeout(monkeypatch):
+    import asyncio
+
+    from tellurium.mcp import pages
+
+    class _HungTab:
+        async def send_cdp(self, method, params=None):
+            await asyncio.sleep(60)
+
+    import time
+
+    monkeypatch.setattr(pages, "METRICS_TIMEOUT", 0.05)
+    capture = pages._viewport_capture(_HungTab())
+    for call in (pages._full_page(_HungTab()), capture("jpeg", 80, 0.5)):
+        started = time.monotonic()
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(call, 2)
+        assert time.monotonic() - started < 1  # its own timeout, not the outer one

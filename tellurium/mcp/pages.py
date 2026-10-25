@@ -19,6 +19,9 @@ SNAPSHOT_CHARS = 30_000
 TEXT_CHARS = 20_000
 # Image clients refuse pictures larger than this per side.
 SHOT_MAX = 8000
+# Chrome round trips of a screenshot: one capture, and the page metrics.
+CAPTURE_TIMEOUT = 20.0
+METRICS_TIMEOUT = 5.0
 WAIT_DEFAULT = 10
 WAIT_MAX = 120
 _REF = re.compile(r"@?e\d+")
@@ -112,7 +115,7 @@ async def _screenshot(pool: Any, args: dict[str, Any]) -> Reply:
         if cropped:
             notes.append(f"cropped to {SHOT_MAX} px per side; the page is {width}x{height}")
     else:
-        png = await tab.screenshot(timeout=30)
+        png = await tab.screenshot(timeout=CAPTURE_TIMEOUT)
         capture = _viewport_capture(tab)
     shot = await screenshots.fit(capture, limit=screenshots.SHOT_BYTES, png=png)
     if shot.note:
@@ -130,6 +133,10 @@ async def _screenshot(pool: Any, args: dict[str, Any]) -> Reply:
     return Reply(f"screenshot of {state.url}{note}", data, image=shot.data, image_type=shot.mime)
 
 
+async def _metrics(tab: Tab) -> dict:
+    return await asyncio.wait_for(tab.send_cdp("Page.getLayoutMetrics", {}), METRICS_TIMEOUT)
+
+
 async def _shoot(tab: Tab, fmt: str, quality: int | None, clip: dict | None) -> bytes:
     params: dict[str, Any] = {"format": fmt}
     if quality is not None:
@@ -137,7 +144,7 @@ async def _shoot(tab: Tab, fmt: str, quality: int | None, clip: dict | None) -> 
     if clip is not None:
         params["clip"] = clip
         params["captureBeyondViewport"] = True
-    shot = await asyncio.wait_for(tab.send_cdp("Page.captureScreenshot", params), 30)
+    shot = await asyncio.wait_for(tab.send_cdp("Page.captureScreenshot", params), CAPTURE_TIMEOUT)
     return base64.b64decode(shot["data"])
 
 
@@ -145,7 +152,7 @@ def _viewport_capture(tab: Tab) -> screenshots.Capture:
     async def capture(fmt: str, quality: int | None, scale: float) -> bytes:
         clip = None
         if scale < 1:
-            metrics = await tab.send_cdp("Page.getLayoutMetrics", {})
+            metrics = await _metrics(tab)
             view = metrics.get("cssVisualViewport") or metrics.get("visualViewport") or {}
             clip = {
                 "x": view.get("pageX", 0),
@@ -172,7 +179,7 @@ async def _full_page(tab: Tab) -> tuple[screenshots.Capture, tuple[int, int], bo
     """A capture of the whole page, but at most SHOT_MAX px per side (top-left
     part): image clients refuse larger ones. Also the page size and whether it
     was cut."""
-    metrics = await tab.send_cdp("Page.getLayoutMetrics", {})
+    metrics = await _metrics(tab)
     size = metrics.get("cssContentSize") or metrics.get("contentSize") or {}
     width, height = int(size.get("width", 0)) or 1, int(size.get("height", 0)) or 1
     clip = {"x": 0, "y": 0, "width": min(width, SHOT_MAX), "height": min(height, SHOT_MAX)}

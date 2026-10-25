@@ -39,7 +39,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   opening the same name gets a clear error instead of a second Chrome on the profile.
 - `tellurium mcp` `screenshot`: at most 5 MB of base64 per image. A PNG over the cap is
   captured again as JPEG (lower quality, then smaller scale) and the result says so; the
-  structured result reports `format` and `scale`.
+  structured result reports `format` and `scale`. Each capture and page-metrics call has its own
+  timeout, and the JPEG attempts share a 25 s budget (past it: an error suggesting `ref=`).
+  Over HTTP, replies are plain JSON rather than SSE: SDK clients refuse an SSE event over
+  1 MiB, which a screenshot easily is.
 - `tellurium mcp [--headed] [--allow-local-urls]`: tellurium as an MCP server over stdio (extra
   `tellurium[mcp]`, official `mcp` SDK; without the extra the command prints the
   install line). Twenty kebab-case tools: `session-open/list/close`,

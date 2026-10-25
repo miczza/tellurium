@@ -225,6 +225,41 @@ async def test_a_connection_that_never_finishes_its_headers_is_closed(tmp_path):
         assert closed == b"" or closed.startswith(b"HTTP/1.1 4")
 
 
+async def test_a_2026_envelope_is_told_to_use_the_handshake(tmp_path):
+    """The stateless 2026-07-28 era has no MCP session: refused with the versions
+    we speak, which is what makes the SDK fall back to initialize."""
+    probe = {"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {}}
+    async with _server(tmp_path / "home") as server, httpx2.AsyncClient() as http:
+        headers = {**_ACCEPT, "Authorization": f"Bearer {server.token}"}
+        reply = await http.post(
+            server.url, json=probe, headers={**headers, "MCP-Protocol-Version": "2026-07-28"}
+        )
+        assert reply.status_code == 400
+        error = reply.json()["error"]
+        assert error["code"] == -32022
+        assert error["data"]["supported"] == list(HANDSHAKE_PROTOCOL_VERSIONS)
+        async with _client(server) as client:  # the SDK's default mode probes first
+            assert client.protocol_version == HANDSHAKE_PROTOCOL_VERSIONS[-1]
+
+
+async def test_screenshot_over_the_cap_through_the_client(local_server, tmp_path):
+    async with _server(tmp_path / "home") as server, _client(server) as client:
+        tid = (await _call(client, "session-open"))["targetId"]
+        await _call(client, "navigate", targetId=tid, url=f"{local_server}/noise.html")
+        for _ in range(50):
+            tabs = (await _call(client, "tab-list"))["tabs"]
+            if tabs[0]["title"] == "Noise ready":
+                break
+            await asyncio.sleep(0.1)
+        result = await client.call_tool("screenshot", {"targetId": tid, "fullPage": True})
+        assert not result.is_error, result.content[0].text
+        image = result.content[1]
+        assert image.mime_type == "image/jpeg"
+        assert len(image.data) <= 5 * 1024 * 1024  # base64, as the client receives it
+        assert "over the 5.0 MB cap" in result.content[0].text
+        assert result.structured_content["format"] == "jpeg"
+
+
 async def test_eval_is_off_on_http_unless_allowed(tmp_path):
     async with _server(tmp_path / "home") as server, _client(server) as client:
         assert client.protocol_version in HANDSHAKE_PROTOCOL_VERSIONS  # an MCP session

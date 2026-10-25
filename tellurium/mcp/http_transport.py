@@ -211,7 +211,12 @@ async def serve(config: ServerConfig, stop: asyncio.Event) -> bool:
                 None, build_tools(config), use_pool=lambda ctx: clients.use(client_id(ctx))
             )
             manager = StreamableHTTPSessionManager(
-                server, session_idle_timeout=http.idle_timeout or None
+                server,
+                # Replies as plain JSON, not SSE: SDK clients refuse an SSE event
+                # over 1 MiB, and a screenshot is up to 5 MB. The server sends no
+                # notifications, so nothing needs the stream.
+                json_response=True,
+                session_idle_timeout=http.idle_timeout or None,
             )
             web = _Uvicorn(
                 uvicorn.Config(
