@@ -23,10 +23,14 @@
     const frame = document.getElementById('login');
     // ?zoom=Z: CSS zoom on the iframe (its document is scaled, its quads are not)
     if (query.has('zoom')) frame.style.zoom = query.get('zoom');
+    // ?transform=T[&origin=O]: a CSS transform on the iframe (its quads turn, its
+    // document's coordinates do not)
+    if (query.has('transform')) frame.style.transform = query.get('transform');
+    if (query.has('origin')) frame.style.transformOrigin = query.get('origin');
     // ?low: the widget below the fold too
     if (query.has('low')) frame.style.top = '1200px';
     const pass = ['nested', 'zoom', 'tall'].filter((key) => query.has(key)).join('&');
-    frame.src = location.protocol + '//' + host + ':' + location.port + '/oopif_login.html'
+    frame.src = location.protocol + '//' + host + ':' + location.port + '/' + (query.get('page') || 'oopif_login.html')
       + (pass ? '?' + pass : '');
   </script>
 </body>

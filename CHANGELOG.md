@@ -13,11 +13,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   detaches with the frame or the tab). The `- iframe "<url>" [oopif]` line is
   left only for a frame that cannot be reached. Refs of OOPIF nodes resolve and
   act through that session (a ref whose frame went away raises
-  `StaleElementError`); `Element` boxes are offset by the `<iframe>` content
-  box up to the tab, and the hit check before a pointer press (`human=True`
-  clicks, `hover`, `drag_to`) checks every document on the way: the press
-  reaches the target or raises `ElementNotHittableError`, never another element.
-  A CSS zoom on a cross-site iframe scales the boxes and the check with it.
+  `StaleElementError`); `Element` boxes are mapped up to the tab through the
+  affine map of each `<iframe>` content quad (border, padding, CSS zoom and 2D
+  transforms such as `scale()` or `rotate()` alike), and the hit check before a
+  pointer press (`human=True` clicks, `hover`, `drag_to`) checks every document
+  on the way at the point mapped back into it: the press reaches the target or
+  raises `ElementNotHittableError`, never another element. A cross-site iframe
+  drawn in perspective or edge-on takes no pointer action
+  (`ElementNotHittableError`).
 - CDP transport: `Session.session_id`, `Session.router`, `Session.closed` and
   `Session.auto_attaches` (whether `Target.setAutoAttach` is on);
   `SessionRouter.session_for_target(target_id)` and `wait_for_target()` (the
