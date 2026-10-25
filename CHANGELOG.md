@@ -7,6 +7,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `tellurium mcp --http`: request guard. The token lives in `~/.tellurium/mcp-token`
+  (32 random bytes, base64url; created atomically with mode 0600; a file other users can
+  read, a symlink or a malformed token is refused). Every request needs
+  `Authorization: Bearer <token>`, loopback included, compared in constant time; a
+  token in the URL is refused; `Origin` must be absent or allowlisted and `Host` must
+  name the bind address (loopback names on loopback), against DNS rebinding.
 - `tellurium mcp [--headed] [--allow-local-urls]`: tellurium as an MCP server over stdio (extra
   `tellurium[mcp]`, official `mcp` SDK; without the extra the command prints the
   install line). Twenty kebab-case tools: `session-open/list/close`,
