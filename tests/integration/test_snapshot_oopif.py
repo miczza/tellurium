@@ -322,3 +322,18 @@ async def test_stuck_oopif_does_not_hold_the_snapshot(any_browser, local_server)
         text = await tab.snapshot(snapshot_timeout=3)
         assert asyncio.get_running_loop().time() - started < 3
         assert line in text and '- button "Delete account" [ref=' in text
+
+
+async def test_oopif_nodes_count_for_max_nodes(browser, local_server):
+    from tellurium.browser.snapshot import SnapshotTooLargeError
+
+    tab = browser.main_tab
+    await _open(tab, local_server, "?page=oopif_huge.html")
+    await _snapshot_with(tab, "row 2999", max_nodes=None)
+    with pytest.raises(SnapshotTooLargeError, match="max_nodes=2000"):
+        await tab.snapshot(max_nodes=2000)
+    # a part of the host leaves the frame out
+    assert '- button "Delete account"' in await tab.snapshot(max_nodes=2000, selector="#danger")
+    with pytest.raises(SnapshotTooLargeError, match="The selected part"):
+        await tab.snapshot(max_nodes=2000, selector="body")  # the frame is in it
+    assert "row 2999" in await tab.snapshot(max_nodes=10_000)

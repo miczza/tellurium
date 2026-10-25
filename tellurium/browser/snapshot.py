@@ -69,6 +69,19 @@ class _NotResponding(str):
     """URL of a cross-site iframe whose renderer did not answer in time."""
 
 
+class _OverMaxNodes(SnapshotTooLargeError):
+    """The cross-site iframes took the page over ``max_nodes``."""
+
+
+@dataclass
+class _Bounds:
+    """What the cross-site iframes of one snapshot may still take: until *deadline*
+    (loop time) to answer, *nodes* DOM nodes under ``max_nodes``."""
+
+    deadline: float | None = None
+    nodes: float = float("inf")
+
+
 @dataclass
 class SnapshotNode:
     """One node of a snapshot. *ref* is ``None`` for text (``role == "text"``) and
@@ -144,8 +157,12 @@ async def _oopif_session(session: Session, frame_id: str, timeout: float) -> Ses
 
 async def _oopif_tree(session: Session, frame_id: str, sub: dict) -> AXTree:
     """The tree of the cross-site iframe *frame_id*, with its document's loader id."""
-    timeout = sub["timeout"]
+    timeout, bounds = sub["timeout"], sub["_bounds"]
     child = await _oopif_session(session, frame_id, timeout)
+    if bounds is not None and bounds.nodes != float("inf"):  # counted before it is read
+        bounds.nodes -= await _count_nodes(child, timeout)
+        if bounds.nodes < 0:
+            raise _OverMaxNodes
     loaded = await _send(child, "Page.getFrameTree", {}, timeout)
     tree = await fetch_tree(child, **sub, _owner=child.session_id or "")
     tree.document = str(loaded["frameTree"]["frame"].get("loaderId") or "")
@@ -153,16 +170,12 @@ async def _oopif_tree(session: Session, frame_id: str, sub: dict) -> AXTree:
 
 
 async def _frame_of(
-    session: Session,
-    bid: int,
-    base_url: str,
-    nesting: int,
-    timeout: float,
-    owner: str,
-    deadline: float | None = None,
+    session: Session, bid: int, base_url: str, owner: str, sub: dict
 ) -> AXTree | str | None:
     """The document of the ``<iframe>`` with backend id *bid*: tree, OOPIF URL or ``None``.
-    An OOPIF has until *deadline* (loop time) to answer, its nested frames included."""
+    *sub* holds the :func:`fetch_tree` options of the frame; an OOPIF has until the
+    deadline of its ``_bounds`` to answer, its nested frames included."""
+    timeout, bounds = sub["timeout"], sub["_bounds"]
     try:
         described = await _send(session, "DOM.describeNode", {"backendNodeId": bid}, timeout)
     except CDPError:  # detached meanwhile
@@ -170,13 +183,13 @@ async def _frame_of(
     node = described.get("node", {})
     if not (frame_id := node.get("frameId")):
         return None
-    if nesting >= _MAX_FRAME_NESTING:  # too deep: shown without content
+    if sub["_nesting"] > _MAX_FRAME_NESTING:  # too deep: shown without content
         return None
-    sub = {"timeout": timeout, "_nesting": nesting + 1, "_deadline": deadline}
     if "contentDocument" not in node:  # the document lives in another renderer
         attributes = node.get("attributes", [])
         src = dict(zip(attributes[::2], attributes[1::2], strict=False)).get("src", "")
         url = urljoin(base_url, src) if src else "about:blank"
+        deadline = bounds.deadline if bounds else None
         left = timeout if deadline is None else deadline - asyncio.get_running_loop().time()
         try:
             return await asyncio.wait_for(_oopif_tree(session, frame_id, sub), max(left, 0))
@@ -198,7 +211,7 @@ async def fetch_tree(
     timeout: float = SNAPSHOT_TIMEOUT,
     _nesting: int = 0,
     _owner: str = "",
-    _deadline: float | None = None,
+    _bounds: _Bounds | None = None,
 ) -> AXTree:
     """Fetch the AX tree of a document (the main frame by default) and its iframes,
     cross-site ones too; with *root* (a backend node id) only that node's subtree
@@ -213,13 +226,11 @@ async def fetch_tree(
     iframes = [bid for n in frames if (bid := n.get("backendDOMNodeId"))]
     tree, base_url = AXTree(nodes=nodes, owner=_owner, session=session), _document_url(nodes)
     if iframes:
+        sub = {"timeout": timeout, "_nesting": _nesting + 1, "_bounds": _bounds}
         subs = await asyncio.gather(
-            *(
-                _frame_of(session, b, base_url, _nesting, timeout, _owner, _deadline)
-                for b in iframes
-            )
+            *(_frame_of(session, b, base_url, _owner, sub) for b in iframes)
         )
-        tree.frames = {bid: sub for bid, sub in zip(iframes, subs, strict=True) if sub is not None}
+        tree.frames = {bid: f for bid, f in zip(iframes, subs, strict=True) if f is not None}
     return tree
 
 
@@ -405,11 +416,22 @@ async def _steps(
     over = max_nodes is not None and count > max_nodes
     if over and root is None:
         raise _too_large(count, "The page", max_nodes)
-    scope = seen["scope"] = root if over else None
-    tree = await fetch_tree(session, root=scope, timeout=timeout, _deadline=seen["deadline"])
+    limit = float("inf") if max_nodes is None else max_nodes
+    # cross-site iframes count too, read one by one: over, a selector may leave them out
+    for scope in dict.fromkeys((root if over else None, root)):
+        seen["scope"], bounds = scope, _Bounds(seen["deadline"], limit - (0 if scope else count))
+        try:
+            tree = await fetch_tree(session, root=scope, timeout=timeout, _bounds=bounds)
+            break
+        except _OverMaxNodes:
+            if scope is None and root is not None:
+                continue
+            what = "The selected part" if scope else "The page"
+            raise _too_large(int(limit - bounds.nodes), what, max_nodes) from None
     seen["sessions"] = _sessions_of(tree)
-    if scope and (dom := sum(1 for n in tree.nodes if n.get("backendDOMNodeId"))) > max_nodes:
-        raise _too_large(dom, "The selected part", max_nodes)
+    if scope and (dom := sum(1 for n in tree.nodes if n.get("backendDOMNodeId"))) > bounds.nodes:
+        dom += limit - bounds.nodes  # with the cross-site iframes
+        raise _too_large(int(dom), "The selected part", max_nodes)
     found = [n for n in tree.nodes if root is not None and n.get("backendDOMNodeId") == root]
     nodes = await asyncio.to_thread(build_nodes, tree, pending_ref, root=root, **opts)
     # an element Chrome ignores (body, html) still scopes; one it does not show is an error

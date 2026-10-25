@@ -14,7 +14,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   left only for a frame that cannot be reached; a frame whose renderer does not
   answer within the time left of `snapshot_timeout` (a script stuck in a loop)
   shows as `- iframe "<url>" [oopif: not responding]` and the rest of the page
-  still arrives within the limit. Refs of OOPIF nodes resolve and
+  still arrives within the limit. The DOM nodes of cross-site iframes count for
+  `max_nodes`, each frame counted before its tree is read: over the limit,
+  `SnapshotTooLargeError`, unless a `selector=` leaves the frame out. Refs of OOPIF nodes resolve and
   act through that session and are bound to the frame's document (a ref whose
   frame went away, or loaded another document, even in a new renderer whose
   backend ids start again, raises `StaleElementError`; later snapshots hand out

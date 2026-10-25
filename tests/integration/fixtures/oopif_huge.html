@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Huge widget</title></head>
+<body>
+  <button id="small">Small part</button>
+  <div id="rows"></div>
+  <script>
+    // 3000 rows: the host is small, the frame alone is over a low max_nodes.
+    const rows = document.getElementById('rows');
+    for (let i = 0; i < 3000; i++) {
+      const row = document.createElement('span');
+      row.textContent = 'row ' + i;
+      rows.appendChild(row);
+    }
+  </script>
+</body>
+</html>
