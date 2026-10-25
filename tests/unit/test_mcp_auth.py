@@ -256,3 +256,68 @@ def test_a_repeated_header_that_decides_access_or_identity_is_400(name):
     refused = _guard().check(scope)
     assert refused is not None and refused.status == 400
     assert name.lower() in refused.message.lower()
+
+
+@posix_only
+@pytest.mark.parametrize("mode", [0o777, 0o775, 0o757])
+def test_home_writable_by_others_is_refused(tmp_path, mode):
+    home = tmp_path / "home"
+    home.mkdir()
+    home.chmod(mode)
+    with pytest.raises(auth.TokenFileError, match="writable by other users"):
+        auth.load_or_create_token(home / "mcp-token")
+    assert not (home / "mcp-token").exists()
+
+
+@posix_only
+def test_home_or_token_of_another_user_is_refused(tmp_path, monkeypatch):
+    path = tmp_path / "home" / "mcp-token"
+    auth.load_or_create_token(path)
+    monkeypatch.setattr(auth.os, "getuid", lambda: os.stat(path).st_uid + 1)
+    with pytest.raises(auth.TokenFileError, match="another user"):
+        auth.load_or_create_token(path)
+
+
+@posix_only
+def test_token_swapped_for_a_symlink_after_the_checks_is_not_read(tmp_path, monkeypatch):
+    """The checks run on the descriptor that is read: swapping the file for a
+    symlink after them changes nothing."""
+    path = tmp_path / "mcp-token"
+    token = auth.load_or_create_token(path)
+    evil = tmp_path / "evil"
+    fd = os.open(evil, os.O_WRONLY | os.O_CREAT, 0o600)
+    os.write(fd, b"E" * 43)
+    os.close(fd)
+    calls = {"lstat": 0}
+
+    def swap():
+        if not path.is_symlink():
+            path.unlink()
+            path.symlink_to(evil)
+
+    real_lstat, real_fstat = os.lstat, os.fstat
+
+    def lstat(p, *a, **kw):
+        info = real_lstat(p, *a, **kw)
+        if str(p) == str(path):
+            calls["lstat"] += 1
+            if calls["lstat"] == 2:  # the check before reading, if any
+                swap()
+        return info
+
+    def fstat(fd):
+        info = real_fstat(fd)
+        swap()
+        return info
+
+    monkeypatch.setattr(auth.os, "lstat", lstat)
+    monkeypatch.setattr(auth.os, "fstat", fstat)
+    assert auth.load_or_create_token(path) == token
+
+
+@posix_only
+def test_token_that_is_a_fifo_is_refused_without_blocking(tmp_path):
+    path = tmp_path / "mcp-token"
+    os.mkfifo(path, 0o600)
+    with pytest.raises(auth.TokenFileError, match="regular file"):
+        auth.load_or_create_token(path)

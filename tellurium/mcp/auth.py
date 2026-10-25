@@ -12,6 +12,7 @@ the server is bound to, which defeats DNS rebinding even before the token.
 
 from __future__ import annotations
 
+import errno
 import hmac
 import ipaddress
 import os
@@ -41,9 +42,11 @@ class TokenFileError(Exception):
 
 def load_or_create_token(path: Path) -> str:
     """The token in *path*, created (32 random bytes, base64url, mode 0600) when
-    missing. A file others can read, a symlink or a malformed token is refused.
+    missing. A folder other users can write to (they could plant their own
+    token), a file they can read, a symlink or a malformed token is refused.
     Blocking: call it through ``asyncio.to_thread``."""
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _check_home(path.parent)
     if not os.path.lexists(path):
         _create(path, secrets.token_urlsafe(TOKEN_BYTES))
     return _read(path)
@@ -68,19 +71,47 @@ def _create(path: Path, token: str) -> None:
         tmp.unlink(missing_ok=True)
 
 
+def _check_home(home: Path) -> None:
+    if os.name != "posix":
+        return
+    info = os.stat(home)
+    if info.st_uid != os.getuid():
+        raise TokenFileError(f"{home} belongs to another user: use a folder of yours")
+    if info.st_mode & 0o022:
+        raise TokenFileError(
+            f"{home} is writable by other users (mode {stat.S_IMODE(info.st_mode):04o}): "
+            f"chmod go-w {home}"
+        )
+
+
 def _read(path: Path) -> str:
-    info = os.lstat(path)
-    if not stat.S_ISREG(info.st_mode):
-        raise TokenFileError(f"{path} is not a regular file: remove it to get a new token")
-    if os.name == "posix":
-        if info.st_mode & 0o077:
+    """The token, with every check made on the descriptor that is read: the
+    file cannot be swapped between the checks and the read."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:  # O_NOFOLLOW met a symlink
             raise TokenFileError(
-                f"{path} is readable by other users (mode {stat.S_IMODE(info.st_mode):04o}): "
-                f"chmod 600 {path}, or delete it for a new token"
-            )
-        if info.st_uid != os.getuid():
-            raise TokenFileError(f"{path} belongs to another user: delete it for a new token")
-    token = path.read_text(encoding="ascii", errors="replace").strip()
+                f"{path} is not a regular file: remove it to get a new token"
+            ) from None
+        raise
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise TokenFileError(f"{path} is not a regular file: remove it to get a new token")
+        if os.name == "posix":
+            if info.st_mode & 0o077:
+                raise TokenFileError(
+                    f"{path} is readable by other users (mode {stat.S_IMODE(info.st_mode):04o}): "
+                    f"chmod 600 {path}, or delete it for a new token"
+                )
+            if info.st_uid != os.getuid():
+                raise TokenFileError(f"{path} belongs to another user: delete it for a new token")
+        raw = os.read(fd, 4096)
+    finally:
+        os.close(fd)
+    token = raw.decode("ascii", errors="replace").strip()
     if not _TOKEN.fullmatch(token):
         raise TokenFileError(
             f"{path} does not hold a token (32+ base64url characters): delete it for a new one"

@@ -20,7 +20,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   The README documents it, with a Claude Code and a Python client example.
 - `tellurium mcp --http`: request guard. The token lives in `~/.tellurium/mcp-token`
   (32 random bytes, base64url; created atomically with mode 0600; a file other users can
-  read, a symlink or a malformed token is refused). Every request needs
+  read, a symlink, a non-regular file or a malformed token is refused, checked on the
+  descriptor that is read; a home folder owned by another user or writable by others is
+  refused too). Every request needs
   `Authorization: Bearer <token>`, loopback included, compared in constant time; a
   token in the URL is refused; any `Origin` is refused (MCP clients are not web pages, no
   CORS) and `Host` must
