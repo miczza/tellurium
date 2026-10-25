@@ -20,6 +20,7 @@ from tellurium.browser.tab import Tab
 from tellurium.mcp import page_state, urls
 from tellurium.mcp.claims import SessionClaims
 from tellurium.mcp.config import ServerConfig
+from tellurium.mcp.limits import SessionBudget
 from tellurium.mcp.results import Reply, ToolError
 from tellurium.mcp.tool import Tool, param
 from tellurium.session import Session
@@ -62,12 +63,21 @@ class SessionPool:
     Launches and closes run as tasks the pool keeps: a tool call that times out
     or a shutdown that comes mid-launch never leaves a browser nobody closes.
     *claims*, shared by the pools of one server, keeps a named session to one
-    pool at a time.
+    pool at a time; *budget*, shared too, caps the browsers of the server, and
+    *limit* those of this pool.
     """
 
-    def __init__(self, config: ServerConfig, claims: SessionClaims | None = None):
+    def __init__(
+        self,
+        config: ServerConfig,
+        claims: SessionClaims | None = None,
+        budget: SessionBudget | None = None,
+        limit: int | None = None,
+    ):
         self.config = config
         self._claims = claims or SessionClaims()
+        self._budget = budget or SessionBudget(None)
+        self._limit = limit
         self._sessions: dict[str, BrowserSession] = {}
         self._tabs: dict[str, tuple[BrowserSession, Tab]] = {}
         self._lock = asyncio.Lock()  # one launch at a time: one profile, one Chrome
@@ -97,13 +107,23 @@ class SessionPool:
                 raise ToolError("The server is shutting down")
             if name is not None and name in self._sessions:
                 return self._sessions[name], False
+            if self._limit is not None and len(self._sessions) >= self._limit:
+                raise ToolError(
+                    f"You have {self._limit} sessions open, the most allowed per client: "
+                    "close one with session-close"
+                )
+            self._budget.take()
             launch = asyncio.ensure_future(self._launch(name))
             self._launching.add(launch)
             launch.add_done_callback(self._launching.discard)
             return await launch, True
 
     async def _launch(self, name: str | None) -> BrowserSession:
-        opened = await (self._launch_named(name) if name else self._launch_temp())
+        try:
+            opened = await (self._launch_named(name) if name else self._launch_temp())
+        except BaseException:
+            self._budget.release()
+            raise
         self._sessions[opened.id] = opened  # in the pool before anyone can cancel us
         return opened
 
@@ -162,7 +182,8 @@ class SessionPool:
         try:
             await closing.close()
         finally:
-            self._sessions.pop(closing.id, None)
+            if self._sessions.pop(closing.id, None) is not None:
+                self._budget.release()
             self._closing.pop(closing.id, None)
             for tid in [t for t, (s, _) in self._tabs.items() if s is closing]:
                 del self._tabs[tid]

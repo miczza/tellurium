@@ -43,6 +43,18 @@ def register(subparsers: Any) -> None:
         action="store_true",
         help="Allow binding --http to a non-loopback address (the network can reach it)",
     )
+    http.add_argument(
+        "--max-sessions-per-client",
+        type=int,
+        metavar="N",
+        help="Browsers one client may run at once (default 4)",
+    )
+    http.add_argument(
+        "--max-sessions",
+        type=int,
+        metavar="N",
+        help="Browsers the whole server may run at once (default 16)",
+    )
     parser.set_defaults(run=main)
 
 
@@ -58,8 +70,9 @@ def main(args: argparse.Namespace) -> None:
         print(INSTALL_HINT, file=sys.stderr)
         sys.exit(2)
     http = _http_config(args) if args.http else None
-    if http is None and (args.idle_timeout is not None or args.allow_remote):
-        _fail("--idle-timeout and --allow-remote need --http")
+    http_only = (args.idle_timeout, args.max_sessions_per_client, args.max_sessions)
+    if http is None and (args.allow_remote or any(v is not None for v in http_only)):
+        _fail("--idle-timeout, --allow-remote and --max-sessions* need --http")
     config = ServerConfig(
         home=default_home(),
         headed=args.headed,
@@ -92,7 +105,17 @@ def _http_config(args: argparse.Namespace) -> Any:
     idle = DEFAULT_IDLE_TIMEOUT if args.idle_timeout is None else args.idle_timeout
     if idle < 0:
         _fail("--idle-timeout must be 0 (never) or a number of seconds")
-    return HttpConfig(host=host, port=port, idle_timeout=idle or None)
+    caps = {}
+    for flag, field in (
+        ("--max-sessions-per-client", "max_sessions_per_client"),
+        ("--max-sessions", "max_sessions"),
+    ):
+        value = getattr(args, field)
+        if value is not None:
+            if value < 1:
+                _fail(f"{flag} must be at least 1")
+            caps[field] = value
+    return HttpConfig(host=host, port=port, idle_timeout=idle or None, **caps)
 
 
 def _fail(message: str) -> None:

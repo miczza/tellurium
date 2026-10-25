@@ -17,7 +17,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from tellurium.mcp.claims import SessionClaims
-from tellurium.mcp.config import DEFAULT_IDLE_TIMEOUT, ServerConfig
+from tellurium.mcp.config import DEFAULT_IDLE_TIMEOUT, HttpConfig, ServerConfig
+from tellurium.mcp.limits import SessionBudget
 from tellurium.mcp.results import ToolError
 from tellurium.mcp.sessions import SessionPool
 
@@ -41,6 +42,9 @@ class ClientPools:
         self.config = config
         self.idle_timeout = idle_timeout or None
         self.claims = SessionClaims()
+        http = config.http or HttpConfig()
+        self.budget = SessionBudget(http.max_sessions)
+        self.per_client = http.max_sessions_per_client
         self._clients: dict[str, _Client] = {}
         self._drops: dict[str, asyncio.Task] = {}
         self._closed = False
@@ -71,7 +75,7 @@ class ClientPools:
             client.last = asyncio.get_running_loop().time()
 
     def _add(self, client_id: str) -> _Client:
-        pool = SessionPool(self.config, claims=self.claims)
+        pool = SessionPool(self.config, self.claims, self.budget, self.per_client)
         client = _Client(pool, last=asyncio.get_running_loop().time())
         if self.idle_timeout is not None:
             client.watchdog = asyncio.ensure_future(self._watch(client_id, client))

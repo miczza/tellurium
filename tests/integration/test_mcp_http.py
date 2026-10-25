@@ -335,6 +335,19 @@ async def test_a_delete_naming_two_sessions_is_refused_and_touches_neither(local
         assert (await b.call("session-list"))["sessions"] == []
 
 
+async def test_browsers_are_capped_per_client_and_per_server(tmp_path):
+    options = ("--max-sessions-per-client", "1", "--max-sessions", "2")
+    async with _server(tmp_path / "home", *options) as server:
+        async with _client(server) as a, _client(server) as b, _client(server) as c:
+            await _call(a, "session-open")
+            assert "most allowed per client" in await _error(a, "session-open")
+            await _call(b, "session-open")
+            assert "server already runs 2 sessions" in await _error(c, "session-open")
+            sid = (await _call(a, "session-list"))["sessions"][0]["sessionId"]
+            await _call(a, "session-close", sessionId=sid)
+            await _call(c, "session-open")  # a's place is free again
+
+
 async def _open_when_free(client: Client, name: str, within: float = 20):
     """session-open *name* as soon as the client holding it has let it go."""
     deadline = time.monotonic() + within

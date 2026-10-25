@@ -45,6 +45,13 @@ def test_http_options(run):
     assert config.http.idle_timeout is None  # 0: never
 
 
+def test_session_caps(run):
+    config, _ = run(
+        "--http", "127.0.0.1:0", "--max-sessions-per-client", "2", "--max-sessions", "5"
+    )
+    assert (config.http.max_sessions_per_client, config.http.max_sessions) == (2, 5)
+
+
 def test_stdio_keeps_eval_on(run):
     config, transport = run()
     assert transport == "stdio" and config.allow_eval is True and config.http is None
@@ -57,6 +64,9 @@ def test_stdio_keeps_eval_on(run):
         (["--http", "8765"], "HOST:PORT"),
         (["--http", "127.0.0.1:1", "--idle-timeout", "-1"], "--idle-timeout"),
         (["--http", "192.168.1.5:8765"], "--allow-remote"),
+        (["--http", "127.0.0.1:1", "--max-sessions", "0"], "--max-sessions"),
+        (["--http", "127.0.0.1:1", "--max-sessions-per-client", "-1"], "--max-sessions-per-client"),
+        (["--max-sessions", "3"], "need --http"),
     ],
 )
 def test_bad_options_exit_with_a_message(run, capsys, argv, message):

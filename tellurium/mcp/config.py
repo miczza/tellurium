@@ -10,6 +10,9 @@ from pathlib import Path
 HOME_ENV = "TELLURIUM_HOME"
 # Seconds without a tool call after which an HTTP client's sessions are closed.
 DEFAULT_IDLE_TIMEOUT = 900.0
+# Browsers (each a Chrome) an HTTP client, and the whole server, may run at once.
+DEFAULT_SESSIONS_PER_CLIENT = 4
+DEFAULT_SESSIONS = 16
 
 
 def default_home() -> Path:
@@ -22,11 +25,14 @@ def default_home() -> Path:
 class HttpConfig:
     """Where ``--http`` listens (port 0: any free one); *idle_timeout* is
     the seconds without a tool call before a client's sessions are closed and
-    saved (``None``: never)."""
+    saved (``None``: never); *max_sessions_per_client* and *max_sessions*
+    cap the browsers of one client and of the server (``None``: no cap)."""
 
     host: str = "127.0.0.1"
     port: int = 8765
     idle_timeout: float | None = DEFAULT_IDLE_TIMEOUT
+    max_sessions_per_client: int | None = DEFAULT_SESSIONS_PER_CLIENT
+    max_sessions: int | None = DEFAULT_SESSIONS
 
 
 @dataclass(frozen=True)

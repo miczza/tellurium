@@ -231,6 +231,10 @@ tellurium mcp --http 127.0.0.1:8765
   (`0.0.0.0:8765`, a LAN IP) is refused without this flag, and with it the
   server prints a warning: anyone on the network who has the token drives
   your browsers.
+- **`--max-sessions-per-client N`** (default 4) and **`--max-sessions N`**
+  (default 16) cap the browsers, each a Chrome, of one client and of the
+  server; past a cap `session-open` says which one, and a closed session
+  frees its place.
 - **`--allow-local-urls`** and **`--headed`** work as on stdio.
 
 Claude Code:

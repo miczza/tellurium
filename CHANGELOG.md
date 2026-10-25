@@ -7,8 +7,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `tellurium mcp --http HOST:PORT [--allow-eval] [--idle-timeout S]
-  [--allow-remote]`: the MCP server over Streamable HTTP (the SDK's session manager under
+- `tellurium mcp --http HOST:PORT [--allow-eval] [--idle-timeout S] [--allow-remote]
+  [--max-sessions-per-client N] [--max-sessions N]`: the MCP server over Streamable HTTP (the SDK's session manager under
   uvicorn, endpoint `/mcp`; port 0 picks a free one, the address is printed on stderr). Each
   MCP client (MCP session) gets its own browsers: it never sees another client's sessions or
   tabs. A client's sessions are closed and saved when it ends its MCP session, after
@@ -17,6 +17,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   other address needs `--allow-remote` and prints a warning. Only handshake-era protocol
   versions are served (they carry the MCP session); a 2026-07-28 request gets the supported
   versions back and SDK clients fall back to `initialize`.
+  At most `--max-sessions-per-client` browsers per client (default 4) and `--max-sessions`
+  for the server (default 16); past them `session-open` says which cap was hit.
   The README documents it, with a Claude Code and a Python client example.
 - `tellurium mcp --http`: request guard. The token lives in `~/.tellurium/mcp-token`
   (32 random bytes, base64url; created atomically with mode 0600; a file other users can
