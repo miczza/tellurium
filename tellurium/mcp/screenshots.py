@@ -17,6 +17,8 @@ _SCALES = (1.0, 0.5, 0.25, 0.125)
 _QUALITIES = (80, 50)
 # Seconds for all the JPEG attempts together: they must fit in the tool's timeout.
 SHRINK_BUDGET = 25.0
+# An attempt is not started with less time than this left: it could not finish.
+MIN_ATTEMPT = 2.0
 
 # (format, quality or None, scale) -> the image bytes.
 Capture = Callable[[str, int | None, float], Awaitable[bytes]]
@@ -42,10 +44,12 @@ async def fit(
     limit: int = SHOT_BYTES,
     png: bytes | None = None,
     shrink_budget: float = SHRINK_BUDGET,
+    min_attempt: float = MIN_ATTEMPT,
 ) -> Shot:
     """The PNG from *capture* (or *png*, already taken) if it fits in *limit*,
-    else the first JPEG that does, all JPEG attempts within *shrink_budget*
-    seconds; a :class:`ToolError` if none does."""
+    else the first JPEG that does. The JPEG attempts share *shrink_budget*
+    seconds: each is cut when the budget ends, and none starts with less than
+    *min_attempt* seconds left. A :class:`ToolError` if none fits."""
     if png is None:
         png = await capture("png", None, 1.0)
     if encoded_size(len(png)) <= limit:
@@ -54,10 +58,11 @@ async def fit(
     deadline = loop.time() + shrink_budget
     for scale in _SCALES:
         for quality in _QUALITIES:
+            left = deadline - loop.time()
             try:
-                data = await asyncio.wait_for(
-                    capture("jpeg", quality, scale), max(deadline - loop.time(), 0)
-                )
+                if left < min_attempt:
+                    raise TimeoutError
+                data = await asyncio.wait_for(capture("jpeg", quality, scale), left)
             except (TimeoutError, asyncio.TimeoutError):
                 raise ToolError(
                     f"Screenshot over {_mb(limit)} and not made smaller in time: take a part "

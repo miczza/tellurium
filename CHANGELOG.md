@@ -42,7 +42,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `tellurium mcp` `screenshot`: at most 5 MB of base64 per image. A PNG over the cap is
   captured again as JPEG (lower quality, then smaller scale) and the result says so; the
   structured result reports `format` and `scale`. Each capture and page-metrics call has its own
-  timeout, and the JPEG attempts share a 25 s budget (past it: an error suggesting `ref=`).
+  timeout, and the JPEG attempts share a 25 s budget: each is cut when it ends, none starts
+  with less than 2 s left (past it: an error suggesting `ref=`).
   Over HTTP, replies are plain JSON rather than SSE: SDK clients refuse an SSE event over
   1 MiB, which a screenshot easily is.
   Over HTTP every tool call ends within 240 s (the SDK client gives up after 300 s without

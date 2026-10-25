@@ -87,12 +87,44 @@ async def test_the_jpeg_retries_share_one_time_budget():
                 await asyncio.sleep(0.15)
             return await super().__call__(fmt, quality, scale)
 
-    capture = _Slow(png=10**9, jpeg_ratio=1.0)
+    # Small fake images: a 1 GB one costs a quarter second to build, outside any budget.
+    capture = _Slow(png=10**4, jpeg_ratio=1.0)
     started = time.monotonic()
     with pytest.raises(ToolError, match="in time"):
-        await screenshots.fit(capture, limit=10, shrink_budget=0.4)
+        await screenshots.fit(capture, limit=10, shrink_budget=0.4, min_attempt=0.05)
     assert time.monotonic() - started < 0.6
     assert len(capture.calls) <= 4
+
+
+async def test_an_attempt_is_cut_at_the_end_of_the_budget():
+    import asyncio
+    import time
+
+    class _Hung(_Capture):
+        async def __call__(self, fmt, quality, scale):
+            if fmt == "jpeg":
+                await asyncio.sleep(30)
+            return await super().__call__(fmt, quality, scale)
+
+    started = time.monotonic()
+    with pytest.raises(ToolError, match="in time"):
+        await screenshots.fit(_Hung(png=10**4), limit=10, shrink_budget=0.3, min_attempt=0.05)
+    assert time.monotonic() - started < 0.5
+
+
+async def test_no_attempt_starts_without_its_minimum_time_left():
+    import asyncio
+
+    class _Slow(_Capture):
+        async def __call__(self, fmt, quality, scale):
+            if fmt == "jpeg":
+                await asyncio.sleep(0.15)
+            return await super().__call__(fmt, quality, scale)
+
+    capture = _Slow(png=10**4, jpeg_ratio=1.0)
+    with pytest.raises(ToolError, match="in time"):
+        await screenshots.fit(capture, limit=10, shrink_budget=0.3, min_attempt=0.2)
+    assert [c[0] for c in capture.calls] == ["png", "jpeg"]  # 0.15 s left < 0.2: stop
 
 
 async def test_page_metrics_have_their_own_timeout(monkeypatch):
