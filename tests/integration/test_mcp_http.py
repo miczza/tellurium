@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import re
 import signal
@@ -256,6 +257,56 @@ async def test_two_clients_do_not_see_each_other(local_server, tmp_path):
             await _call(a, "session-close", sessionId="github")
             reopened = await _call(b, "session-open", name="github")
             assert reopened["created"] is True
+
+
+class _Raw:
+    """An MCP session spoken by hand, so the test knows its Mcp-Session-Id."""
+
+    def __init__(self, server: _Server, http: httpx2.AsyncClient):
+        self.server, self.http, self.id, self._next = server, http, "", 1
+
+    def _headers(self) -> dict[str, str]:
+        auth = {"Authorization": f"Bearer {self.server.token}", **_ACCEPT}
+        return {**auth, "Mcp-Session-Id": self.id} if self.id else auth
+
+    async def start(self) -> _Raw:
+        reply = await self.http.post(self.server.url, json=_INIT, headers=self._headers())
+        self.id = reply.headers["mcp-session-id"]
+        note = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+        await self.http.post(self.server.url, json=note, headers=self._headers())
+        return self
+
+    async def call(self, tool: str, **args) -> dict:
+        self._next += 1
+        body = {
+            "jsonrpc": "2.0",
+            "id": self._next,
+            "method": "tools/call",
+            "params": {"name": tool, "arguments": args},
+        }
+        reply = await self.http.post(self.server.url, json=body, headers=self._headers())
+        text = reply.text
+        if "text/event-stream" in reply.headers.get("content-type", ""):
+            data = [ln[5:] for ln in text.splitlines() if ln.startswith("data:") and ln[5:].strip()]
+            text = data[-1]
+        result = json.loads(text)["result"]
+        assert not result.get("isError"), result
+        return result["structuredContent"]
+
+
+async def test_a_delete_naming_two_sessions_is_refused_and_touches_neither(local_server, tmp_path):
+    async with _server(tmp_path / "home") as server, httpx2.AsyncClient(timeout=60) as http:
+        a, b = await _Raw(server, http).start(), await _Raw(server, http).start()
+        await a.call("session-open")
+        headers = [
+            ("Authorization", f"Bearer {server.token}"),
+            ("Mcp-Session-Id", b.id),
+            ("Mcp-Session-Id", a.id),
+        ]
+        refused = await http.request("DELETE", server.url, headers=headers)
+        assert refused.status_code == 400
+        assert len((await a.call("session-list"))["sessions"]) == 1  # a's Chrome lives on
+        assert (await b.call("session-list"))["sessions"] == []
 
 
 async def _open_when_free(client: Client, name: str, within: float = 20):

@@ -28,6 +28,10 @@ _TOKEN = re.compile(r"[A-Za-z0-9_-]{32,}")
 _URL_TOKEN_KEYS = {"token", "access_token", "authorization", "auth", "bearer"}
 _LOOPBACK_NAMES = frozenset({"localhost", "127.0.0.1", "[::1]"})
 _WILDCARDS = {"0.0.0.0", "::", ""}
+# Headers sent at most once: they decide access, the client or the protocol.
+_SINGLE_HEADERS = frozenset(
+    {b"host", b"origin", b"authorization", b"mcp-session-id", b"mcp-protocol-version"}
+)
 
 
 class TokenFileError(Exception):
@@ -160,8 +164,11 @@ class Guard:
 
     def check(self, scope: dict[str, Any]) -> Refusal | None:
         """``None`` when the HTTP request *scope* may reach MCP, else why not.
-        Order: Host and Origin (a page must learn nothing), the URL, the token,
-        the path."""
+        Order: repeated headers, Host and Origin (a page must learn nothing),
+        the URL, the token, the path."""
+        repeated = _repeated(scope)
+        if repeated:
+            return Refusal(400, f"Header {repeated} sent more than once")
         headers = _headers(scope)
         if not self._host_ok(headers.get("host", "")):
             return Refusal(403, "Host not allowed (this server answers only on its bind address)")
@@ -206,6 +213,19 @@ class Guard:
             return False
         # Constant time over equal-length inputs: no timing tells how much matched.
         return hmac.compare_digest(given.strip().encode(), self.token.encode())
+
+
+def _repeated(scope: dict[str, Any]) -> str | None:
+    """A header that decides access or identity, if it is sent twice: whoever
+    reads the first and whoever reads the last would disagree."""
+    seen: set[bytes] = set()
+    for key, _ in scope.get("headers", []):
+        key = key.lower()
+        if key in _SINGLE_HEADERS:
+            if key in seen:
+                return key.decode("latin-1")
+            seen.add(key)
+    return None
 
 
 def _headers(scope: dict[str, Any]) -> dict[str, str]:

@@ -23,6 +23,7 @@ from mcp.server.streamable_http import MCP_SESSION_ID_HEADER
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp_types import INVALID_REQUEST, UNSUPPORTED_PROTOCOL_VERSION, ErrorData, JSONRPCError
 from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
+from starlette.datastructures import Headers
 
 from tellurium.mcp import auth
 from tellurium.mcp.clients import ClientPools
@@ -34,7 +35,6 @@ logger = logging.getLogger(__name__)
 # How long open connections (a client's event stream) get to finish at shutdown.
 SHUTDOWN_GRACE = 3.0
 _VERSION_HEADER = b"mcp-protocol-version"
-_SESSION_HEADER = MCP_SESSION_ID_HEADER.lower().encode("ascii")
 
 
 class GuardedEndpoint:
@@ -67,9 +67,10 @@ class GuardedEndpoint:
             await self.manager.handle_request(scope, receive, send)
             return
         status = await _status_of(self.manager.handle_request, scope, receive, send)
-        client_id = dict(scope["headers"]).get(_SESSION_HEADER)
+        # The id as the SDK read and validated it (the guard refuses a repeated one).
+        client_id = Headers(scope=scope).get(MCP_SESSION_ID_HEADER)
         if status is not None and status < 400 and client_id:
-            self.clients.forget(client_id.decode("latin-1"))
+            self.clients.forget(client_id)
 
 
 def client_id(ctx: Any) -> str | None:

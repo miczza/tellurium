@@ -24,6 +24,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `Authorization: Bearer <token>`, loopback included, compared in constant time; a
   token in the URL is refused; `Origin` must be absent or allowlisted and `Host` must
   name the bind address (loopback names on loopback), against DNS rebinding.
+  A request repeating `Host`, `Origin`, `Authorization`, `Mcp-Session-Id` or
+  `MCP-Protocol-Version` is refused (400): a `DELETE` naming two sessions cannot end another
+  client's browsers.
 - `tellurium mcp`: a named session is held by one MCP client at a time; another client
   opening the same name gets a clear error instead of a second Chrome on the profile.
 - `tellurium mcp` `screenshot`: at most 5 MB of base64 per image. A PNG over the cap is

@@ -250,3 +250,17 @@ def test_parse_bind_rejects_garbage(text):
 def test_normalize_origins_rejects_non_origins(origin):
     with pytest.raises(ValueError):
         auth.normalize_origins([origin])
+
+
+@pytest.mark.parametrize(
+    "name", ["Mcp-Session-Id", "Authorization", "Host", "Origin", "Mcp-Protocol-Version"]
+)
+def test_a_repeated_header_that_decides_access_or_identity_is_400(name):
+    scope = _scope(_OK)
+    value = {"Mcp-Session-Id": "a", "Origin": "x", "Mcp-Protocol-Version": "2025-11-25"}.get(
+        name, _OK.get(name, "")
+    )
+    scope["headers"] += [(name.lower().encode(), value.encode())] * 2
+    refused = _guard().check(scope)
+    assert refused is not None and refused.status == 400
+    assert name.lower() in refused.message.lower()
