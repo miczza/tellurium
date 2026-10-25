@@ -260,6 +260,68 @@ async def test_screenshot_over_the_cap_through_the_client(local_server, tmp_path
         assert result.structured_content["format"] == "jpeg"
 
 
+async def _dribbler(server: _Server, headers: str, count: int):
+    """*count* connections that send a request head promising a huge body, then
+    one byte of it every 2 s. Returns, per connection, what the server sent and
+    when it closed (None: still open at the end)."""
+    from tellurium.mcp.http_transport import BODY_TIMEOUT
+
+    host, port = server.url.removeprefix("http://").removesuffix("/mcp").rsplit(":", 1)
+    head = (
+        f"POST /mcp HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: application/json\r\n"
+        f"Accept: application/json, text/event-stream\r\n{headers}"
+        "Content-Length: 1000000000\r\n\r\n{"
+    ).encode()
+
+    async def one():
+        reader, writer = await asyncio.open_connection(host, int(port))
+        started = time.monotonic()
+        writer.write(head)
+
+        async def dribble():
+            with contextlib.suppress(ConnectionError, OSError):
+                while True:
+                    await writer.drain()
+                    await asyncio.sleep(2)
+                    writer.write(b" ")
+
+        dribbling = asyncio.ensure_future(dribble())
+        try:
+            got = await asyncio.wait_for(reader.read(), BODY_TIMEOUT + 6)
+            return got, time.monotonic() - started
+        except TimeoutError:
+            return b"", None
+        finally:
+            dribbling.cancel()
+            writer.close()
+
+    return await asyncio.gather(*(one() for _ in range(count)))
+
+
+async def test_refused_connections_are_closed_and_cannot_starve_the_server(tmp_path):
+    """99 tokenless clients dribbling a body (one under the concurrency limit)
+    are answered 401 and dropped at once; a client with the token still gets in."""
+    async with _server(tmp_path / "home") as server:
+        flood = asyncio.ensure_future(_dribbler(server, "", 99))
+        await asyncio.sleep(1)
+        async with _client(server) as client:
+            assert (await _call(client, "session-list"))["sessions"] == []
+        for got, closed_after in await flood:
+            assert got.startswith(b"HTTP/1.1 401"), got[:80]
+            assert b"connection: close" in got.lower()
+            assert closed_after is not None and closed_after < 3
+
+
+async def test_a_body_that_never_ends_is_cut_at_the_deadline(tmp_path):
+    from tellurium.mcp.http_transport import BODY_TIMEOUT
+
+    async with _server(tmp_path / "home") as server:
+        auth = f"Authorization: Bearer {server.token}\r\n"
+        ((got, closed_after),) = await _dribbler(server, auth, 1)
+        assert closed_after is not None and closed_after < BODY_TIMEOUT + 3
+        assert not got.startswith(b"HTTP/1.1 2")
+
+
 async def test_eval_is_off_on_http_unless_allowed(tmp_path):
     async with _server(tmp_path / "home") as server, _client(server) as client:
         assert client.protocol_version in HANDSHAKE_PROTOCOL_VERSIONS  # an MCP session
