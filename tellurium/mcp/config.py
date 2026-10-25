@@ -20,14 +20,12 @@ def default_home() -> Path:
 
 @dataclass(frozen=True)
 class HttpConfig:
-    """Where ``--http`` listens (port 0: any free one) and who may call it:
-    *origins* are the allowlisted browser origins (normalized), *idle_timeout*
+    """Where ``--http`` listens (port 0: any free one); *idle_timeout* is
     the seconds without a tool call before a client's sessions are closed and
     saved (``None``: never)."""
 
     host: str = "127.0.0.1"
     port: int = 8765
-    origins: frozenset[str] = frozenset()
     idle_timeout: float | None = DEFAULT_IDLE_TIMEOUT
 
 

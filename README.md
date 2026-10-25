@@ -223,11 +223,10 @@ tellurium mcp --http 127.0.0.1:8765
   saved when it disconnects, and when the server stops.
 - **`--allow-eval`**: `eval` is not offered over HTTP unless you pass this
   (on stdio it always is).
-- **`--allow-origin ORIGIN`** (repeatable, e.g. `https://app.example`): a
-  browser always sends `Origin`. Requests without one (non-browser clients)
-  pass; any other origin gets 403, so a web page cannot drive the server. The
-  `Host` header must name the bind address (any loopback name on a loopback
-  bind), against DNS rebinding.
+- **No web pages.** MCP clients are not web pages, so any request carrying
+  `Origin` (which browsers add to what a page sends) gets 403, and there is
+  no CORS. The `Host` header must name the bind address (any loopback name
+  on a loopback bind), against DNS rebinding.
 - **`--allow-remote`**: the default bind is loopback only. Any other address
   (`0.0.0.0:8765`, a LAN IP) is refused without this flag, and with it the
   server prints a warning: anyone on the network who has the token drives

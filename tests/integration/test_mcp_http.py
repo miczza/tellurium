@@ -3,7 +3,7 @@ over Streamable HTTP and by raw HTTP requests, with a real (headless) Chrome
 on local fixtures.
 
 What the spec's Esito 2 promises: requests without the token, with a wrong one,
-with the token in the URL or with a foreign Origin are refused; two clients do
+with the token in the URL or with any Origin (a web page) are refused; two clients do
 not see each other's sessions or tabs; a named session is one client's at a
 time; an idle client's sessions are closed and saved; eval is off on HTTP.
 """
@@ -187,16 +187,14 @@ async def test_official_client_with_a_wrong_token_cannot_connect(tmp_path):
                 await client.list_tools()
 
 
-async def test_allowlisted_origin_passes(tmp_path):
-    async with _server(tmp_path / "home", "--allow-origin", "http://app.example") as server:
-        allowed = await _post(
-            server, {"Authorization": f"Bearer {server.token}", "Origin": "http://app.example"}
-        )
-        assert allowed.status_code == 200
-        other = await _post(
-            server, {"Authorization": f"Bearer {server.token}", "Origin": "http://app2.example"}
-        )
-        assert other.status_code == 403
+async def test_any_origin_is_refused(tmp_path):
+    async with _server(tmp_path / "home") as server:
+        for origin in ("http://app.example", server.url.removesuffix("/mcp")):
+            refused = await _post(
+                server, {"Authorization": f"Bearer {server.token}", "Origin": origin}
+            )
+            assert refused.status_code == 403
+            assert "not web pages" in refused.json()["error"]["message"]
 
 
 async def test_eval_is_off_on_http_unless_allowed(tmp_path):

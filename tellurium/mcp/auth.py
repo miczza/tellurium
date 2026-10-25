@@ -4,8 +4,9 @@ HTTP request passes before it reaches MCP.
 The token is required on loopback too (any local process, or a web page via DNS
 rebinding, can reach a loopback port), only in the ``Authorization: Bearer``
 header (URLs end up in logs), and compared in constant time. A browser always
-sends ``Origin`` on the requests a page makes: absent means a non-browser
-client, otherwise it must be in the allowlist. ``Host`` must name the address
+sends ``Origin`` on the requests a page makes, and MCP clients are not web
+pages: any ``Origin`` is refused (no CORS, so no preflight to get wrong).
+``Host`` must name the address
 the server is bound to, which defeats DNS rebinding even before the token.
 """
 
@@ -20,7 +21,7 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, unquote, urlsplit
+from urllib.parse import parse_qsl, unquote
 
 TOKEN_BYTES = 32
 ENDPOINT = "/mcp"
@@ -128,18 +129,6 @@ def _host_name(host: str) -> str:
     return f"[{host}]" if ":" in host and not host.startswith("[") else host
 
 
-def normalize_origins(origins: list[str]) -> frozenset[str]:
-    """``scheme://host[:port]`` values, lowercased and without a trailing slash."""
-    out = set()
-    for origin in origins:
-        value = origin.strip().rstrip("/").lower()
-        parts = urlsplit(value)
-        if parts.scheme not in ("http", "https") or not parts.netloc or parts.path:
-            raise ValueError(f"not an origin (scheme://host[:port]): {origin!r}")
-        out.add(value)
-    return frozenset(out)
-
-
 # --------------------------------------------------------------------------- #
 # Request checks
 # --------------------------------------------------------------------------- #
@@ -154,13 +143,12 @@ class Refusal:
 
 @dataclass(frozen=True)
 class Guard:
-    """The checks for a server bound to port *port*: *hosts* from
-    :func:`allowed_hosts`, *origins* from :func:`normalize_origins`."""
+    """The checks for a server bound to port *port*, *hosts* from
+    :func:`allowed_hosts`."""
 
     token: str
     hosts: frozenset[str] | None
     port: int
-    origins: frozenset[str]
 
     def check(self, scope: dict[str, Any]) -> Refusal | None:
         """``None`` when the HTTP request *scope* may reach MCP, else why not.
@@ -172,9 +160,10 @@ class Guard:
         headers = _headers(scope)
         if not self._host_ok(headers.get("host", "")):
             return Refusal(403, "Host not allowed (this server answers only on its bind address)")
-        origin = headers.get("origin")
-        if origin is not None and origin.rstrip("/").lower() not in self.origins:
-            return Refusal(403, "Origin not allowed: start the server with --allow-origin")
+        if "origin" in headers:
+            return Refusal(
+                403, "Requests from web pages are refused: MCP clients are not web pages"
+            )
         if self._token_in_url(scope.get("query_string", b"")):
             return Refusal(
                 400, "Never put the token in the URL: send it in the Authorization header"

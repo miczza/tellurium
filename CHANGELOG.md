@@ -7,7 +7,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `tellurium mcp --http HOST:PORT [--allow-eval] [--allow-origin ORIGIN]... [--idle-timeout S]
+- `tellurium mcp --http HOST:PORT [--allow-eval] [--idle-timeout S]
   [--allow-remote]`: the MCP server over Streamable HTTP (the SDK's session manager under
   uvicorn, endpoint `/mcp`; port 0 picks a free one, the address is printed on stderr). Each
   MCP client (MCP session) gets its own browsers: it never sees another client's sessions or
@@ -22,7 +22,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (32 random bytes, base64url; created atomically with mode 0600; a file other users can
   read, a symlink or a malformed token is refused). Every request needs
   `Authorization: Bearer <token>`, loopback included, compared in constant time; a
-  token in the URL is refused; `Origin` must be absent or allowlisted and `Host` must
+  token in the URL is refused; any `Origin` is refused (MCP clients are not web pages, no
+  CORS) and `Host` must
   name the bind address (loopback names on loopback), against DNS rebinding.
   A request repeating `Host`, `Origin`, `Authorization`, `Mcp-Session-Id` or
   `MCP-Protocol-Version` is refused (400): a `DELETE` naming two sessions cannot end another

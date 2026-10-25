@@ -32,13 +32,6 @@ def register(subparsers: Any) -> None:
         "--allow-eval", action="store_true", help="Offer the eval tool over HTTP (off by default)"
     )
     http.add_argument(
-        "--allow-origin",
-        action="append",
-        default=[],
-        metavar="ORIGIN",
-        help="A browser origin allowed to call the server (repeatable); other Origins get 403",
-    )
-    http.add_argument(
         "--idle-timeout",
         type=float,
         metavar="SECONDS",
@@ -65,8 +58,8 @@ def main(args: argparse.Namespace) -> None:
         print(INSTALL_HINT, file=sys.stderr)
         sys.exit(2)
     http = _http_config(args) if args.http else None
-    if http is None and (args.allow_origin or args.idle_timeout is not None or args.allow_remote):
-        _fail("--allow-origin, --idle-timeout and --allow-remote need --http")
+    if http is None and (args.idle_timeout is not None or args.allow_remote):
+        _fail("--idle-timeout and --allow-remote need --http")
     config = ServerConfig(
         home=default_home(),
         headed=args.headed,
@@ -83,7 +76,6 @@ def _http_config(args: argparse.Namespace) -> Any:
 
     try:
         host, port = auth.parse_bind(args.http)
-        origins = auth.normalize_origins(args.allow_origin)
     except ValueError as exc:
         _fail(str(exc))
     if not auth.is_loopback(host):
@@ -100,7 +92,7 @@ def _http_config(args: argparse.Namespace) -> Any:
     idle = DEFAULT_IDLE_TIMEOUT if args.idle_timeout is None else args.idle_timeout
     if idle < 0:
         _fail("--idle-timeout must be 0 (never) or a number of seconds")
-    return HttpConfig(host=host, port=port, origins=origins, idle_timeout=idle or None)
+    return HttpConfig(host=host, port=port, idle_timeout=idle or None)
 
 
 def _fail(message: str) -> None:

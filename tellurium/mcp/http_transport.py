@@ -174,7 +174,7 @@ async def serve(config: ServerConfig, stop: asyncio.Event) -> bool:
     token, sock = await _prepare(config, http)
     try:
         port = sock.getsockname()[1]
-        guard = auth.Guard(token, auth.allowed_hosts(http.host), port, http.origins)
+        guard = auth.Guard(token, auth.allowed_hosts(http.host), port)
         async with ClientPools(config, idle_timeout=http.idle_timeout) as clients:
             server = build_server(
                 None, build_tools(config), use_pool=lambda ctx: clients.use(client_id(ctx))

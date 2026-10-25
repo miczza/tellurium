@@ -103,7 +103,6 @@ def _guard(**kw) -> auth.Guard:
         token=TOKEN,
         hosts=kw.pop("hosts", auth.allowed_hosts("127.0.0.1")),
         port=kw.pop("port", 8765),
-        origins=kw.pop("origins", frozenset()),
     )
 
 
@@ -161,15 +160,14 @@ def test_token_compared_in_constant_time(monkeypatch):
     assert seen
 
 
-@pytest.mark.parametrize("origin", ["https://evil.example", "null", "http://127.0.0.1:9999"])
-def test_foreign_origin_is_403_even_with_the_token(origin):
+@pytest.mark.parametrize(
+    "origin", ["https://evil.example", "null", "http://127.0.0.1:8765", "http://localhost:8765"]
+)
+def test_any_origin_is_403_even_with_the_token(origin):
+    """MCP clients are not web pages: whatever a browser sends is refused,
+    the server's own address included."""
     refused = _guard().check(_scope({**_OK, "Origin": origin}))
     assert refused is not None and refused.status == 403
-
-
-def test_allowlisted_origin_passes():
-    guard = _guard(origins=auth.normalize_origins(["https://App.Example/"]))
-    assert guard.check(_scope({**_OK, "Origin": "https://app.example"})) is None
 
 
 def test_origin_checked_before_the_token():
@@ -244,12 +242,6 @@ def test_parse_bind(text, expected):
 def test_parse_bind_rejects_garbage(text):
     with pytest.raises(ValueError):
         auth.parse_bind(text)
-
-
-@pytest.mark.parametrize("origin", ["app.example", "ftp://x", "https://", "https://a/b"])
-def test_normalize_origins_rejects_non_origins(origin):
-    with pytest.raises(ValueError):
-        auth.normalize_origins([origin])
 
 
 @pytest.mark.parametrize(

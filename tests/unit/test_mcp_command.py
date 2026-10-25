@@ -30,7 +30,7 @@ def test_http_defaults_loopback_no_eval_and_an_idle_timeout(run):
     config, transport = run("--http", "127.0.0.1:8765")
     assert transport == "http"
     assert config.allow_eval is False
-    assert config.http == HttpConfig("127.0.0.1", 8765, frozenset(), DEFAULT_IDLE_TIMEOUT)
+    assert config.http == HttpConfig("127.0.0.1", 8765, DEFAULT_IDLE_TIMEOUT)
 
 
 def test_http_options(run):
@@ -38,15 +38,10 @@ def test_http_options(run):
         "--http",
         "localhost:0",
         "--allow-eval",
-        "--allow-origin",
-        "https://App.example/",
-        "--allow-origin",
-        "http://127.0.0.1:3000",
         "--idle-timeout",
         "0",
     )
     assert config.allow_eval is True
-    assert config.http.origins == {"https://app.example", "http://127.0.0.1:3000"}
     assert config.http.idle_timeout is None  # 0: never
 
 
@@ -58,10 +53,8 @@ def test_stdio_keeps_eval_on(run):
 @pytest.mark.parametrize(
     ("argv", "message"),
     [
-        (["--allow-origin", "https://a.example"], "need --http"),
         (["--idle-timeout", "5"], "need --http"),
         (["--http", "8765"], "HOST:PORT"),
-        (["--http", "127.0.0.1:1", "--allow-origin", "a.example"], "not an origin"),
         (["--http", "127.0.0.1:1", "--idle-timeout", "-1"], "--idle-timeout"),
         (["--http", "192.168.1.5:8765"], "--allow-remote"),
     ],
@@ -77,3 +70,10 @@ def test_non_loopback_bind_with_the_flag_warns(run, capsys):
     config, _ = run("--http", "0.0.0.0:8765", "--allow-remote")
     assert config.http.host == "0.0.0.0"
     assert "WARNING" in capsys.readouterr().err
+
+
+def test_there_is_no_origin_allowlist(run, capsys):
+    with pytest.raises(SystemExit) as exited:
+        run("--http", "127.0.0.1:1", "--allow-origin", "https://a.example")
+    assert exited.value.code == 2
+    assert "--allow-origin" in capsys.readouterr().err  # argparse: unrecognized
