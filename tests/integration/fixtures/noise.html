@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Noise</title>
+<style>body { margin: 0 } canvas { display: block }</style></head>
+<body>
+<canvas id="c" width="1200" height="2400" role="img" aria-label="noise"></canvas>
+<script>
+  // Random pixels: PNG cannot compress them, so a full-page shot is many MB.
+  const c = document.getElementById("c"), g = c.getContext("2d");
+  const img = g.createImageData(c.width, c.height);
+  let x = 2463534242;
+  for (let i = 0; i < img.data.length; i += 4) {
+    x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
+    img.data[i] = x & 255; img.data[i + 1] = (x >>> 8) & 255;
+    img.data[i + 2] = (x >>> 16) & 255; img.data[i + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  document.title = "Noise ready";
+</script>
+</body>
+</html>

@@ -11,7 +11,7 @@ from typing import Any
 
 from tellurium.browser.element import Element
 from tellurium.browser.tab import Tab
-from tellurium.mcp import page_state, urls
+from tellurium.mcp import page_state, screenshots, urls
 from tellurium.mcp.results import Reply, ToolError
 from tellurium.mcp.tool import Tool, param
 
@@ -101,35 +101,89 @@ async def _get_text(pool: Any, args: dict[str, Any]) -> Reply:
 
 async def _screenshot(pool: Any, args: dict[str, Any]) -> Reply:
     tab = pool.tab(args["targetId"])
-    note, cropped = "", False
+    notes, cropped = [], False
     if "ref" in args:
-        image = await (await ref_element(tab, args["ref"])).screenshot()
+        element = await ref_element(tab, args["ref"])
+        png = await element.screenshot()
+        capture = _element_capture(tab, element)
     elif args.get("fullPage"):
-        image, (width, height), cropped = await _full_page(tab)
+        capture, (width, height), cropped = await _full_page(tab)
+        png = None
         if cropped:
-            note = f" (cropped to {SHOT_MAX} px per side; the page is {width}x{height})"
+            notes.append(f"cropped to {SHOT_MAX} px per side; the page is {width}x{height}")
     else:
-        image = await tab.screenshot(timeout=30)
+        png = await tab.screenshot(timeout=30)
+        capture = _viewport_capture(tab)
+    shot = await screenshots.fit(capture, limit=screenshots.SHOT_BYTES, png=png)
+    if shot.note:
+        notes.append(shot.note)
     state = await page_state.read_or_none(tab) or page_state.PageState(tab.url, tab.title)
-    data = state_data(args["targetId"], state, bytes=len(image), cropped=cropped)
-    return Reply(f"screenshot of {state.url}{note}", data, image=image)
+    data = state_data(
+        args["targetId"],
+        state,
+        bytes=len(shot.data),
+        format=shot.format,
+        scale=shot.scale,
+        cropped=cropped,
+    )
+    note = f" ({'; '.join(notes)})" if notes else ""
+    return Reply(f"screenshot of {state.url}{note}", data, image=shot.data, image_type=shot.mime)
 
 
-async def _full_page(tab: Tab) -> tuple[bytes, tuple[int, int], bool]:
-    """The whole page as PNG, but at most SHOT_MAX px per side (top-left part):
-    image clients refuse larger ones. Also the page size and whether it was cut."""
+async def _shoot(tab: Tab, fmt: str, quality: int | None, clip: dict | None) -> bytes:
+    params: dict[str, Any] = {"format": fmt}
+    if quality is not None:
+        params["quality"] = quality
+    if clip is not None:
+        params["clip"] = clip
+        params["captureBeyondViewport"] = True
+    shot = await asyncio.wait_for(tab.send_cdp("Page.captureScreenshot", params), 30)
+    return base64.b64decode(shot["data"])
+
+
+def _viewport_capture(tab: Tab) -> screenshots.Capture:
+    async def capture(fmt: str, quality: int | None, scale: float) -> bytes:
+        clip = None
+        if scale < 1:
+            metrics = await tab.send_cdp("Page.getLayoutMetrics", {})
+            view = metrics.get("cssVisualViewport") or metrics.get("visualViewport") or {}
+            clip = {
+                "x": view.get("pageX", 0),
+                "y": view.get("pageY", 0),
+                "width": view.get("clientWidth", 0),
+                "height": view.get("clientHeight", 0),
+                "scale": scale,
+            }
+        return await _shoot(tab, fmt, quality, clip)
+
+    return capture
+
+
+def _element_capture(tab: Tab, element: Element) -> screenshots.Capture:
+    async def capture(fmt: str, quality: int | None, scale: float) -> bytes:
+        box = await element.bounding_box()
+        clip = {k: box[k] for k in ("x", "y", "width", "height")}
+        return await _shoot(tab, fmt, quality, {**clip, "scale": scale})
+
+    return capture
+
+
+async def _full_page(tab: Tab) -> tuple[screenshots.Capture, tuple[int, int], bool]:
+    """A capture of the whole page, but at most SHOT_MAX px per side (top-left
+    part): image clients refuse larger ones. Also the page size and whether it
+    was cut."""
     metrics = await tab.send_cdp("Page.getLayoutMetrics", {})
     size = metrics.get("cssContentSize") or metrics.get("contentSize") or {}
     width, height = int(size.get("width", 0)) or 1, int(size.get("height", 0)) or 1
     clip = {"x": 0, "y": 0, "width": min(width, SHOT_MAX), "height": min(height, SHOT_MAX)}
     ratio = float(await tab.eval("window.devicePixelRatio", timeout=5) or 1)
-    scale = min(1.0, 1 / ratio)  # a HiDPI screen would double the pixels past the cap
-    shot = await tab.send_cdp(
-        "Page.captureScreenshot",
-        {"format": "png", "captureBeyondViewport": True, "clip": {**clip, "scale": scale}},
-    )
+    base = min(1.0, 1 / ratio)  # a HiDPI screen would double the pixels past the cap
+
+    async def capture(fmt: str, quality: int | None, scale: float) -> bytes:
+        return await _shoot(tab, fmt, quality, {**clip, "scale": base * scale})
+
     cropped = width > SHOT_MAX or height > SHOT_MAX
-    return base64.b64decode(shot["data"]), (width, height), cropped
+    return capture, (width, height), cropped
 
 
 async def _wait_for(pool: Any, args: dict[str, Any]) -> Reply:
@@ -200,7 +254,7 @@ TOOLS = [
     ),
     Tool(
         "screenshot",
-        "PNG of the viewport, the full page, or ref.",
+        "PNG of the viewport, the full page, or ref (JPEG when a PNG is over 5 MB).",
         _screenshot,
         {"ref": _REF_PARAM, "fullPage": param("boolean")},
         page=True,

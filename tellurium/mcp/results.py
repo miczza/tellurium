@@ -27,11 +27,12 @@ class ToolError(Exception):
 @dataclass
 class Reply:
     """What a tool hands back: *text* for the model, *data* as
-    ``structuredContent``, an optional PNG *image*."""
+    ``structuredContent``, an optional *image* of type *image_type*."""
 
     text: str
     data: dict[str, Any] | None = None
     image: bytes | None = None
+    image_type: str = "image/png"
 
 
 def explain(exc: BaseException) -> str:
@@ -102,7 +103,7 @@ def success(reply: Reply) -> types.CallToolResult:
     content: list[Any] = [types.TextContent(type="text", text=reply.text)]
     if reply.image is not None:
         data = base64.b64encode(reply.image).decode("ascii")
-        content.append(types.ImageContent(type="image", data=data, mime_type="image/png"))
+        content.append(types.ImageContent(type="image", data=data, mime_type=reply.image_type))
     return types.CallToolResult(content=content, structured_content=reply.data)
 
 

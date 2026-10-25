@@ -25,6 +25,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   name the bind address (loopback names on loopback), against DNS rebinding.
 - `tellurium mcp`: a named session is held by one MCP client at a time; another client
   opening the same name gets a clear error instead of a second Chrome on the profile.
+- `tellurium mcp` `screenshot`: at most 5 MB of base64 per image. A PNG over the cap is
+  captured again as JPEG (lower quality, then smaller scale) and the result says so; the
+  structured result reports `format` and `scale`.
 - `tellurium mcp [--headed] [--allow-local-urls]`: tellurium as an MCP server over stdio (extra
   `tellurium[mcp]`, official `mcp` SDK; without the extra the command prints the
   install line). Twenty kebab-case tools: `session-open/list/close`,
