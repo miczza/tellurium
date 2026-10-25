@@ -197,6 +197,34 @@ async def test_any_origin_is_refused(tmp_path):
             assert "not web pages" in refused.json()["error"]["message"]
 
 
+async def test_a_connection_that_never_finishes_its_headers_is_closed(tmp_path):
+    """Slowloris: unauthenticated connections cannot be held open by dribbling."""
+    from tellurium.mcp.http_transport import HEADER_TIMEOUT
+
+    async with _server(tmp_path / "home") as server:
+        host, port = server.url.removeprefix("http://").removesuffix("/mcp").rsplit(":", 1)
+        reader, writer = await asyncio.open_connection(host, int(port))
+        started = time.monotonic()
+        writer.write(b"POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n")
+        await writer.drain()
+
+        async def dribble():
+            with contextlib.suppress(ConnectionError):
+                while True:
+                    await asyncio.sleep(0.5)
+                    writer.write(b"X-Slow: 1\r\n")
+                    await writer.drain()
+
+        dribbling = asyncio.ensure_future(dribble())
+        try:
+            closed = await asyncio.wait_for(reader.read(), HEADER_TIMEOUT + 5)
+        finally:
+            dribbling.cancel()
+            writer.close()
+        assert time.monotonic() - started < HEADER_TIMEOUT + 3
+        assert closed == b"" or closed.startswith(b"HTTP/1.1 4")
+
+
 async def test_eval_is_off_on_http_unless_allowed(tmp_path):
     async with _server(tmp_path / "home") as server, _client(server) as client:
         assert client.protocol_version in HANDSHAKE_PROTOCOL_VERSIONS  # an MCP session

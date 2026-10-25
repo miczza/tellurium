@@ -30,6 +30,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   A request repeating `Host`, `Origin`, `Authorization`, `Mcp-Session-Id` or
   `MCP-Protocol-Version` is refused (400): a `DELETE` naming two sessions cannot end another
   client's browsers.
+  A request head must arrive whole within 5 s (slowloris), and at most 100 connections
+  are served at once.
 - `tellurium mcp`: a named session is held by one MCP client at a time; another client
   opening the same name gets a clear error instead of a second Chrome on the profile.
 - `tellurium mcp` `screenshot`: at most 5 MB of base64 per image. A PNG over the cap is

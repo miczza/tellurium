@@ -18,12 +18,14 @@ import sys
 from collections.abc import Iterator
 from typing import Any
 
+import h11
 import uvicorn
 from mcp.server.streamable_http import MCP_SESSION_ID_HEADER
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp_types import INVALID_REQUEST, UNSUPPORTED_PROTOCOL_VERSION, ErrorData, JSONRPCError
 from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
 from starlette.datastructures import Headers
+from uvicorn.protocols.http.h11_impl import H11Protocol
 
 from tellurium.mcp import auth
 from tellurium.mcp.clients import ClientPools
@@ -34,6 +36,10 @@ logger = logging.getLogger(__name__)
 
 # How long open connections (a client's event stream) get to finish at shutdown.
 SHUTDOWN_GRACE = 3.0
+# A request head (line and headers) must arrive whole within this many seconds.
+HEADER_TIMEOUT = 5.0
+# Connections and requests served at once; more get 503 (MCP clients keep a few each).
+CONCURRENCY = 100
 _VERSION_HEADER = b"mcp-protocol-version"
 
 
@@ -120,6 +126,31 @@ async def _reply(
     await send({"type": "http.response.body", "body": payload})
 
 
+class _HeadDeadline(H11Protocol):
+    """uvicorn's h11 protocol with a deadline on each request head: its own
+    keep-alive timer stops at the first byte, so a client dribbling headers
+    (slowloris) would hold the connection forever, before any auth check."""
+
+    def connection_made(self, transport: Any) -> None:
+        super().connection_made(transport)
+        self._head_timer = self.loop.call_later(HEADER_TIMEOUT, self._head_overdue)
+
+    def on_response_complete(self) -> None:
+        super().on_response_complete()
+        self._head_timer.cancel()
+        if not self.transport.is_closing():
+            self._head_timer = self.loop.call_later(HEADER_TIMEOUT, self._head_overdue)
+
+    def connection_lost(self, exc: Exception | None) -> None:
+        self._head_timer.cancel()
+        super().connection_lost(exc)
+
+    def _head_overdue(self) -> None:
+        # IDLE: no complete request head since the timer started.
+        if self.conn.their_state is h11.IDLE and not self.transport.is_closing():
+            self.transport.close()
+
+
 class _Uvicorn(uvicorn.Server):
     """uvicorn without its own signal handlers: the server's stop event rules."""
 
@@ -191,6 +222,8 @@ async def serve(config: ServerConfig, stop: asyncio.Event) -> bool:
                     access_log=False,
                     server_header=False,
                     timeout_graceful_shutdown=SHUTDOWN_GRACE,
+                    http=_HeadDeadline,
+                    limit_concurrency=CONCURRENCY,
                 )
             )
             return await _run(web, manager, sock, stop, lambda: _announce(config, http, port))
