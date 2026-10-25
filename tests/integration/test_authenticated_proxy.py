@@ -86,7 +86,9 @@ async def test_post_and_keep_alive_through_authenticated_proxy():
         finally:
             await browser.close()
     assert all(auth == GOOD_AUTH for _, auth in proxy.requests)
-    posts = [line for line, _ in proxy.requests if line.startswith("POST")]
+    # Only the page's own requests: Chrome's background traffic (component updater,
+    # POST to update.googleapis.com on Chrome 156) goes through the proxy too.
+    posts = [line for line, _ in proxy.requests if line.startswith("POST http://site.test/")]
     assert len(posts) == 5
     # Keep-alive: requests share upstream connections instead of one each.
     assert proxy.connections < len(proxy.requests)
