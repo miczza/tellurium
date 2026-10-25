@@ -187,6 +187,11 @@ storage, fingerprint seed). Without a name the session is throwaway.
   snapshot suggests `selector=` or `interactive=true`.
 - When the client disconnects, or on SIGTERM/SIGINT, every browser is closed
   and every named session saved.
+- `navigate` and `tab-open` open only `http`, `https`, `about:blank` and `data:`
+  URLs. `file:` (local files), `chrome:`, `chrome-extension:`, `devtools:`,
+  `view-source:` and `javascript:` are refused, so a page that talks the agent
+  into it cannot read your files; `tellurium mcp --allow-local-urls` lifts
+  this. Chrome itself refuses a web page's redirect to `file:`.
 - `TELLURIUM_HOME` moves `~/.tellurium` (sessions and downloads) elsewhere.
 
 ---
@@ -1120,7 +1125,7 @@ tellurium list-browsers
 tellurium update-browser [--check] [--security-only]
 tellurium prune-browsers [--keep N]
 tellurium verify-browser [--reinstall]
-tellurium mcp [--headed]                                   # MCP server on stdio (tellurium[mcp])
+tellurium mcp [--headed] [--allow-local-urls]              # MCP server on stdio (tellurium[mcp])
 ```
 
 | Command | What it does |
@@ -1134,7 +1139,7 @@ tellurium mcp [--headed]                                   # MCP server on stdio
 | `update-browser` | Check the `chromium-telluride` releases and install a newer one. `--check` only reports, `--security-only` installs security releases only. |
 | `prune-browsers` | Delete old cached versions, keeping the `--keep N` most recent. The version behind `current` is never pruned. |
 | `verify-browser` | Re-hash the installed binary and compare with `binary_sha256` in `MANIFEST.json`. `--reinstall` re-downloads when the check fails. |
-| `mcp` | Serve tellurium's browser tools over MCP on stdio for an LLM agent. `--headed` shows the windows. Needs `pip install tellurium[mcp]`. |
+| `mcp` | Serve tellurium's browser tools over MCP on stdio for an LLM agent. `--headed` shows the windows, `--allow-local-urls` lets the agent open `file:` and browser pages. Needs `pip install tellurium[mcp]`. |
 
 ---
 

@@ -10,7 +10,7 @@ from typing import Any
 
 from tellurium.browser.element import Element
 from tellurium.browser.tab import Tab
-from tellurium.mcp import page_state
+from tellurium.mcp import page_state, urls
 from tellurium.mcp.results import Reply, ToolError
 from tellurium.mcp.tool import Tool, param
 
@@ -58,7 +58,8 @@ async def _navigate(pool: Any, args: dict[str, Any]) -> Reply:
     how = _one_of(args, "url", "history")
     before = await page_state.read_or_none(tab)
     if how == "url":
-        await tab.get(args["url"], timeout=30)
+        url = urls.check(args["url"], allow_local=pool.config.allow_local_urls)
+        await tab.get(url, timeout=30)
     elif args["history"] == "back":
         await tab.back()
     elif args["history"] == "forward":

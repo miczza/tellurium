@@ -17,6 +17,7 @@ class _FixtureHandler(http.server.SimpleHTTPRequestHandler):
     * ``/redirect/<path>`` — a 302 to ``/<path>``
     * ``/download/<name>`` — an attachment named *name* (``DOWNLOAD_BODY``)
     * ``/download-slow/<name>`` — an attachment trickling for ~30 s
+    * ``/to-file`` — a 302 to ``file:///etc/hostname``
     * ``/download-late/<ms>/<name>`` — an attachment whose body comes after *ms*
     """
 
@@ -28,6 +29,12 @@ class _FixtureHandler(http.server.SimpleHTTPRequestHandler):
         if len(parts) >= 3 and parts[1] == "slow":
             time.sleep(int(parts[2]) / 1000)
             self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if self.path == "/to-file":
+            self.send_response(302)
+            self.send_header("Location", "file:///etc/hostname")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return

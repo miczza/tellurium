@@ -35,7 +35,8 @@ tellurium drives a real Chrome (stealth, human-like input by default).
    fingerprint across runs; without a name it is throwaway. It returns sessionId
    and the targetId of its first tab. Every page tool takes a targetId (from
    session-open, tab-open or tab-list).
-2. navigate {targetId, url}.
+2. navigate {targetId, url}: http(s), about:blank and data: only (file: and
+   browser pages are refused unless the server runs with --allow-local-urls).
 3. snapshot {targetId}: the page as an accessibility tree, one node per line,
    with [ref=eN] on what you can act on. Big page: interactive=true or
    selector='form'.

@@ -16,6 +16,11 @@ def register(subparsers: Any) -> None:
         "mcp", help="Run tellurium as an MCP server on stdio (needs tellurium[mcp])"
     )
     parser.add_argument("--headed", action="store_true", help="Show the browser windows")
+    parser.add_argument(
+        "--allow-local-urls",
+        action="store_true",
+        help="Let the agent open file:, chrome: and other non-web URLs",
+    )
     parser.set_defaults(run=main)
 
 
@@ -29,5 +34,10 @@ def main(args: argparse.Namespace) -> None:
             raise
         print(INSTALL_HINT, file=sys.stderr)
         sys.exit(2)
-    config = ServerConfig(home=default_home(), headed=args.headed, allow_eval=True)
+    config = ServerConfig(
+        home=default_home(),
+        headed=args.headed,
+        allow_eval=True,
+        allow_local_urls=args.allow_local_urls,
+    )
     server.run(config, "stdio")

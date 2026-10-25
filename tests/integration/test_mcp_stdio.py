@@ -32,10 +32,10 @@ from tests.integration.conftest import DOWNLOAD_BODY  # noqa: E402
 _TELLURIUM = Path(sys.executable).with_name("tellurium")
 
 
-def _server(home: Path) -> Client:
+def _server(home: Path, *options: str) -> Client:
     params = StdioServerParameters(
         command=str(_TELLURIUM),
-        args=["mcp"],
+        args=["mcp", *options],
         env={**os.environ, "TELLURIUM_HOME": str(home)},
     )
     return Client(params)
@@ -212,6 +212,48 @@ async def test_parallel_downloads_with_one_name_keep_both_files(local_server, tm
         paths = {Path(r.structured_content["path"]) for r in results}
         assert {p.name for p in paths} == {"report.csv", "report (1).csv"}
         assert all(p.read_bytes() == DOWNLOAD_BODY for p in paths)
+
+
+_LOCAL_URLS = [
+    "file:///etc/hostname",
+    "FILE:///etc/hostname",
+    " file:///etc/hostname",
+    "chrome://version",
+    "chrome-extension://abcdefghijklmnop/manifest.json",
+    "devtools://devtools/bundled/inspector.html",
+    "view-source:http://127.0.0.1/",
+    "javascript:alert(1)",
+    "about:version",
+]
+
+
+async def test_local_and_browser_urls_are_refused_by_default(local_server, tmp_path):
+    hostname = Path("/etc/hostname").read_text().strip() if Path("/etc/hostname").exists() else None
+    async with _server(tmp_path) as client:
+        opened = (await _call(client, "session-open")).structured_content
+        sid, tid = opened["sessionId"], opened["targetId"]
+        for url in _LOCAL_URLS:
+            message = await _error(client, "navigate", targetId=tid, url=url)
+            assert "--allow-local-urls" in message, url
+        assert "--allow-local-urls" in await _error(
+            client, "tab-open", sessionId=sid, url="file:///etc/hostname"
+        )
+        await _call(client, "navigate", targetId=tid, url="about:blank")
+        await _call(client, "navigate", targetId=tid, url="data:text/html,<p>inline</p>")
+        assert "inline" in await _text(client, tid)
+        # Chrome itself refuses a web page's redirect to file:
+        result = await client.call_tool(
+            "navigate", {"targetId": tid, "url": f"{local_server}/to-file"}
+        )
+        if hostname:
+            assert hostname not in await _text(client, tid)
+        assert result.is_error and "ERR_UNSAFE_REDIRECT" in result.content[0].text
+
+    async with _server(tmp_path, "--allow-local-urls") as client:
+        tid = (await _call(client, "session-open")).structured_content["targetId"]
+        await _call(client, "navigate", targetId=tid, url="file:///etc/hostname")
+        if hostname:
+            assert hostname in await _text(client, tid)
 
 
 _LISTEN = """

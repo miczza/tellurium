@@ -159,6 +159,9 @@ def test_cli_mcp_runs_stdio_with_the_options(monkeypatch, tmp_path):
     main()
     assert seen["t"] == "stdio"
     assert seen["c"] == ServerConfig(home=tmp_path, headed=True, allow_eval=True)
+    monkeypatch.setattr("sys.argv", ["tellurium", "mcp", "--allow-local-urls"])
+    main()
+    assert seen["c"].allow_local_urls is True and seen["c"].headed is False
 
 
 # --------------------------------------------------------------------------- #

@@ -226,3 +226,36 @@ def test_keys_carry_the_codes_chrome_acts_on_and_unknown_keys_fail():
         parse("NotAKey")
     with pytest.raises(ToolError, match="Unknown modifier 'Hyper'"):
         parse("Hyper+a")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "FILE:///etc/passwd",
+        "\tfile:///etc/passwd",
+        "chrome://settings",
+        "chrome-extension://abc/x.html",
+        "devtools://devtools/x",
+        "view-source:https://example.com",
+        "javascript:fetch('/x')",
+        "about:version",
+        "blob:https://example.com/1",
+        "filesystem:https://example.com/temporary/x",
+    ],
+)
+def test_non_web_urls_are_refused_unless_allowed(url):
+    from tellurium.mcp import urls
+
+    with pytest.raises(ToolError, match="--allow-local-urls"):
+        urls.check(url)
+    assert urls.check(url, allow_local=True) == url
+
+
+def test_web_urls_pass_and_bare_hosts_ask_for_a_full_address():
+    from tellurium.mcp import urls
+
+    for url in ("https://example.com/", "http://127.0.0.1:8000/x", "about:blank", "data:,hi"):
+        assert urls.check(url) == url
+    with pytest.raises(ToolError, match="Not a full address"):
+        urls.check("example.com/path")

@@ -19,11 +19,13 @@ def default_home() -> Path:
 @dataclass(frozen=True)
 class ServerConfig:
     """*home* holds ``sessions/<name>`` (named sessions) and ``downloads/``.
-    *allow_eval* lists the ``eval`` tool; *headed* shows the browser windows."""
+    *allow_eval* lists the ``eval`` tool; *headed* shows the browser windows;
+    *allow_local_urls* lets navigate/tab-open open ``file:``, ``chrome:`` & co."""
 
     home: Path
     headed: bool = False
     allow_eval: bool = True
+    allow_local_urls: bool = False
 
     @property
     def sessions_dir(self) -> Path:

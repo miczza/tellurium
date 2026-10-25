@@ -17,7 +17,7 @@ from typing import Any
 
 from tellurium.browser.browser import Browser
 from tellurium.browser.tab import Tab
-from tellurium.mcp import page_state
+from tellurium.mcp import page_state, urls
 from tellurium.mcp.config import ServerConfig
 from tellurium.mcp.results import Reply, ToolError
 from tellurium.mcp.tool import Tool, param
@@ -282,7 +282,8 @@ async def _session_close(pool: SessionPool, args: dict[str, Any]) -> Reply:
 
 async def _tab_open(pool: SessionPool, args: dict[str, Any]) -> Reply:
     session = pool.get(args["sessionId"])
-    tab = await session.browser.new_tab(args.get("url") or "about:blank")
+    url = urls.check(args.get("url") or "about:blank", allow_local=pool.config.allow_local_urls)
+    tab = await session.browser.new_tab(url)
     info = await _tab_info(pool.tab_id(session, tab), session, tab)
     return Reply(f"opened tab {info['targetId']} at {info['url']}", info)
 

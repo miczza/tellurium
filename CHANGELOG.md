@@ -7,7 +7,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `tellurium mcp [--headed]`: tellurium as an MCP server over stdio (extra
+- `tellurium mcp [--headed] [--allow-local-urls]`: tellurium as an MCP server over stdio (extra
   `tellurium[mcp]`, official `mcp` SDK; without the extra the command prints the
   install line). Twenty kebab-case tools: `session-open/list/close`,
   `tab-open/list/close`, `navigate`, `snapshot`, `click`, `fill`, `press`,
@@ -21,7 +21,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   A named session is a `Session` in `~/.tellurium/sessions/<name>` (same
   cookies, storage and seed next time); downloads go to `~/.tellurium/downloads/` (each name reserved
   atomically, so parallel downloads of `report.csv` keep both files);
-  `TELLURIUM_HOME` moves both. Domain errors come back as `isError` results that
+  `TELLURIUM_HOME` moves both. `navigate`/`tab-open` refuse non-web URLs
+  (`file:`, `chrome:`, `chrome-extension:`, `devtools:`, `view-source:`,
+  `javascript:`, …; only http, https, `about:blank` and `data:` pass) unless the
+  server runs with `--allow-local-urls`. Domain errors come back as `isError` results that
   tell the agent what to do next (stale ref: take a new snapshot; covered
   element: what is on top; page too large: use `selector=` or
   `interactive=true`; an element that cannot take focus, an invalid URL, a
