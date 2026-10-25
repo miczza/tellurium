@@ -6,7 +6,9 @@ the AX nodes; pure functions prune them into :class:`SnapshotNode` trees, which
 stitched under their ``iframe`` node, and so are cross-site ones (OOPIFs), read
 through their own session; an OOPIF that cannot be reached shows as
 ``- iframe "<url>" [oopif]``, one that does not answer within the time left of
-``snapshot_timeout`` as ``- iframe "<url>" [oopif: not responding]``. Refs come from the tab's
+``snapshot_timeout`` as ``[oopif: not responding]``, one with more DOM nodes than
+``max_nodes`` leaves it as ``[oopif: too large, N nodes]`` (``max_nodes`` bounds the
+page's own renderer: over it, an error). Refs come from the tab's
 :class:`~tellurium.browser.refs.RefMap`. No ``Runtime.enable``: only the
 Accessibility, DOM and Target domains.
 """
@@ -65,12 +67,17 @@ class SnapshotTooLargeError(RuntimeError):
     """The page is over the snapshot size limit: snapshot a part with ``selector=``."""
 
 
-class _NotResponding(str):
-    """URL of a cross-site iframe whose renderer did not answer in time."""
+class _Unread(str):
+    """URL of a cross-site iframe left out of the snapshot; *state* says why."""
+
+    def __new__(cls, url: str, state: str) -> _Unread:
+        unread = super().__new__(cls, url)
+        unread.state = state
+        return unread
 
 
-class _OverMaxNodes(SnapshotTooLargeError):
-    """The cross-site iframes took the page over ``max_nodes``."""
+class _TooLarge(Exception):
+    """A cross-site iframe has more DOM nodes than ``max_nodes`` leaves it."""
 
 
 @dataclass
@@ -85,9 +92,8 @@ class _Bounds:
 @dataclass
 class SnapshotNode:
     """One node of a snapshot. *ref* is ``None`` for text (``role == "text"``) and
-    for an OOPIF placeholder (``states == {"oopif": True}``, or ``"not responding"``,
-    URL in *name*);
-    *states* may hold checked, pressed, expanded, disabled, selected, level."""
+    for an OOPIF placeholder (``states["oopif"]`` is ``True`` or why it was left out,
+    URL in *name*); *states* may hold checked, pressed, expanded, disabled, selected, level."""
 
     ref: str | None
     role: str
@@ -160,9 +166,9 @@ async def _oopif_tree(session: Session, frame_id: str, sub: dict) -> AXTree:
     timeout, bounds = sub["timeout"], sub["_bounds"]
     child = await _oopif_session(session, frame_id, timeout)
     if bounds is not None and bounds.nodes != float("inf"):  # counted before it is read
-        bounds.nodes -= await _count_nodes(child, timeout)
-        if bounds.nodes < 0:
-            raise _OverMaxNodes
+        if (count := await _count_nodes(child, timeout)) > bounds.nodes:
+            raise _TooLarge(count)
+        bounds.nodes -= count
     loaded = await _send(child, "Page.getFrameTree", {}, timeout)
     tree = await fetch_tree(child, **sub, _owner=child.session_id or "")
     tree.document = str(loaded["frameTree"]["frame"].get("loaderId") or "")
@@ -194,7 +200,9 @@ async def _frame_of(
         try:
             return await asyncio.wait_for(_oopif_tree(session, frame_id, sub), max(left, 0))
         except (TimeoutError, asyncio.TimeoutError):  # a renderer stuck in a loop
-            return _NotResponding(url)
+            return _Unread(url, "not responding")
+        except _TooLarge as large:  # an ad of 1e5 nodes: left out, the page still shows
+            return _Unread(url, f"too large, {large.args[0]} nodes")
         except (CDPError, ConnectionError, KeyError):
             return url
     try:
@@ -321,7 +329,7 @@ class _Pruner:
         # *nesting* carries on into the frame: the limit is for the whole walk
         frame = self.tree.frames.get(node.get("backendDOMNodeId") or 0)
         if isinstance(frame, str):
-            state = "not responding" if isinstance(frame, _NotResponding) else True
+            state = frame.state if isinstance(frame, _Unread) else True
             return [SnapshotNode(None, "iframe", frame, states={"oopif": state})]
         inner = _Pruner(frame, self.ref_for, self.interactive, self.depth) if frame else None
         if self.interactive:
@@ -416,22 +424,14 @@ async def _steps(
     over = max_nodes is not None and count > max_nodes
     if over and root is None:
         raise _too_large(count, "The page", max_nodes)
+    scope = seen["scope"] = root if over else None
     limit = float("inf") if max_nodes is None else max_nodes
-    # cross-site iframes count too, read one by one: over, a selector may leave them out
-    for scope in dict.fromkeys((root if over else None, root)):
-        seen["scope"], bounds = scope, _Bounds(seen["deadline"], limit - (0 if scope else count))
-        try:
-            tree = await fetch_tree(session, root=scope, timeout=timeout, _bounds=bounds)
-            break
-        except _OverMaxNodes:
-            if scope is None and root is not None:
-                continue
-            what = "The selected part" if scope else "The page"
-            raise _too_large(int(limit - bounds.nodes), what, max_nodes) from None
+    # each cross-site iframe gets what is left; over it, its line says it was left out
+    bounds = _Bounds(seen["deadline"], limit - (0 if scope else count))
+    tree = await fetch_tree(session, root=scope, timeout=timeout, _bounds=bounds)
     seen["sessions"] = _sessions_of(tree)
-    if scope and (dom := sum(1 for n in tree.nodes if n.get("backendDOMNodeId"))) > bounds.nodes:
-        dom += limit - bounds.nodes  # with the cross-site iframes
-        raise _too_large(int(dom), "The selected part", max_nodes)
+    if scope and (dom := sum(1 for n in tree.nodes if n.get("backendDOMNodeId"))) > limit:
+        raise _too_large(dom, "The selected part", max_nodes)
     found = [n for n in tree.nodes if root is not None and n.get("backendDOMNodeId") == root]
     nodes = await asyncio.to_thread(build_nodes, tree, pending_ref, root=root, **opts)
     # an element Chrome ignores (body, html) still scopes; one it does not show is an error

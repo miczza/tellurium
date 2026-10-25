@@ -324,16 +324,22 @@ async def test_stuck_oopif_does_not_hold_the_snapshot(any_browser, local_server)
         assert line in text and '- button "Delete account" [ref=' in text
 
 
-async def test_oopif_nodes_count_for_max_nodes(browser, local_server):
+async def test_oopif_over_max_nodes_is_left_out(any_browser, local_server):
+    """A huge third-party frame (an ad) does not make the page unusable: its line says
+    it was left out, the rest of the page arrives. The host keeps its own limit."""
     from tellurium.browser.snapshot import SnapshotTooLargeError
 
-    tab = browser.main_tab
+    tab = any_browser.main_tab
     await _open(tab, local_server, "?page=oopif_huge.html")
     await _snapshot_with(tab, "row 2999", max_nodes=None)
-    with pytest.raises(SnapshotTooLargeError, match="max_nodes=2000"):
-        await tab.snapshot(max_nodes=2000)
-    # a part of the host leaves the frame out
-    assert '- button "Delete account"' in await tab.snapshot(max_nodes=2000, selector="#danger")
-    with pytest.raises(SnapshotTooLargeError, match="The selected part"):
-        await tab.snapshot(max_nodes=2000, selector="body")  # the frame is in it
+    port = local_server.rsplit(":", 1)[1]
+    text = await tab.snapshot(max_nodes=2000)
+    line = re.search(
+        rf'- iframe "http://localhost:{port}/oopif_huge.html" \[oopif: too large, (\d+) nodes\]',
+        text,
+    )
+    assert line and int(line.group(1)) > 3000, text
+    assert "row 1" not in text and '- button "Delete account" [ref=' in text
     assert "row 2999" in await tab.snapshot(max_nodes=10_000)
+    with pytest.raises(SnapshotTooLargeError, match="max_nodes=10"):
+        await tab.snapshot(max_nodes=10)  # the host alone is over
