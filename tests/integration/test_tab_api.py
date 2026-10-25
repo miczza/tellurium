@@ -173,13 +173,21 @@ async def test_manual_timezone_override_without_stealth(local_server):
         assert zone == "Asia/Tokyo"
 
 
+def _honours(languages: list[str], requested: list[str]) -> bool:
+    """Chrome 156+ reduces navigator.languages to the first entry (Accept-Language
+    reduction); earlier versions expose the whole list. Either way it is a
+    non-empty prefix of what was asked for."""
+    return bool(languages) and languages == requested[: len(languages)]
+
+
 async def test_manual_languages_override_without_stealth(local_server):
     from tellurium import Browser
 
     browser = await Browser.launch(headless=True, languages=["it-IT", "it", "en"])
     async with browser:
         tab = await browser.new_tab(f"{local_server}/basic.html")
-        assert await tab.eval("Array.from(navigator.languages)") == ["it-IT", "it", "en"]
+        langs = await tab.eval("Array.from(navigator.languages)")
+        assert _honours(langs, ["it-IT", "it", "en"]), langs
 
 
 async def test_manual_overrides_win_over_the_stealth_profile(local_server):
@@ -195,4 +203,5 @@ async def test_manual_overrides_win_over_the_stealth_profile(local_server):
     async with browser:
         tab = await browser.new_tab(f"{local_server}/basic.html")
         assert await tab.eval("Intl.DateTimeFormat().resolvedOptions().timeZone") == "Europe/Rome"
-        assert await tab.eval("Array.from(navigator.languages)") == ["it-IT", "it"]
+        langs = await tab.eval("Array.from(navigator.languages)")
+        assert _honours(langs, ["it-IT", "it"]), langs
