@@ -12,8 +12,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (the one stealth auto-attach holds, else one attached for it, which Chrome
   detaches with the frame or the tab). The `- iframe "<url>" [oopif]` line is
   left only for a frame that cannot be reached. Refs of OOPIF nodes resolve and
-  act through that session (a ref whose frame went away raises
-  `StaleElementError`); `Element` boxes are mapped up to the tab through the
+  act through that session and are bound to the frame's document (a ref whose
+  frame went away, or loaded another document, even in a new renderer whose
+  backend ids start again, raises `StaleElementError`; later snapshots hand out
+  new refs); `Element` boxes are mapped up to the tab through the
   affine map of each `<iframe>` content quad (border, padding, CSS zoom and 2D
   transforms such as `scale()` or `rotate()` alike), and the hit check before a
   pointer press (`human=True` clicks, `hover`, `drag_to`) checks every document

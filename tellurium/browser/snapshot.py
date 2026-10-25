@@ -80,12 +80,14 @@ class AXTree:
     """The AX nodes of one document; *frames* maps an ``<iframe>``'s backend node id
     to its document's tree or its URL (an OOPIF that could not be reached).
     *owner* names the renderer session read (``""``: the one snapshotted),
-    *session* is that session; neither is in the JSON."""
+    *session* is that session, *document* the loader id of an OOPIF's document,
+    read before its tree; none of them is in the JSON."""
 
     nodes: list[dict[str, Any]]
     frames: dict[int, AXTree | str] = field(default_factory=dict)
     owner: str = ""
     session: Any = field(default=None, repr=False, compare=False)
+    document: str = ""
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> AXTree:
@@ -148,7 +150,10 @@ async def _frame_of(
     if "contentDocument" not in node:  # the document lives in another renderer
         try:
             child = await _oopif_session(session, frame_id, timeout)
-            return await fetch_tree(child, **sub, _owner=child.session_id or "")
+            loaded = await _send(child, "Page.getFrameTree", {}, timeout)
+            tree = await fetch_tree(child, **sub, _owner=child.session_id or "")
+            tree.document = str(loaded["frameTree"]["frame"].get("loaderId") or "")
+            return tree
         except (CDPError, ConnectionError, TimeoutError, KeyError):
             attributes = node.get("attributes", [])
             src = dict(zip(attributes[::2], attributes[1::2], strict=False)).get("src", "")
@@ -357,7 +362,7 @@ def _too_large(count: int, what: str, max_nodes: int) -> SnapshotTooLargeError:
 
 async def _snapshot_once(
     session: Session, selector: str | None, limits: tuple, timeout: float, **opts: Any
-) -> tuple[list[SnapshotNode], dict[str, Session]]:
+) -> tuple[list[SnapshotNode], dict[str, tuple[Session, str]]]:
     """One snapshot and the OOPIF sessions read, by owner, within ``snapshot_timeout``
     from the first command: shadow roots escape the node count, and a renderer busy
     with an earlier tree delays them all."""
@@ -373,9 +378,9 @@ async def _snapshot_once(
         ) from None
 
 
-def _sessions_of(tree: AXTree) -> dict[str, Session]:
-    """The OOPIF sessions read for *tree*, by owner."""
-    found = {tree.owner: tree.session} if tree.owner else {}
+def _sessions_of(tree: AXTree) -> dict[str, tuple[Session, str]]:
+    """The OOPIF sessions read for *tree* and the loader id of their documents, by owner."""
+    found = {tree.owner: (tree.session, tree.document)} if tree.owner else {}
     for sub in tree.frames.values():
         if isinstance(sub, AXTree):
             found |= _sessions_of(sub)
@@ -433,8 +438,8 @@ async def take_snapshot_nodes(
             limits = (max_nodes, snapshot_timeout)
             nodes, sessions = await _snapshot_once(session, selector, limits, timeout, **opts)
             if refs.generation == generation:
-                for owner, frame_session in sessions.items():
-                    refs.bind(owner, frame_session)
+                for owner, (frame_session, document) in sessions.items():
+                    refs.bind(owner, frame_session, document)
                 refs.settle(nodes)
                 return nodes
         raise StaleElementError("The page kept navigating while it was being snapshotted")

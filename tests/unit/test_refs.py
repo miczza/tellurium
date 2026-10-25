@@ -224,3 +224,18 @@ async def test_ref_in_a_frame_whose_session_is_gone_is_stale():
     refs.bind("S1", _Gone())
     with pytest.raises(StaleElementError, match="take a new snapshot"):
         await resolve_ref(_FakeSession(), _FakeTab(), refs, refs.ref_for(42, "f", "S1"))
+
+
+def test_another_document_of_an_owner_turns_its_refs_stale():
+    refs, oopif = RefMap(), object()
+    refs.bind("S1", oopif, "L1")
+    old, top = refs.ref_for(3, "f", "S1"), refs.ref_for(3, "main")
+    assert refs.document_of(old) == ("S1", "L1")
+    refs.bind("S1", oopif, "L1")  # same document: nothing changes
+    assert refs.lookup(old) == 3
+    refs.bind("S1", oopif, "L2")  # the frame loaded another document
+    with pytest.raises(StaleElementError):
+        refs.lookup(old)
+    new = refs.ref_for(3, "f", "S1")
+    assert new != old and refs.document_of(new) == ("S1", "L2")
+    assert refs.lookup(top) == 3 and refs.document_of(top) == ("", "")

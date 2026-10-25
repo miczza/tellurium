@@ -10,7 +10,10 @@ mapping ``ref ↔ backendDOMNodeId``:
 * ref numbers are never reused within a tab, so an old ref can never land on
   a node of a later document (backend ids may repeat across renderers);
 * a node of a cross-site iframe (OOPIF) is keyed by its renderer's session too,
-  and its ref resolves through that session.
+  and its ref resolves through that session; it is bound to the frame's document
+  (its loader id): once the frame loads another document, in the same renderer or
+  in a new one whose backend ids start again, its refs raise
+  :class:`StaleElementError` and later snapshots hand out new ones.
 
 A ref resolves with ``DOM.resolveNode`` into the tab's handle group, giving a
 normal :class:`Element`.
@@ -63,6 +66,8 @@ class RefMap:
         self._node_of: dict[int, tuple[str, int]] = {}  # ref number -> (owner, backend id)
         self._frame_of: dict[int, str] = {}  # ref number -> frame id ("" unknown)
         self._sessions: dict[str, Any] = {}  # owner -> its Session
+        self._documents: dict[str, str] = {}  # owner -> loader id of its frame's document
+        self._gone: set[int] = set()  # ref numbers of an owner's previous documents
 
     @property
     def generation(self) -> int:
@@ -87,9 +92,31 @@ class RefMap:
         parsed = parse_ref(ref)
         return self._frame_of.get(int(parsed[1:]), "") if parsed else ""
 
-    def bind(self, owner: str, session: Session | Any) -> None:
-        """Remember *session* as the renderer session named *owner* in refs."""
+    def bind(self, owner: str, session: Session | Any, document: str = "") -> None:
+        """Remember *session* as the renderer session named *owner* in refs, showing the
+        document whose loader id is *document*: the refs of another document of the
+        same owner turn stale."""
+        if self._documents.get(owner, document) != document:
+            self.forget(owner)
         self._sessions[owner] = session
+        if document:
+            self._documents[owner] = document
+
+    def forget(self, owner: str) -> None:
+        """Turn stale every ref of the renderer session *owner* (its frame navigated)."""
+        for key in [key for key in self._ref_of if key[0] == owner]:
+            number = self._ref_of.pop(key)
+            self._node_of.pop(number, None)
+            self._frame_of.pop(number, None)
+            self._gone.add(number)
+        self._documents.pop(owner, None)
+
+    def document_of(self, ref: str) -> tuple[str, str]:
+        """``(owner, loader id)`` of the document *ref* was handed out in (``""`` unknown)."""
+        parsed = parse_ref(ref)
+        key = self._node_of.get(int(parsed[1:])) if parsed else None
+        owner = key[0] if key else ""
+        return owner, self._documents.get(owner, "")
 
     def session_of(self, ref: str) -> Session | Any | None:
         """The session of the document of *ref*; ``None`` for the tab's own (or unknown)."""
@@ -110,7 +137,7 @@ class RefMap:
         node = self._node_of.get(number)
         if node is not None:
             return node[1]
-        if number < self._first:
+        if number < self._first or number in self._gone:
             raise StaleElementError(
                 f"Ref {parsed} belongs to a previous document: take a new snapshot"
             )
@@ -133,6 +160,8 @@ class RefMap:
         self._node_of.clear()
         self._frame_of.clear()
         self._sessions.clear()
+        self._documents.clear()
+        self._gone.clear()
 
     def on_frame_navigated(self, params: dict) -> None:
         """``Page.frameNavigated`` handler: reset on a main-frame navigation."""
@@ -186,6 +215,12 @@ async def _connected(
     return answer.get("result", {}).get("value") is True
 
 
+async def _loader(session: Session | Any) -> str:
+    """Loader id of the document in the frame of *session* (an OOPIF's own session)."""
+    tree = await send_on_handle(session, "Page.getFrameTree", {})
+    return str(tree["frameTree"]["frame"].get("loaderId") or "")
+
+
 async def resolve_ref(session: Session, tab: Tab | Any, refs: RefMap, ref: str) -> Element:
     """Resolve *ref* into an :class:`Element` in *tab*'s handle group.
 
@@ -225,6 +260,12 @@ async def resolve_ref(session: Session, tab: Tab | Any, refs: RefMap, ref: str) 
         if refs.generation != generation:  # a navigation committed meanwhile
             raise StaleElementError(
                 f"Ref {ref} belongs to a previous document: take a new snapshot"
+            )
+        owner, document = refs.document_of(ref)
+        if own is not None and document and await _loader(own) != document:
+            refs.forget(owner)  # the frame loaded another document: backend ids start again
+            raise StaleElementError(
+                f"Ref {ref} belongs to a previous document of its frame: take a new snapshot"
             )
     except BaseException:
         if handles is not None:

@@ -20,15 +20,6 @@ from tellurium.browser.handles import StaleElementError
 _WIDGET_ORIGIN = (370, 150)
 
 
-@pytest.fixture(params=[False, True], ids=["plain", "stealth"])
-async def any_browser(request):
-    from tellurium import Browser
-
-    b = await Browser.launch(headless=True, stealth=request.param)
-    yield b
-    await b.close()
-
-
 def _ref_of(text: str, line_start: str) -> str:
     for line in text.splitlines():
         if line.strip().startswith(line_start):

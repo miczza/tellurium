@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Pay widget</title>
+<style>
+  body { margin: 0; }
+  button { width: 60px; height: 20px; margin: 0; padding: 0; border: 0; }
+</style>
+</head>
+<body>
+  <p id="state">idle</p>
+  <script>
+    // Many buttons: the backend ids of a fresh renderer start again, so one of these
+    // gets the id an old ref of the previous document had.
+    for (let i = 1; i <= 60; i++) {
+      const button = document.createElement('button');
+      button.id = 'x' + i;
+      button.textContent = 'Pay ' + i;
+      button.onclick = () => { document.getElementById('state').textContent = 'hit x' + i; };
+      document.body.appendChild(button);
+    }
+  </script>
+</body>
+</html>
