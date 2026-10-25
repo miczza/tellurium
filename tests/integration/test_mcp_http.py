@@ -322,6 +322,36 @@ async def test_a_body_that_never_ends_is_cut_at_the_deadline(tmp_path):
         assert not got.startswith(b"HTTP/1.1 2")
 
 
+async def test_mute_sockets_reopened_in_a_loop_do_not_lock_out_the_token(tmp_path):
+    """Connections that never send a request are only closed by the header
+    deadline; however many of them come and go, they take no place of the
+    clients that passed the guard."""
+    from tellurium.mcp.http_transport import CONCURRENCY
+
+    async with _server(tmp_path / "home") as server:
+        host, port = server.url.removeprefix("http://").removesuffix("/mcp").rsplit(":", 1)
+        stop = asyncio.Event()
+
+        async def mute():
+            while not stop.is_set():
+                with contextlib.suppress(OSError):
+                    reader, writer = await asyncio.open_connection(host, int(port))
+                    with contextlib.suppress(TimeoutError, OSError):
+                        await asyncio.wait_for(reader.read(), 0.5)
+                    writer.close()
+
+        mutes = [asyncio.ensure_future(mute()) for _ in range(CONCURRENCY)]
+        try:
+            await asyncio.sleep(1)
+            async with _client(server) as client:
+                for _ in range(5):
+                    assert (await _call(client, "session-list"))["sessions"] == []
+                    await asyncio.sleep(0.5)
+        finally:
+            stop.set()
+            await asyncio.gather(*mutes)
+
+
 async def test_eval_is_off_on_http_unless_allowed(tmp_path):
     async with _server(tmp_path / "home") as server, _client(server) as client:
         assert client.protocol_version in HANDSHAKE_PROTOCOL_VERSIONS  # an MCP session

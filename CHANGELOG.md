@@ -35,7 +35,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   client's browsers.
   A request head must arrive whole within 5 s and its body within 10 s more (slowloris), a
   refused request closes its connection at once (`Connection: close`, body unread), and at
-  most 100 connections are served at once.
+  most 100 requests that passed the token check are served at once (503 past that);
+  connections without the token take no place.
 - `tellurium mcp`: a named session is held by one MCP client at a time; another client
   opening the same name gets a clear error instead of a second Chrome on the profile.
 - `tellurium mcp` `screenshot`: at most 5 MB of base64 per image. A PNG over the cap is

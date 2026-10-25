@@ -40,7 +40,8 @@ SHUTDOWN_GRACE = 3.0
 HEADER_TIMEOUT = 5.0
 # Once the head is in, the body must follow whole within this many seconds.
 BODY_TIMEOUT = 10.0
-# Connections and requests served at once; more get 503 (MCP clients keep a few each).
+# Requests that passed the guard served at once; more get 503 (MCP clients keep
+# a few each). Connections without a request yet are bounded by the deadlines.
 CONCURRENCY = 100
 _VERSION_HEADER = b"mcp-protocol-version"
 
@@ -55,6 +56,7 @@ class GuardedEndpoint:
         self.guard = guard
         self.manager = manager
         self.clients = clients
+        self.active = 0  # requests past the guard, not done yet
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if scope["type"] != "http":
@@ -71,6 +73,16 @@ class GuardedEndpoint:
             message = "This server needs an MCP session: use the initialize handshake"
             await _reply(send, 400, UNSUPPORTED_PROTOCOL_VERSION, message, data=data)
             return
+        if self.active >= CONCURRENCY:
+            await _reply(send, 503, INVALID_REQUEST, "Too many requests at once: retry shortly")
+            return
+        self.active += 1
+        try:
+            await self._serve(scope, receive, send)
+        finally:
+            self.active -= 1
+
+    async def _serve(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if scope["method"] != "DELETE":
             await self.manager.handle_request(scope, receive, send)
             return
@@ -245,7 +257,6 @@ async def serve(config: ServerConfig, stop: asyncio.Event) -> bool:
                     server_header=False,
                     timeout_graceful_shutdown=SHUTDOWN_GRACE,
                     http=_RequestDeadlines,
-                    limit_concurrency=CONCURRENCY,
                 )
             )
             return await _run(web, manager, sock, stop, lambda: _announce(config, http, port))
