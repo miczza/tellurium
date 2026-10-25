@@ -271,7 +271,6 @@ class Browser:
                 from tellurium.stealth.engine import StealthEngine
                 from tellurium.stealth.profile import StealthProfile
 
-                # Build profile
                 if seed is not None:
                     stealth_profile = StealthProfile.from_seed(seed)
                 else:
@@ -774,15 +773,16 @@ class Browser:
     # ------------------------------------------------------------------
 
     async def close(self) -> None:
-        """Terminate the browser process and clean up resources.
-
-        Every resource is released even if this call is cancelled meanwhile;
-        the cancellation is re-raised afterwards.
-        """
+        """Terminate the browser and release every resource, even if this call is
+        cancelled meanwhile (the cancellation is re-raised afterwards)."""
         try:  # unfinished downloads first: Chrome then deletes their partial files
             await self._downloads.stop("The browser closed")
         finally:
-            await self._proc.close()
+            try:
+                await self._proc.close()
+            finally:  # the stealth extension's temp dir, now rather than at GC
+                if self._stealth_engine is not None:
+                    self._stealth_engine.close()
 
     async def __aenter__(self) -> Browser:
         return self

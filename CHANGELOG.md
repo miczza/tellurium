@@ -211,6 +211,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Browser.close()` removes the stealth extension's `tellurium_ext_*` temp
+  directory right away instead of when the engine is garbage-collected.
 - A stealth launch no longer leaves `/tmp/tellurium_ext_*` behind: the stealth
   engine owns its extension directory and deletes it when it goes away with its
   `Browser` (after `close()` or a failed launch) or at interpreter exit;
