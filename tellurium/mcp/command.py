@@ -37,7 +37,7 @@ def register(subparsers: Any) -> None:
         type=float,
         metavar="SECONDS",
         help="Close and save a client's sessions after this long without a call "
-        "(default 900; 0: never)",
+        "(default 300; 0: never)",
     )
     http.add_argument(
         "--allow-remote",

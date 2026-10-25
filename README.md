@@ -217,10 +217,13 @@ tellurium mcp --http 127.0.0.1:8765
   Named sessions are shared on disk. If a second client opens a name that
   another client has open, it gets an error ("already open by another MCP
   client"), never a second Chrome on the same profile.
-- **`--idle-timeout SECONDS`** (default 900; `0` never): after that long
-  without a tool call, a client's sessions are closed and saved. The client
-  stays connected and can open them again. Its sessions are also closed and
-  saved when it disconnects, and when the server stops.
+- **When a client's browsers close.** Its sessions are closed and saved
+  when it disconnects cleanly (it ends its MCP session), after
+  `--idle-timeout SECONDS` without a tool call (default 300; `0` never), and
+  when the server stops. A client that dies without ending its session (a
+  crash, a kill) keeps its browsers, and its named sessions stay taken, until
+  that idle timeout. After an idle close the client can still open sessions
+  again.
 - **`--allow-eval`**: `eval` is not offered over HTTP unless you pass this
   (on stdio it always is).
 - **No web pages.** MCP clients are not web pages, so any request carrying

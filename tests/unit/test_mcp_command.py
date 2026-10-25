@@ -90,3 +90,10 @@ def test_there_is_no_origin_allowlist(run, capsys):
         run("--http", "127.0.0.1:1", "--allow-origin", "https://a.example")
     assert exited.value.code == 2
     assert "--allow-origin" in capsys.readouterr().err  # argparse: unrecognized
+
+
+def test_idle_timeout_defaults_to_five_minutes(run):
+    """A client that dies without ending its MCP session holds its browsers
+    (and named profiles) until then."""
+    config, _ = run("--http", "127.0.0.1:0")
+    assert config.http.idle_timeout == 300

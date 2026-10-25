@@ -11,9 +11,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   [--max-sessions-per-client N] [--max-sessions N]`: the MCP server over Streamable HTTP (the SDK's session manager under
   uvicorn, endpoint `/mcp`; port 0 picks a free one, the address is printed on stderr). Each
   MCP client (MCP session) gets its own browsers: it never sees another client's sessions or
-  tabs. A client's sessions are closed and saved when it ends its MCP session, after
-  `--idle-timeout` seconds without a tool call (default 900, 0 never), and when the server
-  stops. `eval` is off on HTTP unless `--allow-eval`. The default bind is loopback; any
+  tabs. A client's sessions are closed and saved when it ends its MCP session cleanly, after
+  `--idle-timeout` seconds without a tool call (default 300, 0 never; also what holds the
+  browsers of a client that died without ending its session), and when the server stops. `eval` is off on HTTP unless `--allow-eval`. The default bind is loopback; any
   other address needs `--allow-remote` and prints a warning. Only handshake-era protocol
   versions are served (they carry the MCP session); a 2026-07-28 request gets the supported
   versions back and SDK clients fall back to `initialize`.

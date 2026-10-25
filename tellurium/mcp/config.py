@@ -9,7 +9,7 @@ from pathlib import Path
 
 HOME_ENV = "TELLURIUM_HOME"
 # Seconds without a tool call after which an HTTP client's sessions are closed.
-DEFAULT_IDLE_TIMEOUT = 900.0
+DEFAULT_IDLE_TIMEOUT = 300.0
 # Browsers (each a Chrome) an HTTP client, and the whole server, may run at once.
 DEFAULT_SESSIONS_PER_CLIENT = 4
 DEFAULT_SESSIONS = 16
