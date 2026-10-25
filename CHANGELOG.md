@@ -19,6 +19,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   versions back and SDK clients fall back to `initialize`.
   At most `--max-sessions-per-client` browsers per client (default 4) and `--max-sessions`
   for the server (default 16); past them `session-open` says which cap was hit.
+  `--idle-timeout` refuses `inf`, `nan` and negative values with a message (exit 2).
   The README documents it, with a Claude Code and a Python client example.
 - `tellurium mcp --http`: request guard. The token lives in `~/.tellurium/mcp-token`
   (32 random bytes, base64url; created atomically with mode 0600; a file other users can

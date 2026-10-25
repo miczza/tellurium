@@ -4,6 +4,7 @@ the ``mcp`` extra is missing. Imports no SDK until the command runs."""
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from typing import Any
 
@@ -103,8 +104,8 @@ def _http_config(args: argparse.Namespace) -> Any:
             file=sys.stderr,
         )
     idle = DEFAULT_IDLE_TIMEOUT if args.idle_timeout is None else args.idle_timeout
-    if idle < 0:
-        _fail("--idle-timeout must be 0 (never) or a number of seconds")
+    if not math.isfinite(idle) or idle < 0:
+        _fail("--idle-timeout must be 0 (never) or a finite number of seconds")
     caps = {}
     for flag, field in (
         ("--max-sessions-per-client", "max_sessions_per_client"),
