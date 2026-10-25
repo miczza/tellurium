@@ -176,7 +176,7 @@ storage, fingerprint seed). Without a name the session is throwaway.
 | `snapshot` | the accessibility snapshot (`interactive`, `selector`, `depth`, `maxChars`) |
 | `click`, `fill`, `press`, `select-option`, `check`, `hover`, `scroll` | act on a ref; human-like input unless `human: false` |
 | `download` | click a ref, wait, save to `~/.tellurium/downloads/` and return the path |
-| `wait-for`, `get-text`, `screenshot`, `eval` | wait for text / ref / URL; read text; PNG image; JavaScript |
+| `wait-for`, `get-text`, `screenshot`, `eval` | wait for text / ref / URL; read text; PNG image (JPEG when over 5 MB); JavaScript (`eval`: off over HTTP unless `--allow-eval`) |
 
 - Every page tool takes the required `targetId`; arguments are checked against
   the tool's schema, so an unknown argument is an error, not ignored.
@@ -194,6 +194,85 @@ storage, fingerprint seed). Without a name the session is throwaway.
   into it cannot read your files; `tellurium mcp --allow-local-urls` lifts
   this. Chrome itself refuses a web page's redirect to `file:`.
 - `TELLURIUM_HOME` moves `~/.tellurium` (sessions and downloads) elsewhere.
+
+### Over HTTP (`tellurium mcp --http`)
+
+For a client that cannot spawn a process, or several clients sharing one
+machine, serve Streamable HTTP instead of stdio:
+
+```bash
+tellurium mcp --http 127.0.0.1:8765
+# tellurium mcp: listening on http://127.0.0.1:8765/mcp (send 'Authorization: Bearer <token>', token in ~/.tellurium/mcp-token)
+```
+
+- **Token.** The first start writes a random token to `~/.tellurium/mcp-token`
+  (mode 0600; `TELLURIUM_HOME` moves it). Every request must carry
+  `Authorization: Bearer <token>`, on loopback too. The server refuses a token
+  in the URL (URLs end up in logs), and it will not start if the token file is
+  readable by other users (`chmod 600` it, or delete it to get a new one). The
+  token is never printed.
+- **Browsers per client.** Each MCP client (each MCP session) gets its own
+  browsers: it never sees another client's sessions or tabs. Ids are per
+  client, so two clients can both have a `t1` or a `temp-1`, each its own.
+  Named sessions are shared on disk. If a second client opens a name that
+  another client has open, it gets an error ("already open by another MCP
+  client"), never a second Chrome on the same profile.
+- **`--idle-timeout SECONDS`** (default 900; `0` never): after that long
+  without a tool call, a client's sessions are closed and saved. The client
+  stays connected and can open them again. Its sessions are also closed and
+  saved when it disconnects, and when the server stops.
+- **`--allow-eval`**: `eval` is not offered over HTTP unless you pass this
+  (on stdio it always is).
+- **`--allow-origin ORIGIN`** (repeatable, e.g. `https://app.example`): a
+  browser always sends `Origin`. Requests without one (non-browser clients)
+  pass; any other origin gets 403, so a web page cannot drive the server. The
+  `Host` header must name the bind address (any loopback name on a loopback
+  bind), against DNS rebinding.
+- **`--allow-remote`**: the default bind is loopback only. Any other address
+  (`0.0.0.0:8765`, a LAN IP) is refused without this flag, and with it the
+  server prints a warning: anyone on the network who has the token drives
+  your browsers.
+- **`--allow-local-urls`** and **`--headed`** work as on stdio.
+
+Claude Code:
+
+```bash
+claude mcp add --transport http tellurium http://127.0.0.1:8765/mcp \
+  --header "Authorization: Bearer $(cat ~/.tellurium/mcp-token)"
+```
+
+Python, with the official SDK:
+
+```python
+import asyncio
+from pathlib import Path
+
+import httpx2
+from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
+
+URL = "http://127.0.0.1:8765/mcp"
+TOKEN = (Path.home() / ".tellurium" / "mcp-token").read_text().strip()
+
+
+async def main():
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    timeout = httpx2.Timeout(30, read=300)  # the server streams replies
+    async with httpx2.AsyncClient(headers=headers, timeout=timeout) as http:
+        async with Client(streamable_http_client(URL, http_client=http)) as client:
+            opened = (await client.call_tool("session-open", {})).structured_content
+            tab = opened["targetId"]
+            await client.call_tool("navigate", {"targetId": tab, "url": "https://example.com"})
+            print((await client.call_tool("snapshot", {"targetId": tab})).content[0].text)
+
+
+asyncio.run(main())
+```
+
+Only protocol versions that open an MCP session are served (up to
+2025-11-25), because the session is what ties a client to its browsers. A
+2026-07-28 client is told so and falls back to the `initialize` handshake;
+the official SDK does this by itself.
 
 ---
 

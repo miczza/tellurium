@@ -313,3 +313,30 @@ async def test_sigterm_closes_saves_and_exits(local_server, tmp_path):
         with contextlib.suppress(Exception):  # the server is gone: its DELETE fails
             await client.__aexit__(None, None, None)
     assert (home / "sessions" / "github" / "session.json").exists()
+
+
+async def test_readme_python_client_example_runs(local_server, tmp_path):
+    """The HTTP client example in the README, against a real server."""
+    readme = (Path(__file__).resolve().parents[2] / "README.md").read_text()
+    section = readme[readme.index("### Over HTTP (`tellurium mcp --http`)") :]
+    example = re.search(r"```python\n(.*?)```", section, re.S).group(1)
+    async with _server(tmp_path / "home") as server:
+        script = (
+            example.replace('"http://127.0.0.1:8765/mcp"', repr(server.url))
+            .replace(
+                'Path.home() / ".tellurium" / "mcp-token"',
+                f"Path({str(server.home / 'mcp-token')!r})",
+            )
+            .replace('"https://example.com"', repr(f"{local_server}/basic.html"))
+        )
+        assert script != example and server.url in script
+        (tmp_path / "example.py").write_text(script)
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            str(tmp_path / "example.py"),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, err = await asyncio.wait_for(proc.communicate(), 60)
+        assert proc.returncode == 0, err.decode()
+        assert "[ref=" in out.decode() or "heading" in out.decode(), out.decode()

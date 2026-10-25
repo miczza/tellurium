@@ -17,6 +17,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   other address needs `--allow-remote` and prints a warning. Only handshake-era protocol
   versions are served (they carry the MCP session); a 2026-07-28 request gets the supported
   versions back and SDK clients fall back to `initialize`.
+  The README documents it, with a Claude Code and a Python client example.
 - `tellurium mcp --http`: request guard. The token lives in `~/.tellurium/mcp-token`
   (32 random bytes, base64url; created atomically with mode 0600; a file other users can
   read, a symlink or a malformed token is refused). Every request needs
