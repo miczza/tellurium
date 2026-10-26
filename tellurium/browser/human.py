@@ -157,9 +157,11 @@ async def wait_for_human(
     the person clicks it or *until* holds. Headless: no banner, *until* is
     required (``ValueError`` otherwise). *until* is a URL pattern (glob with
     ``*``/``?``, substring otherwise), matched against the main frame's URL
-    as Chrome reports it, or an async callable ``(tab) -> bool``. On expiry
-    of *timeout* seconds (``None``: no limit) ``TimeoutError`` names
-    *reason*. The banner is removed on every way out, cancellation included.
+    without query and fragment (``**/dashboard`` does not match
+    ``/login?next=/dashboard`` nor ``/#/dashboard``), or an async callable
+    ``(tab) -> bool``. On expiry of *timeout* seconds (``None``: no limit)
+    ``TimeoutError`` names *reason*. The banner is removed on every way out,
+    cancellation included.
     """
     check = _condition(until)
     headless = await _headless(tab)
@@ -199,7 +201,9 @@ def _condition(until: Until) -> Callable[[Tab, dict], Awaitable[bool]] | None:
         pattern = until
 
         async def url_holds(tab: Tab, frame: dict) -> bool:
-            return url_matches(pattern, frame.get("url", "") + frame.get("urlFragment", ""))
+            # Chrome keeps the fragment apart (urlFragment); the query goes too,
+            # or a sign-in page's ?next=/dashboard would pass for the dashboard.
+            return url_matches(pattern, frame.get("url", "").split("#", 1)[0].split("?", 1)[0])
 
         return url_holds
     if callable(until):

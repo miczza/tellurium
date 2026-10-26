@@ -27,8 +27,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `Tab.wait_for_human(reason, *, until=None, timeout=600)` hands the tab to a person (a
   captcha, a 2FA prompt). In headed Chrome a banner at the top of the page shows *reason*
   and a "Done" button; the wait ends when the person clicks it or *until* holds: a URL
-  pattern (glob with `*`/`?`, substring otherwise) matched against the main frame's URL as
-  Chrome reports it, or an async `(tab) -> bool`. The banner is built from an isolated world
+  pattern (glob with `*`/`?`, substring otherwise) matched against the main frame's URL
+  without query and fragment (a sign-in page's `?next=/dashboard` or `#/dashboard` does not
+  match `**/dashboard*`), or an async `(tab) -> bool`. The banner is built from an isolated world
   in a closed shadow root, so the page cannot read it, styled through the CSSOM (a
   `style-src` CSP does not strip it), and put back after every navigation; every 0.3 s it is
   repaired if the page removed it or overrode its inline style (`display: none

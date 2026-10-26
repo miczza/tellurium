@@ -648,7 +648,9 @@ await tab.wait_for_human("Sign in with your 2FA code", until=signed_in)
 ```
 
 `until` is a URL pattern (glob with `*`/`?`, substring otherwise, matched
-against the main frame's URL as Chrome reports it) or an async `(tab) -> bool`;
+against the main frame's URL without query and fragment, so `**/dashboard*`
+does not take `/login?next=/dashboard` or `/#/dashboard` for the dashboard) or
+an async `(tab) -> bool`;
 `timeout=None` waits with no limit. In headless Chrome there is no banner and
 `until` is required (`ValueError` otherwise). The banner is removed however the
 wait ends.

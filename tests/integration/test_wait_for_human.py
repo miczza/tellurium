@@ -356,3 +356,21 @@ async def test_headless_is_told_apart_even_with_a_user_agent_of_headed_chrome():
             await asyncio.wait_for(b.main_tab.wait_for_human("Sign in", timeout=3), 10)
     finally:
         await b.close()
+
+
+@pytest.mark.parametrize("pattern", ["**/dashboard*", "/dashboard"])
+async def test_the_url_pattern_ignores_query_and_fragment(browser, local_server, pattern):
+    """A sign-in page naming where it goes next (?next=/dashboard, #/dashboard)
+    is not the dashboard."""
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/basic.html?next=/dashboard")
+    task = asyncio.create_task(tab.wait_for_human("Sign in", until=pattern, timeout=30))
+    try:
+        assert not await _until_settled(task, 0.8)
+        await tab.eval("location.hash = '#/dashboard'")
+        assert not await _until_settled(task, 0.8)
+        await tab.eval("location.href = '/dashboard.html?from=/login#top'")
+        assert await _until_settled(task, 5)
+        await task
+    finally:
+        task.cancel()
