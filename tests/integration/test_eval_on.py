@@ -67,3 +67,30 @@ async def test_a_syntax_error_is_raised(page):
 async def test_a_function_runs_once(page):
     await page.eval_on("#content", "el => { el.dataset.n = (+el.dataset.n || 0) + 1 }")
     assert await page.eval_on("#content", "el => el.dataset.n") == "1"
+
+
+_COUNT = "window.count = (window.count || 0) + 1"
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        # an exception whose description itself throws (P1)
+        f"({_COUNT}, (() => {{ throw Object.create(null) }})())",
+        f"el => {{ {_COUNT}; throw Object.create(null) }}",
+        f"{_COUNT}; throw Object.create(null)",
+        f"{_COUNT}; throw new Proxy({{}}, {{ get() {{ throw 1 }} }})",
+        # a SyntaxError thrown at run time is not a compile error
+        f"el => {{ {_COUNT}; JSON.parse('{{') }}",
+        f"({_COUNT}, JSON.parse('{{'))",
+    ],
+)
+async def test_a_throwing_expression_runs_once(page, expression):
+    with pytest.raises(RuntimeError, match=r"eval_on\('#content'\) failed"):
+        await page.eval_on("#content", expression)
+    assert await page.eval("window.count") == 1
+
+
+async def test_a_body_can_await(page):
+    body = "await new Promise(r => setTimeout(r, 10)); return this.id"
+    assert await page.eval_on("#content", body) == "content"

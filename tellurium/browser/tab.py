@@ -63,11 +63,15 @@ _TEXT_WALKER_JS = """
 
 
 # eval_on: called on the element. A compile error never runs it, so the
-# caller may retry *expression* as a body; anything thrown is returned.
+# caller may retry *expression* as a body; anything thrown is returned, its
+# description too, even when describing it throws: once started, it never fails.
 _EVAL_ON_JS = (
     "async function() { try { const __f = %s;\n"
     "return {ok: true, value: await (typeof __f === 'function' ? __f.call(this, this) : __f)}; "
-    "} catch (e) { return {ok: false, error: String((e && e.stack) || e)}; } }"
+    "} catch (e) { let d = 'an exception that cannot be described';"
+    " try { d = String((e && e.stack) || e); } catch (_) {"
+    " try { d = Object.prototype.toString.call(e); } catch (_) {} }"
+    " return {ok: false, error: d}; } }"
 )
 
 __all__ = ["Tab", "url_matches"]
@@ -284,14 +288,16 @@ class Tab:
         object_id = (await send("DOM.resolveNode", node, timeout=timeout))["object"]["objectId"]
         call = {"objectId": object_id, "returnByValue": True, "awaitPromise": True}
         try:  # as a function or an expression; else, if it does not compile, as a body
-            for source in (f"(\n{expression}\n)", f"function() {{\n{expression}\n}}"):
+            for source in (f"(\n{expression}\n)", f"async function() {{\n{expression}\n}}"):
                 call["functionDeclaration"] = _EVAL_ON_JS % source
                 res = await send("Runtime.callFunctionOn", call, timeout=timeout)
-                if "exceptionDetails" not in res:  # it ran: the wrapper caught any throw
+                if not _not_compiled(res):  # it ran: the wrapper caught any throw
                     break
         finally:
             self._handles.discard(object_id)
-        out = res.get("result", {}).get("value") or {}
+        out = res.get("result", {}).get("value")
+        if "exceptionDetails" in res or not isinstance(out, dict):
+            out = {}  # it did not run (or the thrown value is in "result")
         if not out.get("ok"):
             error = out.get("error") or res.get("result", {}).get("description")
             raise RuntimeError(f"eval_on({selector!r}) failed: {error}")
@@ -1232,6 +1238,13 @@ class Tab:
     async def send_cdp(self, method: str, params: dict | None = None) -> dict:
         """Send a raw CDP command on this tab's session."""
         return await self._session.send(method, params)
+
+
+def _not_compiled(res: dict) -> bool:
+    """Whether a ``Runtime.callFunctionOn`` of ``_EVAL_ON_JS`` failed to compile: a
+    started wrapper always returns, so only a ``SyntaxError`` escapes it unrun."""
+    exception = res.get("exceptionDetails", {}).get("exception", {})
+    return exception.get("className") == "SyntaxError"
 
 
 def _json_escape(s: str) -> str:
