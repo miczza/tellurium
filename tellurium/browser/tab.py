@@ -983,14 +983,6 @@ class Tab:
         any event; *human* holds the key 40-110 ms."""
         await keys.press(self._session.send, key, human=human)
 
-    async def _dispatch_named_key(self, key: str, event_type: str) -> None:
-        """Dispatch one half of a named-key press (no ``text`` payload)."""
-        if event_type == "char":
-            return  # named keys produce no character
-        kind = "keyDown" if event_type == "rawKeyDown" else "keyUp"
-        params = {**keys.event(keys.parse(key), kind), "code": key}
-        await self._session.send("Input.dispatchKeyEvent", params)
-
     def _get_typo_rng(self):
         """Random source for typo decisions, seeded from the stealth profile.
 
@@ -1035,83 +1027,12 @@ class Tab:
             for event in events:
                 if event["delay_ms"] > 0:
                     await asyncio.sleep(event["delay_ms"] / 1000)
-                char = event["key"]
-                if len(char) > 1:
-                    # Named key (Backspace from the typo simulation): no text
-                    # payload, otherwise Chrome inserts the literal word.
-                    await self._dispatch_named_key(char, event["type"])
-                    continue
-                key_code = ord(char.upper()) if len(char) == 1 and char.isascii() else 0
-                code = f"Key{char.upper()}" if char.isalpha() else ""
-                if event["type"] == "rawKeyDown":
-                    if char.isalpha():
-                        # Letters: rawKeyDown + char event sequence
-                        await self._session.send(
-                            "Input.dispatchKeyEvent",
-                            {
-                                "type": "rawKeyDown",
-                                "key": char,
-                                "code": code,
-                                "windowsVirtualKeyCode": key_code,
-                            },
-                        )
-                    else:
-                        # Special chars: keyDown with text (like non-human path)
-                        await self._session.send(
-                            "Input.dispatchKeyEvent",
-                            {
-                                "type": "keyDown",
-                                "key": char,
-                                "text": char,
-                            },
-                        )
-                elif event["type"] == "char":
-                    # Skip char event for non-alpha chars (keyDown already has text)
-                    if char.isalpha():
-                        await self._session.send(
-                            "Input.dispatchKeyEvent",
-                            {
-                                "type": "char",
-                                "text": char,
-                                "key": char,
-                            },
-                        )
-                elif event["type"] == "keyUp":
-                    if char.isalpha():
-                        await self._session.send(
-                            "Input.dispatchKeyEvent",
-                            {
-                                "type": "keyUp",
-                                "key": char,
-                                "code": code,
-                                "windowsVirtualKeyCode": key_code,
-                            },
-                        )
-                    else:
-                        await self._session.send(
-                            "Input.dispatchKeyEvent",
-                            {
-                                "type": "keyUp",
-                                "key": char,
-                            },
-                        )
+                if (params := keys.typing_event(event["key"], event["type"])) is not None:
+                    await self._session.send("Input.dispatchKeyEvent", params)
         else:
             for char in text:
-                await self._session.send(
-                    "Input.dispatchKeyEvent",
-                    {
-                        "type": "keyDown",
-                        "key": char,
-                        "text": char,
-                    },
-                )
-                await self._session.send(
-                    "Input.dispatchKeyEvent",
-                    {
-                        "type": "keyUp",
-                        "key": char,
-                    },
-                )
+                for params in keys.plain_events(char):
+                    await self._session.send("Input.dispatchKeyEvent", params)
 
     async def scroll(
         self,

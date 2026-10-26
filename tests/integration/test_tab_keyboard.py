@@ -51,3 +51,11 @@ async def test_an_unknown_key_sends_no_event(page, combo):
         await page.keyboard_press(combo)
     assert await page.eval("window.keydowns") == 0
     assert await page.eval("window.submits") == 0
+
+
+@pytest.mark.parametrize("human", [False, True])
+async def test_keyboard_type_types_the_exact_text(page, human):
+    await page.eval("document.getElementById('second').focus()")
+    options = {"human": True, "wpm": 3000, "typos": True} if human else {}
+    await page.keyboard_type("Hello, World! 42", **options)
+    assert await page.eval("document.getElementById('second').value") == "Hello, World! 42"

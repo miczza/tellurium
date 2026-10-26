@@ -88,3 +88,37 @@ async def test_human_press_dwells_between_down_and_up(monkeypatch):
     slept.clear()
     await _sent("a")
     assert slept == []
+
+
+def test_typing_events_of_a_letter_carry_its_codes():
+    assert keys.typing_event("a", "rawKeyDown") == {
+        "type": "rawKeyDown",
+        "key": "a",
+        "code": "KeyA",
+        "windowsVirtualKeyCode": 65,
+    }
+    assert keys.typing_event("a", "char") == {"type": "char", "text": "a", "key": "a"}
+    assert keys.typing_event("A", "keyUp") == {
+        "type": "keyUp",
+        "key": "A",
+        "code": "KeyA",
+        "windowsVirtualKeyCode": 65,
+    }
+
+
+def test_typing_events_of_other_characters_put_the_text_on_key_down():
+    assert keys.typing_event("1", "rawKeyDown") == {"type": "keyDown", "key": "1", "text": "1"}
+    assert keys.typing_event("1", "char") is None
+    assert keys.typing_event("1", "keyUp") == {"type": "keyUp", "key": "1"}
+    assert keys.plain_events("!") == [
+        {"type": "keyDown", "key": "!", "text": "!"},
+        {"type": "keyUp", "key": "!"},
+    ]
+
+
+def test_typing_events_of_a_named_key_carry_no_text():
+    down = keys.typing_event("Backspace", "rawKeyDown")
+    assert down["type"] == "keyDown" and down["windowsVirtualKeyCode"] == 8
+    assert down["code"] == "Backspace" and "text" not in down
+    assert keys.typing_event("Backspace", "char") is None
+    assert keys.typing_event("Backspace", "keyUp")["type"] == "keyUp"

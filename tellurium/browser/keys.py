@@ -105,3 +105,25 @@ async def press(send: Send, combo: str, *, human: bool = False) -> None:
     if human:
         await asyncio.sleep(random.uniform(0.04, 0.11))
     await send("Input.dispatchKeyEvent", event(key, "keyUp"))
+
+
+def typing_event(char: str, kind: str) -> dict[str, Any] | None:
+    """The ``Input.dispatchKeyEvent`` parameters of one event (``rawKeyDown``, ``char``,
+    ``keyUp``) of the human typing path for *char*; ``None`` for an event it skips."""
+    if len(char) > 1:  # a named key (the typo path's Backspace): never any text
+        if kind == "char":
+            return None
+        return {**event(parse(char), "keyDown" if kind == "rawKeyDown" else "keyUp"), "code": char}
+    if not char.isalpha():  # the text rides on keyDown, as on the plain path
+        return dict(zip(("rawKeyDown", "keyUp"), plain_events(char), strict=True)).get(kind)
+    if kind == "char":
+        return {"type": "char", "text": char, "key": char}
+    if kind not in ("rawKeyDown", "keyUp"):
+        return None
+    code = ord(char.upper()) if char.isascii() else 0
+    return {"type": kind, "key": char, "code": f"Key{char.upper()}", "windowsVirtualKeyCode": code}
+
+
+def plain_events(char: str) -> list[dict[str, Any]]:
+    """The events that type *char* at once: ``keyDown`` with its text, ``keyUp``."""
+    return [{"type": "keyDown", "key": char, "text": char}, {"type": "keyUp", "key": char}]
