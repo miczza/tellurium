@@ -18,12 +18,12 @@ from typing import Any
 from tellurium.browser.browser import Browser
 from tellurium.browser.tab import Tab
 from tellurium.mcp import page_state, urls
-from tellurium.mcp.claims import SessionClaims
+from tellurium.mcp.claims import SessionClaims, busy
 from tellurium.mcp.config import ServerConfig
 from tellurium.mcp.limits import SessionBudget
 from tellurium.mcp.results import Reply, ToolError
 from tellurium.mcp.tool import Tool, param
-from tellurium.session import Session
+from tellurium.session import Session, SessionBusyError
 
 logger = logging.getLogger(__name__)
 
@@ -143,13 +143,16 @@ class SessionPool:
 
     async def _launch_named(self, name: str) -> BrowserSession:
         path = str(self.config.sessions_dir / name)
-        self._claims.take(name, self)
+        self._claims.take(name, self, path)
         stack = AsyncExitStack()
         stack.callback(self._claims.release, name, self)  # last out: after the save and close
         try:
             session = await asyncio.to_thread(Session, name, path=path)
             browser = await stack.enter_async_context(session.start(**self._launch_options()))
             await asyncio.to_thread(session.save)  # the seed survives a crash
+        except SessionBusyError as exc:  # another process took it after the check
+            await stack.aclose()
+            raise busy(name, exc.pid) from exc
         except BaseException:
             await stack.aclose()
             raise

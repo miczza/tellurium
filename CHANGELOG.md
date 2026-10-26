@@ -19,6 +19,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `start()` puts them back before the validators run. `save()` also writes `cookies.json`
   with the cookies known as of the last start or close. Reading the jar before closing also
   makes a cookie the page wrote an instant before `close()` reach the profile.
+- MCP `session-open` on a named session another process holds (the CLI, a script, another
+  server) is refused before any launch with the holder's PID, and the name is not left
+  claimed; a `SessionBusyError` from a launch that lost the race says the same.
 - `tellurium mcp --http HOST:PORT [--allow-eval] [--idle-timeout S] [--allow-remote]
   [--max-sessions-per-client N] [--max-sessions N]`: the MCP server over Streamable HTTP (the SDK's session manager under
   uvicorn, endpoint `/mcp`; port 0 picks a free one, the address is printed on stderr). Each

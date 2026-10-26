@@ -128,3 +128,21 @@ async def test_lock_is_held_while_chrome_launches(tmp_path, monkeypatch):
     async with Session("s", path=path).start(headless=True):
         pass
     assert seen == [os.getpid()]
+
+
+async def test_mcp_refuses_a_session_another_process_holds(tmp_path):
+    pytest.importorskip("mcp")
+    from tellurium.mcp.config import ServerConfig
+    from tellurium.mcp.results import ToolError
+    from tellurium.mcp.sessions import SessionPool
+
+    config = ServerConfig(home=tmp_path)
+    holder = await _hold(str(config.sessions_dir / "github"))
+    try:
+        async with SessionPool(config) as pool:
+            with pytest.raises(ToolError, match=rf"another process \(PID {holder.pid}\)"):
+                await pool.open("github")
+            assert pool.sessions() == []
+    finally:
+        _kill_group(holder)
+        await holder.wait()

@@ -23,6 +23,7 @@ class _FakeBrowser:
 class _FakeSession:
     started: list[str] = []
     fail_start = False
+    busy_pid: int | None = None
 
     def __init__(self, name, path):
         self.name = name
@@ -31,6 +32,10 @@ class _FakeSession:
     async def start(self, **options):
         if _FakeSession.fail_start:
             raise RuntimeError("chrome did not start")
+        if _FakeSession.busy_pid is not None:
+            from tellurium.session import SessionBusyError
+
+            raise SessionBusyError("/some/path", _FakeSession.busy_pid)
         _FakeSession.started.append(self.name)
         try:
             yield _FakeBrowser()
@@ -45,6 +50,7 @@ class _FakeSession:
 def fake_session(monkeypatch):
     _FakeSession.started = []
     _FakeSession.fail_start = False
+    _FakeSession.busy_pid = None
     monkeypatch.setattr(sessions, "Session", _FakeSession)
     return _FakeSession
 
@@ -131,3 +137,28 @@ def test_claims_release_only_by_the_owner():
         claims.take("x", b)
     claims.release("x", a)
     claims.take("x", b)
+
+
+async def test_a_session_locked_by_another_process_is_refused_before_chrome(tmp_path, fake_session):
+    from tellurium.session.lock import SessionLock
+
+    (a,) = _pools(tmp_path, 1)
+    other = SessionLock(str(ServerConfig(home=tmp_path).sessions_dir / "github"))
+    other.acquire()  # another process, as far as the pool can tell
+    try:
+        with pytest.raises(ToolError, match=r"another process \(PID \d+\)"):
+            await a.open("github")
+        assert fake_session.started == []  # refused before any launch
+    finally:
+        other.release()
+    session, created = await a.open("github")  # the name was not left claimed
+    assert created and session.id == "github"
+
+
+async def test_busy_error_from_the_launch_becomes_a_tool_error(tmp_path, fake_session):
+    a, b = _pools(tmp_path)
+    fake_session.busy_pid = 4242  # lost the race to another process after the check
+    with pytest.raises(ToolError, match=r"another process \(PID 4242\)"):
+        await a.open("github")
+    fake_session.busy_pid = None
+    await b.open("github")
