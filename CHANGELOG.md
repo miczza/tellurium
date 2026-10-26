@@ -285,6 +285,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Tab.keyboard_press` sends keys Chrome acts on: `rawKeyDown` with the Windows virtual
+  key code, a `char` event when the key types text (none with Control/Meta), `keyUp`.
+  `"Enter"` now submits the focused form and `"Control+a"` selects all; before, only
+  `key` was sent and the page did nothing. An unknown key or modifier raises
+  `ValueError` before any event (it was silently ignored). New `human=True` holds the key
+  40-110 ms. The key table lives in `tellurium.browser.keys`, shared by the human typing
+  path and the MCP tools (their messages are unchanged).
 - `Browser.close()` removes the stealth extension's `tellurium_ext_*` temp
   directory right away instead of when the engine is garbage-collected.
 - A stealth launch no longer leaves `/tmp/tellurium_ext_*` behind: the stealth

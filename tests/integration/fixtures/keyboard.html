@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html><head><title>Keyboard Test</title></head>
+<body>
+  <form id="form">
+    <input name="first" type="text" id="first" value="hello world">
+    <input name="second" type="text" id="second">
+    <select name="role" id="role">
+      <option value="user">User</option>
+      <option value="admin">Admin</option>
+    </select>
+    <button type="submit" id="go">Go</button>
+  </form>
+  <script>
+    window.keydowns = 0;
+    window.submits = 0;
+    document.addEventListener('keydown', () => { window.keydowns += 1; }, true);
+    document.getElementById('form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      window.submits += 1;
+    });
+  </script>
+</body></html>

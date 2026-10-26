@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from tellurium.browser import keys
 from tellurium.browser.dialog import DialogGuard, DialogHandler
 from tellurium.browser.download import DownloadWaiter, TabFrames
 from tellurium.browser.element import Element, css_selector
@@ -973,57 +974,19 @@ class Tab:
         abs_y = rect["y"] + y
         await self.mouse_click(abs_x, abs_y, button=button, human=human)
 
-    async def keyboard_press(self, key: str) -> None:
-        """Press a single key or key combo (e.g. ``"Enter"``, ``"Control+a"``)."""
-        modifiers = 0
-        parts = key.split("+")
-        actual_key = parts[-1]
-        for mod in parts[:-1]:
-            mod_lower = mod.lower()
-            if mod_lower in ("ctrl", "control"):
-                modifiers |= 2
-            elif mod_lower in ("alt",):
-                modifiers |= 1
-            elif mod_lower in ("shift",):
-                modifiers |= 8
-            elif mod_lower in ("meta", "cmd", "command"):
-                modifiers |= 4
-
-        await self._session.send(
-            "Input.dispatchKeyEvent",
-            {
-                "type": "keyDown",
-                "key": actual_key,
-                "modifiers": modifiers,
-            },
-        )
-        await self._session.send(
-            "Input.dispatchKeyEvent",
-            {
-                "type": "keyUp",
-                "key": actual_key,
-                "modifiers": modifiers,
-            },
-        )
-
-    #: Named keys that the human-typing path may emit, with their Windows
-    #: virtual key codes (Chrome needs the code to act on the key).
-    _NAMED_KEYS = {"Backspace": 8, "Enter": 13, "Tab": 9, "Delete": 46, "Escape": 27}
+    async def keyboard_press(self, key: str, *, human: bool = False) -> None:
+        """Press a key or combo (``"Enter"``, ``"Tab"``, ``"ArrowDown"``, ``"Control+a"``)
+        in the focused element. ``ValueError`` for an unknown key or modifier, before
+        any event; *human* holds the key 40-110 ms."""
+        await keys.press(self._session.send, key, human=human)
 
     async def _dispatch_named_key(self, key: str, event_type: str) -> None:
         """Dispatch one half of a named-key press (no ``text`` payload)."""
         if event_type == "char":
             return  # named keys produce no character
-        await self._session.send(
-            "Input.dispatchKeyEvent",
-            {
-                "type": "keyDown" if event_type == "rawKeyDown" else "keyUp",
-                "key": key,
-                "code": key,
-                "windowsVirtualKeyCode": self._NAMED_KEYS.get(key, 0),
-                "nativeVirtualKeyCode": self._NAMED_KEYS.get(key, 0),
-            },
-        )
+        kind = "keyDown" if event_type == "rawKeyDown" else "keyUp"
+        params = {**keys.event(keys.parse(key), kind), "code": key}
+        await self._session.send("Input.dispatchKeyEvent", params)
 
     def _get_typo_rng(self):
         """Random source for typo decisions, seeded from the stealth profile.

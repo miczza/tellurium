@@ -1,0 +1,90 @@
+"""The shared key table: the codes and text Chrome needs to act on a key press."""
+
+import pytest
+
+from tellurium.browser import keys
+
+
+def test_named_keys_carry_virtual_key_code_and_text():
+    assert keys.parse("Enter") == ("Enter", 0, 13, "\r")
+    assert keys.parse("Tab") == ("Tab", 0, 9, "")
+    assert keys.parse("ArrowDown").code == 40
+    assert keys.parse("F5").code == 116
+    assert keys.parse("Space") == (" ", 0, 32, " ")
+
+
+def test_modifiers_and_printable_keys():
+    assert keys.parse("Control+a") == ("a", 2, 65, "a")
+    assert keys.parse("Shift+Tab") == ("Tab", 8, 9, "")
+    assert keys.parse("ctrl+Shift+z").modifiers == 2 | 8
+    assert keys.parse("Meta+c").modifiers == 4
+    assert keys.parse("7") == ("7", 0, 55, "7")
+    assert keys.parse(";").code == 186
+    assert keys.parse("+") == ("+", 0, 0, "+")
+
+
+@pytest.mark.parametrize("combo", ["Entr", "NotAKey", "", "ab"])
+def test_unknown_key_is_a_value_error(combo):
+    with pytest.raises(ValueError, match="Unknown key"):
+        keys.parse(combo)
+
+
+def test_unknown_modifier_is_a_value_error():
+    with pytest.raises(ValueError, match="Unknown modifier 'Hyper'"):
+        keys.parse("Hyper+a")
+
+
+async def _sent(combo, **kwargs):
+    sent = []
+
+    async def send(method, params):
+        sent.append((method, params))
+        return {}
+
+    await keys.press(send, combo, **kwargs)
+    assert {m for m, _ in sent} == {"Input.dispatchKeyEvent"}
+    return [p for _, p in sent]
+
+
+async def test_press_sends_raw_key_down_char_and_key_up():
+    events = await _sent("Enter")
+    assert [e["type"] for e in events] == ["rawKeyDown", "char", "keyUp"]
+    assert all(e["windowsVirtualKeyCode"] == 13 and e["key"] == "Enter" for e in events)
+    assert events[1]["text"] == "\r"
+
+
+async def test_a_key_without_text_sends_no_char():
+    events = await _sent("ArrowDown")
+    assert [e["type"] for e in events] == ["rawKeyDown", "keyUp"]
+
+
+async def test_control_and_meta_shortcuts_type_nothing():
+    for combo in ("Control+a", "Meta+a"):
+        events = await _sent(combo)
+        assert [e["type"] for e in events] == ["rawKeyDown", "keyUp"]
+        assert all("text" not in e for e in events)
+
+
+async def test_unknown_key_sends_nothing():
+    sent = []
+
+    async def send(method, params):
+        sent.append(method)
+
+    with pytest.raises(ValueError):
+        await keys.press(send, "Entr")
+    assert sent == []
+
+
+async def test_human_press_dwells_between_down_and_up(monkeypatch):
+    slept = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr(keys.asyncio, "sleep", sleep)
+    await _sent("a", human=True)
+    assert len(slept) == 1 and 0.04 <= slept[0] <= 0.11
+    slept.clear()
+    await _sent("a")
+    assert slept == []

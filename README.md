@@ -534,8 +534,11 @@ await tab.mouse_click(100, 200)
 await tab.mouse_click(100, 200, human=True) # Human trajectory + click
 
 # Keyboard
-await tab.keyboard_press("Enter")
+await tab.keyboard_press("Enter")             # submits the focused form
 await tab.keyboard_press("Tab")
+await tab.keyboard_press("Control+a")         # combos: Control, Alt, Shift, Meta
+await tab.keyboard_press("ArrowDown", human=True)  # holds the key 40-110 ms
+# An unknown key or modifier ("Entr", "Hyper+a") raises ValueError, sending nothing
 await tab.keyboard_type("Hello world")
 await tab.keyboard_type("Hello world", human=True)  # Realistic timing
 await tab.keyboard_type("Hello world", human=True, typos=True)  # + typo/backspace
