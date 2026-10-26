@@ -7,11 +7,13 @@ from tellurium.session.errors import (
     SessionInvalidError,
     SessionLoginFailedError,
 )
+from tellurium.session.pool import SessionPool
 from tellurium.session.session import Session
 
 __all__ = [
     "Session",
     "SessionBusyError",
+    "SessionPool",
     "SessionError",
     "SessionInvalidError",
     "SessionLoginFailedError",
