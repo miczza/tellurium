@@ -7,6 +7,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `tellurium login NAME [URL] [--dir D]`: opens Chrome with a window on the named session
+  (`~/.tellurium/sessions/NAME` by default, the folder `tellurium mcp` uses, launched with
+  stealth as MCP does), on *URL* if given, with a `wait_for_human` banner. Once the person
+  has signed in, clicking "Done", pressing Enter in the terminal or closing the window saves
+  the session: `session.json` and the cookie jar in `cookies.json`, which MCP and scripts
+  then find signed in. Chrome is kept running past its last window (`--keep-alive-for-test`)
+  so the jar can still be read, and since Chrome drops the cookies with no expiry with its
+  last window, the jar is read while a window is open and those are put back before the save
+  (a cookie set in the last 0.3 s before the window closed can be missed). A session open
+  elsewhere: an error naming the PID, exit code 1.
 - `Tab.wait_for_human(reason, *, until=None, timeout=600)` hands the tab to a person (a
   captcha, a 2FA prompt). In headed Chrome a banner at the top of the page shows *reason*
   and a "Done" button; the wait ends when the person clicks it or *until* holds: a URL
