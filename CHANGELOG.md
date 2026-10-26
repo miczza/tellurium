@@ -23,6 +23,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (atomic, mode 0600); the next `start()` puts back, before the validators run, those Chrome
   does not have (same name, domain and path), leaving the ones it kept untouched. `save()`
   also writes `cookies.json` with the jar known as of the last start or close.
+  To log a session out by hand, delete `cookies.json` along with the profile's cookies.
 - MCP `session-open` on a named session another process holds (the CLI, a script, another
   server) is refused before any launch with the holder's PID, and the name is not left
   claimed; a `SessionBusyError` from a launch that lost the race says the same.

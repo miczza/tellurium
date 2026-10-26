@@ -164,10 +164,12 @@ async def test_portability_new_session_loads_metadata(tmp_path, local_server):
 
     # Step 2: script B constructs a Session with just the name/path, no
     # hardcoded credentials. Simulate cookie invalidation by deleting cookies
-    # dir from user_data_dir so the validator will fail.
+    # dir from user_data_dir, and the session's own cookies.json, so the
+    # validator will fail.
     import os
     import shutil
 
+    os.remove(os.path.join(s_a.path, "cookies.json"))
     default_dir = os.path.join(s_a.path, "chrome", "Default")
     for entry in os.listdir(default_dir):
         if entry.startswith("Cookies"):
