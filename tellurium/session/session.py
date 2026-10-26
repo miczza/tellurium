@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import math
 import os
 import random
@@ -10,7 +12,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
-from tellurium.session import storage
+from tellurium.session import session_cookies, storage
 from tellurium.session.errors import (
     SessionInvalidError,
     SessionLoginFailedError,
@@ -18,6 +20,8 @@ from tellurium.session.errors import (
 from tellurium.session.lock import SessionLock
 
 _VALID_MODES = ("all", "any")
+
+logger = logging.getLogger(__name__)
 
 
 class Session:
@@ -47,6 +51,8 @@ class Session:
         self._created_at: str | None = None
         self._chromium_version_used: str | None = None  # set by Browser.launch/Session.start
         self._chromium_version_loaded: str | None = None
+        # The cookies with no expiry, as of the last start or close (None: unknown).
+        self._session_cookies: list | None = None
 
         loaded = storage.load(self._json_path())
         if loaded is None:
@@ -120,7 +126,8 @@ class Session:
         return fn
 
     def save(self, *, full: bool = False) -> None:
-        """Serialize the current session state to session.json.
+        """Serialize the current session state to session.json, and the cookies
+        with no expiry (as of the last start or close) to cookies.json.
 
         `full=True` includes the last set of launch parameters used by start()
         (or stored hints if start() has not run). If neither exists, the file
@@ -146,13 +153,18 @@ class Session:
                 payload["launch"] = dict(launch)
 
         storage.save(self._json_path(), payload, full=full)
+        if self._session_cookies is not None:
+            session_cookies.save(self.path, self._session_cookies)
 
     @asynccontextmanager
     async def start(self, **kwargs):
         """Launch a browser bound to this session, run validators, and optionally
         execute the login callback if validation fails.
 
-        Yields the Browser instance. Closes it on exit. Never auto-saves.
+        Yields the Browser instance. Closes it on exit. Never auto-saves
+        session.json; the cookies with no expiry, which Chrome drops on restart,
+        are written to cookies.json before Chrome closes (on error too) and put
+        back before the validators run.
         The session folder is locked from before Chrome starts until after it
         is closed, even on error or cancellation: another process (or another
         :class:`Session` on the same folder) gets :class:`SessionBusyError`.
@@ -190,18 +202,39 @@ class Session:
                 merged.get("chromium_version") or self._chromium_version_used
             )
             self._started = True
+            await self._restore_cookies(browser)
             await self._run_validation_and_login(browser)
             yield browser
         finally:
             self._started = False
             try:
                 if browser is not None:
-                    try:
-                        await browser.close()
-                    except Exception:  # noqa: BLE001 - cleanup after failure
-                        pass
+                    await self._close_browser(browser)
             finally:
                 lock.release()  # last: after Chrome has let go of the profile
+
+    async def _restore_cookies(self, browser) -> None:
+        saved = await asyncio.to_thread(session_cookies.load, self.path)
+        try:
+            await session_cookies.restore(browser, saved)
+        except Exception:  # noqa: BLE001 - the validators judge the session
+            logger.warning("could not restore the cookies of %s", self.path, exc_info=True)
+        self._session_cookies = saved
+
+    async def _close_browser(self, browser) -> None:
+        """Keep the cookies with no expiry, then close Chrome (that even if the
+        first step fails or is cancelled)."""
+        try:
+            cookies = await session_cookies.snapshot(browser)
+            await asyncio.to_thread(session_cookies.save, self.path, cookies)
+            self._session_cookies = cookies
+        except Exception:  # noqa: BLE001 - Chrome gone: keep the previous file
+            logger.warning("could not save the cookies of %s", self.path, exc_info=True)
+        finally:
+            try:
+                await browser.close()
+            except Exception:  # noqa: BLE001 - cleanup after failure
+                pass
 
     async def _run_validation_and_login(self, browser) -> None:
         if not self._validators:

@@ -13,6 +13,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   closed, error and cancellation included. A second process, or a second `Session` on the
   same folder, gets `SessionBusyError` with `.pid` and `.path` instead of a Chrome launch
   error; the OS drops the lock when its holder dies, so a `kill -9` leaves nothing to clean.
+- `Session` keeps the cookies with no expiry (`expires == -1`: SSO, banks), which Chrome
+  drops on restart: before Chrome closes (on error too, each call bounded by 5 s) they are
+  read and written to `cookies.json` in the session folder (atomic, mode 0600), and the next
+  `start()` puts them back before the validators run. `save()` also writes `cookies.json`
+  with the cookies known as of the last start or close. Reading the jar before closing also
+  makes a cookie the page wrote an instant before `close()` reach the profile.
 - `tellurium mcp --http HOST:PORT [--allow-eval] [--idle-timeout S] [--allow-remote]
   [--max-sessions-per-client N] [--max-sessions N]`: the MCP server over Streamable HTTP (the SDK's session manager under
   uvicorn, endpoint `/mcp`; port 0 picks a free one, the address is printed on stderr). Each

@@ -39,13 +39,19 @@ def save(path: str, data: dict[str, Any], full: bool) -> None:
     if not full:
         out.pop("launch", None)
 
+    write_private(path, out)
+
+
+def write_private(path: str, data: Any) -> None:
+    """Write *data* as JSON to *path* atomically (temp file, fsync, rename),
+    mode 0600 on POSIX."""
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
 
     tmp = path + ".tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(out, f, indent=2, sort_keys=True)
+            json.dump(data, f, indent=2, sort_keys=True)
             f.flush()
             os.fsync(f.fileno())
     except BaseException:
