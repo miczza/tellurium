@@ -15,6 +15,7 @@ from tellurium.session.errors import (
     SessionInvalidError,
     SessionLoginFailedError,
 )
+from tellurium.session.lock import SessionLock
 
 _VALID_MODES = ("all", "any")
 
@@ -152,6 +153,9 @@ class Session:
         execute the login callback if validation fails.
 
         Yields the Browser instance. Closes it on exit. Never auto-saves.
+        The session folder is locked from before Chrome starts until after it
+        is closed, even on error or cancellation: another process (or another
+        :class:`Session` on the same folder) gets :class:`SessionBusyError`.
         """
         if self._started:
             raise RuntimeError("session already started")
@@ -163,7 +167,8 @@ class Session:
         # Lazy import to avoid top-level cycles
         from tellurium import Browser
 
-        os.makedirs(self.path, exist_ok=True)
+        lock = SessionLock(self.path)
+        lock.acquire()  # creates the folder; a non-blocking syscall
         chrome_dir = os.path.join(self.path, "chrome")
 
         # Single try covers both Browser.launch failure (leak prevention) and
@@ -189,11 +194,14 @@ class Session:
             yield browser
         finally:
             self._started = False
-            if browser is not None:
-                try:
-                    await browser.close()
-                except Exception:  # noqa: BLE001 - cleanup after failure
-                    pass
+            try:
+                if browser is not None:
+                    try:
+                        await browser.close()
+                    except Exception:  # noqa: BLE001 - cleanup after failure
+                        pass
+            finally:
+                lock.release()  # last: after Chrome has let go of the profile
 
     async def _run_validation_and_login(self, browser) -> None:
         if not self._validators:

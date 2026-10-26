@@ -7,6 +7,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `SessionBusyError` (from `tellurium` and `tellurium.session`): `Session.start()` locks the
+  session folder (`session.lock`, `fcntl.flock` on POSIX, `msvcrt.locking` on Windows,
+  mode 0600, with the holder's PID inside) from before Chrome starts until after it is
+  closed, error and cancellation included. A second process, or a second `Session` on the
+  same folder, gets `SessionBusyError` with `.pid` and `.path` instead of a Chrome launch
+  error; the OS drops the lock when its holder dies, so a `kill -9` leaves nothing to clean.
 - `tellurium mcp --http HOST:PORT [--allow-eval] [--idle-timeout S] [--allow-remote]
   [--max-sessions-per-client N] [--max-sessions N]`: the MCP server over Streamable HTTP (the SDK's session manager under
   uvicorn, endpoint `/mcp`; port 0 picks a free one, the address is printed on stderr). Each

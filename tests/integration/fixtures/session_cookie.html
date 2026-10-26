@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html>
+<head><title>Session cookie</title></head>
+<body>
+  <p id="status">setting a cookie with no expiry</p>
+  <script>
+    // A session cookie: no expires, no max-age (SSO and banks use these).
+    document.cookie = "js_sso=1; path=/";
+    document.getElementById('status').textContent = 'cookie set';
+  </script>
+</body></html>

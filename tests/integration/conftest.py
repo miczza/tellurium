@@ -19,6 +19,7 @@ class _FixtureHandler(http.server.SimpleHTTPRequestHandler):
     * ``/download-slow/<name>`` — an attachment trickling for ~30 s
     * ``/to-file`` — a 302 to ``file:///etc/hostname``
     * ``/download-late/<ms>/<name>`` — an attachment whose body comes after *ms*
+    * ``/session-cookie`` — a page setting an HttpOnly cookie with no expiry
     """
 
     def __init__(self, *a, **kw):
@@ -31,6 +32,15 @@ class _FixtureHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Length", "0")
             self.end_headers()
+            return
+        if self.path == "/session-cookie":
+            body = b"<!DOCTYPE html><title>sso</title><p>signed in</p>"
+            self.send_response(200)
+            self.send_header("Set-Cookie", "http_sso=1; Path=/; HttpOnly")
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if self.path == "/to-file":
             self.send_response(302)

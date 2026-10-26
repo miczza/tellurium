@@ -18,7 +18,7 @@ from tellurium.cdp.types import TargetCrashedError
 
 __version__ = "0.1.0"
 
-from tellurium.session import Session  # noqa: E402 — after __version__ to avoid circular import
+from tellurium.session import Session, SessionBusyError  # noqa: E402 — after __version__ to avoid circular import
 
 __all__ = [
     "Browser",
@@ -29,6 +29,7 @@ __all__ = [
     "CapturedRequest",
     "InterceptedRequest",
     "Session",
+    "SessionBusyError",
     "Dialog",
     "Download",
     "DownloadError",
