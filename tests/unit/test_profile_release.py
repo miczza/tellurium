@@ -43,8 +43,13 @@ async def test_a_reused_pid_is_not_a_chrome_of_this_profile(tmp_path):
 
 
 def _fake_chrome(chrome_dir, seconds):
-    code = f"import time; time.sleep({seconds})"
-    return subprocess.Popen([sys.executable, "-c", code, f"--user-data-dir={chrome_dir}"])
+    """A process started on *chrome_dir*, once it runs (as Chrome is when it
+    writes its SingletonLock: right after exec its argv may not be mapped yet)."""
+    code = f"import time; print(flush=True); time.sleep({seconds})"
+    argv = [sys.executable, "-c", code, f"--user-data-dir={chrome_dir}"]
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE)
+    proc.stdout.readline()
+    return proc
 
 
 async def test_waits_for_a_chrome_that_is_exiting(tmp_path):

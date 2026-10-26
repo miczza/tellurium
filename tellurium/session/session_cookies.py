@@ -1,11 +1,12 @@
-"""The session's cookies with no expiry, kept in ``cookies.json``.
+"""The session's cookie jar, kept in ``cookies.json`` next to the profile.
 
-Chrome keeps only cookies with an expiry in its profile: those with none
-(``expires == -1``: SSO, banks) are gone when it restarts, so the session
-keeps them itself. :func:`snapshot` reads them from Chrome before it closes;
-the round trip to Chrome's cookie store also lets a cookie the page wrote an
-instant earlier land in the profile, which a bare close can lose.
-:func:`restore` puts them back after the next launch.
+Chrome's profile is not enough to carry a login across a restart: cookies with
+no expiry (``expires == -1``: SSO, banks) are dropped when Chrome restarts, and
+a cookie written an instant before the close can be lost too (Chrome can stop
+before its cookie store commits it). So :func:`snapshot` reads the jar before
+Chrome closes, :func:`save` keeps the cookies not yet expired, and after the
+next launch :func:`restore` puts back those Chrome does not have, leaving the
+ones it kept untouched (its copy is the faithful one).
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 import warnings
 from typing import Any
 
@@ -21,7 +23,7 @@ from tellurium.session import storage
 
 COOKIES_FILE = "cookies.json"
 #: Bound on each cookie call to Chrome: a crashed or hung Chrome must not stall
-#: the close.
+#: a start or a close.
 TIMEOUT = 5.0
 
 
@@ -29,23 +31,29 @@ def _file(folder: str) -> str:
     return os.path.join(folder, COOKIES_FILE)
 
 
-def _no_expiry(cookies: list[Cookie]) -> list[Cookie]:
-    return [c for c in cookies if c.expires == -1]
+def _live(cookies: list[Cookie]) -> list[Cookie]:
+    """Those with no expiry, or one still ahead."""
+    now = time.time()
+    return [c for c in cookies if c.expires == -1 or c.expires > now]
+
+
+def _key(cookie: Cookie) -> tuple[str, str, str]:
+    return (cookie.name, cookie.domain, cookie.path)
 
 
 def save(folder: str, cookies: list[Cookie]) -> None:
-    """Write the cookies of *cookies* with no expiry to ``cookies.json`` (0600)."""
-    payload = {"cookies": [c.to_json() for c in _no_expiry(cookies)]}
+    """Write the cookies of *cookies* not yet expired to ``cookies.json`` (0600)."""
+    payload = {"cookies": [c.to_json() for c in _live(cookies)]}
     storage.write_private(_file(folder), payload)
 
 
 def load(folder: str) -> list[Cookie]:
-    """The cookies of ``cookies.json``; none if it is missing, a warning and
-    none if it cannot be read (a bad file never blocks a start)."""
+    """The cookies of ``cookies.json`` not yet expired; none if it is missing,
+    a warning and none if it cannot be read (a bad file never blocks a start)."""
     try:
         with open(_file(folder), encoding="utf-8") as f:
             raw: Any = json.load(f)
-        return _no_expiry([Cookie.from_json(c) for c in raw["cookies"]])
+        return _live([Cookie.from_json(c) for c in raw["cookies"]])
     except FileNotFoundError:
         return []
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -54,11 +62,16 @@ def load(folder: str) -> list[Cookie]:
 
 
 async def snapshot(browser: Any) -> list[Cookie]:
-    """The browser's cookies with no expiry, read within :data:`TIMEOUT`."""
-    return _no_expiry(await asyncio.wait_for(browser.get_cookies(), TIMEOUT))
+    """The browser's cookies, read within :data:`TIMEOUT`."""
+    return await asyncio.wait_for(browser.get_cookies(), TIMEOUT)
 
 
-async def restore(browser: Any, cookies: list[Cookie]) -> None:
-    """Put *cookies* back in the browser, within :data:`TIMEOUT`."""
-    if cookies:
-        await asyncio.wait_for(browser.set_cookies(cookies), TIMEOUT)
+async def restore(browser: Any, saved: list[Cookie]) -> None:
+    """Put back the cookies of *saved* the browser lacks (same name, domain
+    and path), each call within :data:`TIMEOUT`."""
+    if not saved:
+        return
+    present = {_key(c) for c in await snapshot(browser)}
+    missing = [c for c in saved if _key(c) not in present]
+    if missing:
+        await asyncio.wait_for(browser.set_cookies(missing), TIMEOUT)

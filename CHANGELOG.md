@@ -16,12 +16,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Before launching, `start()` also waits (up to 10 s) for the Chrome of a holder that died
   to let go of the profile (its `SingletonLock`), and names that Chrome's PID in a
   `SessionBusyError` if it stays.
-- `Session` keeps the cookies with no expiry (`expires == -1`: SSO, banks), which Chrome
-  drops on restart: before Chrome closes (on error too, each call bounded by 5 s) they are
-  read and written to `cookies.json` in the session folder (atomic, mode 0600), and the next
-  `start()` puts them back before the validators run. `save()` also writes `cookies.json`
-  with the cookies known as of the last start or close. Reading the jar before closing also
-  makes a cookie the page wrote an instant before `close()` reach the profile.
+- `Session` carries its cookie jar across restarts: Chrome drops the cookies with no expiry
+  (`expires == -1`: SSO, banks) when it restarts, and can lose one written an instant before
+  it closes. Before Chrome closes (on error too, each call bounded by 5 s) the jar is read
+  and its cookies not yet expired are written to `cookies.json` in the session folder
+  (atomic, mode 0600); the next `start()` puts back, before the validators run, those Chrome
+  does not have (same name, domain and path), leaving the ones it kept untouched. `save()`
+  also writes `cookies.json` with the jar known as of the last start or close.
 - MCP `session-open` on a named session another process holds (the CLI, a script, another
   server) is refused before any launch with the holder's PID, and the name is not left
   claimed; a `SessionBusyError` from a launch that lost the race says the same.

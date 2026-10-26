@@ -1,5 +1,6 @@
-"""Cookies with no expiry: Chrome drops them on restart, the session keeps them
-in cookies.json, saved before Chrome closes and put back before the validators."""
+"""The session keeps its cookie jar in cookies.json: Chrome drops the cookies
+with no expiry on restart, and can lose the last one written before it closed.
+Saved before Chrome closes; those Chrome lacks go back before the validators."""
 
 from __future__ import annotations
 
@@ -15,11 +16,20 @@ from tellurium.session import session_cookies
 
 _SSO = Cookie(name="sso", value="1", domain="127.0.0.1", http_only=True)
 _KEPT = Cookie(name="kept", value="2", domain="127.0.0.1", expires=4102444800.0)
+_GONE = Cookie(name="gone", value="3", domain="127.0.0.1", expires=1000.0)
 
 
-def test_round_trip_keeps_only_cookies_with_no_expiry(tmp_path):
-    session_cookies.save(str(tmp_path), [_SSO, _KEPT])
-    assert session_cookies.load(str(tmp_path)) == [_SSO]
+def test_round_trip_keeps_the_cookies_not_expired(tmp_path):
+    session_cookies.save(str(tmp_path), [_SSO, _KEPT, _GONE])
+    assert session_cookies.load(str(tmp_path)) == [_SSO, _KEPT]
+
+
+def test_cookies_that_expire_after_the_save_are_not_loaded(tmp_path, monkeypatch):
+    soon = Cookie(name="soon", value="1", domain="127.0.0.1", expires=2000.0)
+    monkeypatch.setattr(session_cookies.time, "time", lambda: 1500.0)
+    session_cookies.save(str(tmp_path), [soon])
+    monkeypatch.setattr(session_cookies.time, "time", lambda: 2500.0)
+    assert session_cookies.load(str(tmp_path)) == []
 
 
 def test_file_is_private(tmp_path):
@@ -84,7 +94,7 @@ async def test_cookies_are_saved_before_chrome_closes(tmp_path, fake_launch):
     async with session.start() as browser:
         browser.jar = [_SSO, _KEPT]
     assert browsers[0].events[-2:] == ["get_cookies", "close"]
-    assert session_cookies.load(str(tmp_path)) == [_SSO]
+    assert session_cookies.load(str(tmp_path)) == [_SSO, _KEPT]
 
 
 async def test_cookies_are_saved_when_the_body_raises(tmp_path, fake_launch):
@@ -98,7 +108,7 @@ async def test_cookies_are_saved_when_the_body_raises(tmp_path, fake_launch):
 
 async def test_saved_cookies_go_back_before_the_validators(tmp_path, fake_launch):
     browsers, _ = fake_launch
-    session_cookies.save(str(tmp_path), [_SSO])
+    session_cookies.save(str(tmp_path), [_SSO, _KEPT])
     session = Session("s", path=str(tmp_path))
     seen = []
 
@@ -109,8 +119,17 @@ async def test_saved_cookies_go_back_before_the_validators(tmp_path, fake_launch
 
     async with session.start():
         pass
-    assert seen == [[_SSO]]
-    assert browsers[0].events[0] == "set_cookies"
+    assert seen == [[_SSO, _KEPT]]
+    assert browsers[0].events[:2] == ["get_cookies", "set_cookies"]
+
+
+async def test_cookies_chrome_still_has_are_left_alone(tmp_path, fake_launch):
+    browsers, make = fake_launch
+    fresher = Cookie(name="kept", value="new", domain="127.0.0.1", expires=4102444800.0)
+    make["factory"] = lambda: _FakeBrowser(jar=[fresher])
+    session_cookies.save(str(tmp_path), [_SSO, _KEPT])
+    async with Session("s", path=str(tmp_path)).start():
+        assert browsers[0].jar == [fresher, _SSO]  # only the missing one went back
 
 
 async def test_a_failed_read_keeps_the_previous_file(tmp_path, fake_launch):

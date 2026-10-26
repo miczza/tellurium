@@ -52,7 +52,7 @@ class Session:
         self._created_at: str | None = None
         self._chromium_version_used: str | None = None  # set by Browser.launch/Session.start
         self._chromium_version_loaded: str | None = None
-        # The cookies with no expiry, as of the last start or close (None: unknown).
+        # The cookie jar as of the last start or close (None: unknown).
         self._session_cookies: list | None = None
 
         loaded = storage.load(self._json_path())
@@ -127,8 +127,8 @@ class Session:
         return fn
 
     def save(self, *, full: bool = False) -> None:
-        """Serialize the current session state to session.json, and the cookies
-        with no expiry (as of the last start or close) to cookies.json.
+        """Serialize the current session state to session.json, and the cookie
+        jar (as of the last start or close) to cookies.json.
 
         `full=True` includes the last set of launch parameters used by start()
         (or stored hints if start() has not run). If neither exists, the file
@@ -163,9 +163,9 @@ class Session:
         execute the login callback if validation fails.
 
         Yields the Browser instance. Closes it on exit. Never auto-saves
-        session.json; the cookies with no expiry, which Chrome drops on restart,
-        are written to cookies.json before Chrome closes (on error too) and put
-        back before the validators run.
+        session.json; the cookie jar is written to cookies.json before Chrome
+        closes (on error too), and the cookies Chrome lost on the way (those
+        with no expiry, the last one written) go back before the validators run.
         The session folder is locked from before Chrome starts until after it
         is closed, even on error or cancellation: another process (or another
         :class:`Session` on the same folder) gets :class:`SessionBusyError`.
@@ -226,7 +226,7 @@ class Session:
         self._session_cookies = saved
 
     async def _close_browser(self, browser) -> None:
-        """Keep the cookies with no expiry, then close Chrome (that even if the
+        """Keep the cookie jar, then close Chrome (that even if the
         first step fails or is cancelled)."""
         try:
             cookies = await session_cookies.snapshot(browser)
