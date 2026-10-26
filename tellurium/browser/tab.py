@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from tellurium.browser import keys, window
+from tellurium.browser import human, keys, window
 from tellurium.browser.dialog import DialogGuard, DialogHandler
 from tellurium.browser.download import DownloadWaiter, TabFrames
 from tellurium.browser.element import Element, css_selector
@@ -21,6 +21,7 @@ from tellurium.browser.handles import (
     as_stale,
     elements_from_array,
 )
+from tellurium.browser.human import Until
 from tellurium.browser.navigation import (
     check_wait_until,
     navigate,
@@ -1011,6 +1012,13 @@ class Tab:
             await self._idle_simulator.idle(self, seconds)
             return
         await asyncio.sleep(seconds)
+
+    async def wait_for_human(
+        self, reason: str, *, until: Until = None, timeout: float | None = 600
+    ) -> None:
+        """Hand the tab to a person: a banner with *reason* and "Done" (headed),
+        until it is clicked or *until* holds (see :func:`human.wait_for_human`)."""
+        await human.wait_for_human(self, reason, until=until, timeout=timeout)
 
     async def wait_for_url(self, url: str, *, timeout: float = 30) -> None:
         """Poll until the page URL matches *url*.

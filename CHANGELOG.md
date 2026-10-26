@@ -7,6 +7,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Tab.wait_for_human(reason, *, until=None, timeout=600)` hands the tab to a person (a
+  captcha, a 2FA prompt). In headed Chrome a banner at the top of the page shows *reason*
+  and a "Done" button; the wait ends when the person clicks it or *until* holds: a URL
+  pattern (glob with `*`/`?`, substring otherwise) matched against the main frame's URL as
+  Chrome reports it, or an async `(tab) -> bool`. The banner is built from an isolated world
+  in a closed shadow root, so the page cannot read or style it, and is put back after every
+  navigation or if the page removes it; "Done" arrives through a CDP binding that exists
+  only in that isolated world and fires only on a trusted click, so neither the page nor a
+  synthetic `click()` can end the wait. In headless Chrome there is no banner and *until*
+  is required (`ValueError` otherwise). `TimeoutError` after *timeout* seconds (`None`: no
+  limit); the banner is removed on every way out, cancellation included.
 - `SessionBusyError` (from `tellurium` and `tellurium.session`): `Session.start()` locks the
   session folder (`session.lock`, `fcntl.flock` on POSIX, `msvcrt.locking` on Windows,
   mode 0600, with the holder's PID inside) from before Chrome starts until after it is

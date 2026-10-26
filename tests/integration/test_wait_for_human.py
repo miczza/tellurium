@@ -1,0 +1,213 @@
+"""Tab.wait_for_human: a banner in a closed shadow root, "Done" only from a real
+(CDP-dispatched) click, a URL glob or an async condition, a timeout, nothing
+left in the DOM."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+
+import pytest
+
+HEADED = bool(os.environ.get("DISPLAY"))
+needs_display = pytest.mark.skipif(not HEADED, reason="needs a display (xvfb-run)")
+
+
+@pytest.fixture
+async def headed():
+    from tellurium import Browser
+
+    b = await Browser.launch(headless=False)
+    yield b
+    await b.close()
+
+
+def _walk(node):
+    yield node
+    for child in node.get("children", []):
+        yield from _walk(child)
+    for root in node.get("shadowRoots", []):
+        yield from _walk(root)
+
+
+async def _closed_roots(tab) -> list[dict]:
+    """The closed shadow roots of the page (CDP sees through them)."""
+    doc = await tab.send_cdp("DOM.getDocument", {"depth": -1, "pierce": True})
+    return [n for n in _walk(doc["root"]) if n.get("shadowRootType") == "closed"]
+
+
+async def _done_button(tab, timeout: float = 10) -> int:
+    """The nodeId of the banner's button, once the banner is there."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        for root in await _closed_roots(tab):
+            for node in _walk(root):
+                if node.get("nodeName") == "BUTTON":
+                    return node["nodeId"]
+        if loop.time() > deadline:
+            raise AssertionError("no banner button appeared")
+        await asyncio.sleep(0.1)
+
+
+async def _click_node(tab, node_id: int) -> None:
+    quad = (await tab.send_cdp("DOM.getBoxModel", {"nodeId": node_id}))["model"]["content"]
+    x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4
+    y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4
+    await tab.mouse_click(x, y)
+
+
+async def _until_settled(task, seconds: float) -> bool:
+    """Whether *task* finished within *seconds*."""
+    done, _ = await asyncio.wait({task}, timeout=seconds)
+    return bool(done)
+
+
+@needs_display
+async def test_a_real_click_on_done_returns_and_leaves_no_node(headed, local_server):
+    tab = headed.main_tab
+    await tab.get(f"{local_server}/basic.html")
+    before = await tab.eval("document.documentElement.outerHTML")
+    globals_before = await tab.eval("Object.getOwnPropertyNames(window).sort().join(',')")
+    task = asyncio.create_task(tab.wait_for_human("Solve the captcha", timeout=30))
+    try:
+        button = await _done_button(tab)
+        text = await tab.eval("document.body.innerText")
+        assert "Solve the captcha" not in text  # the page cannot read the banner
+        globals_during = await tab.eval("Object.getOwnPropertyNames(window).sort().join(',')")
+        assert globals_during == globals_before  # no binding in the page's world
+        await _click_node(tab, button)
+        assert await _until_settled(task, 5)
+        await task
+    finally:
+        task.cancel()
+    assert await _closed_roots(tab) == []
+    assert await tab.eval("document.documentElement.outerHTML") == before
+
+
+@needs_display
+async def test_a_click_from_the_page_does_not_count(headed, local_server):
+    tab = headed.main_tab
+    await tab.get(f"{local_server}/basic.html")
+    task = asyncio.create_task(tab.wait_for_human("Sign in", timeout=4))
+    try:
+        button = await _done_button(tab)
+        # The page, even holding the button itself, can only make untrusted clicks.
+        obj = (await tab.send_cdp("DOM.resolveNode", {"nodeId": button}))["object"]
+        await tab.send_cdp(
+            "Runtime.callFunctionOn",
+            {
+                "objectId": obj["objectId"],
+                "functionDeclaration": "function () { this.click();"
+                " this.dispatchEvent(new MouseEvent('click', {bubbles: true})); }",
+            },
+        )
+        await tab.eval("document.documentElement.lastElementChild.click()")
+        assert not await _until_settled(task, 1.5)
+        with pytest.raises(TimeoutError):
+            await task
+    finally:
+        task.cancel()
+    assert await _closed_roots(tab) == []
+
+
+@needs_display
+async def test_the_banner_comes_back_after_a_navigation(headed, local_server):
+    tab = headed.main_tab
+    await tab.get(f"{local_server}/basic.html")
+    task = asyncio.create_task(tab.wait_for_human("Go on", timeout=30))
+    try:
+        await _done_button(tab)
+        await tab.get(f"{local_server}/form.html")
+        button = await _done_button(tab)
+        await _click_node(tab, button)
+        assert await _until_settled(task, 5)
+        await task
+    finally:
+        task.cancel()
+
+
+@needs_display
+async def test_the_banner_comes_back_when_the_page_removes_it(headed, local_server):
+    tab = headed.main_tab
+    await tab.get(f"{local_server}/basic.html")
+    task = asyncio.create_task(tab.wait_for_human("Go on", timeout=30))
+    try:
+        await _done_button(tab)
+        await tab.eval("document.documentElement.lastElementChild.remove()")
+        await _click_node(tab, await _done_button(tab))
+        assert await _until_settled(task, 5)
+        await task
+    finally:
+        task.cancel()
+
+
+@needs_display
+async def test_a_url_glob_ends_the_wait_in_headed_too(headed, local_server):
+    tab = headed.main_tab
+    await tab.get(f"{local_server}/basic.html")
+    task = asyncio.create_task(tab.wait_for_human("Sign in", until="*/dashboard*", timeout=30))
+    try:
+        await _done_button(tab)
+        await tab.get(f"{local_server}/dashboard.html")
+        assert await _until_settled(task, 5)
+        await task
+    finally:
+        task.cancel()
+    assert await _closed_roots(tab) == []
+
+
+async def test_headless_waits_for_the_url_glob_with_no_banner(browser, local_server):
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/basic.html")
+    task = asyncio.create_task(tab.wait_for_human("Sign in", until="**/dashboard*", timeout=30))
+    try:
+        await asyncio.sleep(0.5)
+        assert not task.done()
+        assert await _closed_roots(tab) == []
+        await tab.eval("location.href = '/dashboard.html'")
+        assert await _until_settled(task, 5)
+        await task
+    finally:
+        task.cancel()
+
+
+async def test_an_async_condition_ends_the_wait(browser, local_server):
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/basic.html")
+    seen = []
+
+    async def submitted(t):
+        seen.append(t)
+        return await t.eval("document.getElementById('content').textContent") == "submitted"
+
+    task = asyncio.create_task(tab.wait_for_human("Submit", until=submitted, timeout=30))
+    try:
+        await asyncio.sleep(0.5)
+        assert not task.done()
+        await tab.eval("document.getElementById('submit').click()")
+        assert await _until_settled(task, 5)
+        await task
+    finally:
+        task.cancel()
+    assert seen and seen[0] is tab
+
+
+async def test_the_timeout_raises(browser, local_server):
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/basic.html")
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    with pytest.raises(TimeoutError, match="Sign in"):
+        await tab.wait_for_human("Sign in", until="*/never*", timeout=1)
+    assert loop.time() - start < 5
+
+
+async def test_headless_without_a_condition_is_refused(any_browser):
+    with pytest.raises(ValueError, match="until"):
+        await any_browser.main_tab.wait_for_human("Sign in")
+
+
+async def test_a_condition_of_the_wrong_type_is_refused(browser):
+    with pytest.raises(TypeError, match="until"):
+        await browser.main_tab.wait_for_human("Sign in", until=42)
