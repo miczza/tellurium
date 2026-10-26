@@ -160,3 +160,20 @@ async def test_save_writes_the_cookies_known_to_the_session(tmp_path, fake_launc
     (tmp_path / session_cookies.COOKIES_FILE).unlink()
     session.save()
     assert session_cookies.load(str(tmp_path)) == [_SSO]
+
+
+async def test_a_partitioned_cookie_is_not_the_unpartitioned_one(tmp_path, fake_launch):
+    browsers, make = fake_launch
+    plain = Cookie(name="c", value="1", domain="example.test", secure=True, same_site="None")
+    chips = Cookie(
+        name="c",
+        value="2",
+        domain="example.test",
+        secure=True,
+        same_site="None",
+        partition_key={"topLevelSite": "https://other.test", "hasCrossSiteAncestor": True},
+    )
+    make["factory"] = lambda: _FakeBrowser(jar=[plain])
+    session_cookies.save(str(tmp_path), [plain, chips])
+    async with Session("s", path=str(tmp_path)).start():
+        assert browsers[0].jar == [plain, chips]  # the partitioned one went back

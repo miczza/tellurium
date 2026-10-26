@@ -46,3 +46,28 @@ async def test_cookies_with_no_expiry_outlive_a_second_restart(tmp_path, local_s
     await _run_child("read", path)
     names = json.loads((await _run_child("read", path)).strip().splitlines()[-1])
     assert {"http_sso", "js_sso", "late"} <= set(names)
+
+
+async def test_a_partitioned_cookie_comes_back_partitioned(tmp_path):
+    """CHIPS with no expiry: Chrome drops it on restart, cookies.json brings it
+    back in its partition, and one without SameSite comes back without."""
+    from tellurium import Cookie, Session
+
+    partition = {"topLevelSite": "https://other.test", "hasCrossSiteAncestor": True}
+    chips = Cookie(
+        name="chips",
+        value="1",
+        domain="example.test",
+        secure=True,
+        same_site="None",
+        partition_key=partition,
+    )
+    loose = Cookie(name="loose", value="2", domain="example.test", same_site=None)
+    path = str(tmp_path / "s")
+    async with Session("s", path=path).start(headless=True) as browser:
+        await browser.set_cookies([chips, loose])
+    async with Session("s", path=path).start(headless=True) as browser:
+        back = {c.name: c for c in await browser.get_cookies("example.test")}
+    assert back["chips"].partition_key == partition
+    assert back["chips"].same_site == "None"
+    assert back["loose"].same_site is None

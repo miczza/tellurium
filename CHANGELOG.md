@@ -28,6 +28,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   does not have (same name, domain and path), leaving the ones it kept untouched. `save()`
   also writes `cookies.json` with the jar known as of the last start or close.
   To log a session out by hand, delete `cookies.json` along with the profile's cookies.
+- `Cookie.partition_key`: the CHIPS partition (`partitionKey` of `Storage.getCookies`), kept
+  by `to_json()`/`from_json()` and sent back by `set_cookies()`, so a partitioned cookie
+  stays in its partition; a cookie with the same name, domain and path in another partition
+  is another cookie for the session's `cookies.json`.
 - MCP `session-open` on a named session another process holds (the CLI, a script, another
   server) is refused before any launch with the holder's PID, and the name is not left
   claimed; a `SessionBusyError` from a launch that lost the race says the same.
@@ -282,6 +286,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `Cookie.from_json()` leaves `same_site` at `None` when the data has no `sameSite` (Chrome
+  reports none for a cookie set without it), and `to_json()` then omits it, instead of
+  turning it into an explicit `Lax`. `Cookie(...)` still defaults to `Lax`.
 - `Browser.downloads`: internal accessor of the browser's download tracker;
   `Tab.expect_download` and `BrowserContext` use it instead of reading `Browser._downloads`.
 - `NavigationError` for an aborted navigation (`net::ERR_ABORTED`, as for a

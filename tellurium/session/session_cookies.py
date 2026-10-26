@@ -37,8 +37,16 @@ def _live(cookies: list[Cookie]) -> list[Cookie]:
     return [c for c in cookies if c.expires == -1 or c.expires > now]
 
 
-def _key(cookie: Cookie) -> tuple[str, str, str]:
-    return (cookie.name, cookie.domain, cookie.path)
+def _key(cookie: Cookie) -> tuple[str, str, str, str | None]:
+    """What tells two cookies of a jar apart: the same name, domain and path
+    in another CHIPS partition is another cookie."""
+    partition = cookie.partition_key
+    return (
+        cookie.name,
+        cookie.domain,
+        cookie.path,
+        None if partition is None else json.dumps(partition, sort_keys=True),
+    )
 
 
 def save(folder: str, cookies: list[Cookie]) -> None:
@@ -67,8 +75,8 @@ async def snapshot(browser: Any) -> list[Cookie]:
 
 
 async def restore(browser: Any, saved: list[Cookie]) -> None:
-    """Put back the cookies of *saved* the browser lacks (same name, domain
-    and path), each call within :data:`TIMEOUT`."""
+    """Put back the cookies of *saved* the browser lacks (same name, domain,
+    path and partition), each call within :data:`TIMEOUT`."""
     if not saved:
         return
     present = {_key(c) for c in await snapshot(browser)}

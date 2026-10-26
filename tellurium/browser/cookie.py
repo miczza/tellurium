@@ -72,6 +72,12 @@ async def clear_jar(session: Any, domain: str | None = None, context_id: str | N
 
 @dataclass
 class Cookie:
+    """A cookie as ``Storage.getCookies`` reports it and ``Storage.setCookies``
+    takes it back. *same_site* ``None`` is no ``SameSite`` attribute (Chrome
+    then applies its default); *partition_key* is the CHIPS partition
+    (``{"topLevelSite": ..., "hasCrossSiteAncestor": ...}``), ``None`` for an
+    unpartitioned cookie."""
+
     name: str
     value: str
     domain: str
@@ -79,10 +85,11 @@ class Cookie:
     expires: float = -1
     http_only: bool = False
     secure: bool = False
-    same_site: str = "Lax"
+    same_site: str | None = "Lax"
+    partition_key: dict[str, Any] | None = None
 
     def to_json(self) -> dict:
-        return {
+        data: dict[str, Any] = {
             "name": self.name,
             "value": self.value,
             "domain": self.domain,
@@ -90,11 +97,16 @@ class Cookie:
             "expires": self.expires,
             "httpOnly": self.http_only,
             "secure": self.secure,
-            "sameSite": self.same_site,
         }
+        if self.same_site is not None:
+            data["sameSite"] = self.same_site
+        if self.partition_key is not None:
+            data["partitionKey"] = dict(self.partition_key)
+        return data
 
     @classmethod
     def from_json(cls, data: dict) -> Cookie:
+        partition = data.get("partitionKey")
         return cls(
             name=data["name"],
             value=data["value"],
@@ -103,7 +115,8 @@ class Cookie:
             expires=data.get("expires", -1),
             http_only=data.get("httpOnly", False),
             secure=data.get("secure", False),
-            same_site=data.get("sameSite", "Lax"),
+            same_site=data.get("sameSite"),
+            partition_key=dict(partition) if isinstance(partition, dict) else None,
         )
 
     def to_netscape(self) -> str:

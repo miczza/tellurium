@@ -154,3 +154,31 @@ def test_localhost_and_ips_are_domains():
 
     assert matches_domain("localhost", "localhost")
     assert matches_domain("127.0.0.1", "127.0.0.1")
+
+
+_PARTITION = {"topLevelSite": "https://other.test", "hasCrossSiteAncestor": True}
+
+
+def test_cookie_json_keeps_the_partition():
+    raw = {
+        "name": "chips",
+        "value": "1",
+        "domain": "example.test",
+        "path": "/",
+        "expires": -1,
+        "httpOnly": False,
+        "secure": True,
+        "sameSite": "None",
+        "partitionKey": _PARTITION,
+    }
+    c = Cookie.from_json(raw)
+    assert c.partition_key == _PARTITION
+    assert c.to_json() == raw
+
+
+def test_cookie_json_without_samesite_stays_without():
+    raw = {"name": "x", "value": "y", "domain": "d.com", "path": "/", "expires": -1}
+    c = Cookie.from_json({**raw, "httpOnly": False, "secure": False})
+    assert c.same_site is None
+    assert "sameSite" not in c.to_json()
+    assert "partitionKey" not in c.to_json()
