@@ -140,3 +140,14 @@ async def test_a_chrome_on_a_sibling_profile_is_not_ours(tmp_path):
     finally:
         proc.kill()
         proc.wait()
+
+
+def test_user_data_dir_is_read_from_a_rewritten_title_too():
+    # Chrome on Linux rewrites its title: one string of space-joined arguments.
+    title = b"/opt/chrome --no-first-run --user-data-dir=/x/with space/chrome dir --headless=new\0"
+    assert profile_release._user_data_dirs(title) == [b"/x/with space/chrome dir"]
+    last = b"/opt/chrome --user-data-dir=/x/a b\0"
+    assert profile_release._user_data_dirs(last) == [b"/x/a b"]
+    argv = b"/opt/chrome\0--user-data-dir=/x/a b --c\0--headless\0"
+    assert profile_release._user_data_dirs(argv) == [b"/x/a b --c"]
+    assert profile_release._user_data_dirs(b"/usr/bin/python3\0-c\0pass\0") == []

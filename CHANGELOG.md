@@ -324,6 +324,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A session start waits again for a live Chrome still holding the session profile: on
+  Linux Chrome rewrites its process title (`/proc/<pid>/cmdline` becomes one string of
+  space-joined arguments) and its `--user-data-dir` was never found, so the start went
+  ahead and Chrome failed with "profile in use". Paths with spaces are read too.
 - `Tab.eval_on` never runs the code twice: it is retried as a function body only when
   the first form does not compile (a `SyntaxError` before anything runs), and describing
   a thrown value can no longer throw (`throw Object.create(null)` raised inside the

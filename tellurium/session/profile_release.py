@@ -67,26 +67,35 @@ def _runs_on(pid: int, chrome_dir: str) -> bool:
     with symlinks resolved. Without ``/proc`` a live PID is taken at its word."""
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as f:
-            argv = f.read().split(b"\0")
+            cmdline = f.read()
     except FileNotFoundError:
         return not os.path.isdir("/proc")
     except OSError:
         return True  # unreadable: assume the worst, it may be Chrome
     wanted = os.path.realpath(chrome_dir)
-    for given in _user_data_dirs(argv):
+    for given in _user_data_dirs(cmdline):
         # A relative one is relative to the process's own working directory.
         if os.path.realpath(os.path.join(f"/proc/{pid}/cwd", os.fsdecode(given))) == wanted:
             return True
     return False
 
 
-def _user_data_dirs(argv: list[bytes]) -> list[bytes]:
-    """The values of ``--user-data-dir=X`` and ``--user-data-dir X`` in *argv*."""
-    flag = b"--user-data-dir"
+_FLAG = b"--user-data-dir="
+
+
+def _user_data_dirs(cmdline: bytes) -> list[bytes]:
+    """The values *cmdline* (``/proc/<pid>/cmdline``) may give
+    ``--user-data-dir=`` (the only form Chrome reads).
+
+    Its arguments are NUL-separated, unless the process rewrote its title, as
+    Chrome does on Linux: then they are one string joined by spaces, and a
+    value with spaces ends where the next switch (`` --``) starts, or at the end.
+    """
+    cmdline = cmdline.rstrip(b"\0")
+    if b"\0" in cmdline:
+        return [arg[len(_FLAG) :] for arg in cmdline.split(b"\0") if arg.startswith(_FLAG)]
     found = []
-    for i, arg in enumerate(argv):
-        if arg.startswith(flag + b"="):
-            found.append(arg[len(flag) + 1 :])
-        elif arg == flag and i + 1 < len(argv):
-            found.append(argv[i + 1])
+    for arg in (b" " + cmdline).split(b" " + _FLAG)[1:]:
+        value, _, _ = arg.partition(b" --")
+        found.append(value)
     return found
