@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import threading
 
 import pytest
 
@@ -219,6 +220,40 @@ async def test_a_start_cancelled_during_the_restore_keeps_the_saved_cookies(tmp_
         await task
     assert browsers[0].events[-1] == "close"
     assert session_cookies.load(str(tmp_path)) == [_SSO]
+
+
+async def test_a_start_cancelled_while_reading_the_file_never_writes_it(
+    tmp_path, fake_launch, monkeypatch
+):
+    """Cancelled before cookies.json is read: the close must not write the
+    jar of a Chrome that never got the saved cookies over them."""
+    browsers, _ = fake_launch
+    session_cookies.save(str(tmp_path), [_SSO], at_close=True)
+    reading, release = threading.Event(), threading.Event()
+    real_read = session_cookies.read
+
+    def slow_read(folder):
+        reading.set()
+        release.wait(5)
+        return real_read(folder)
+
+    monkeypatch.setattr(session_cookies, "read", slow_read)
+
+    async def start():
+        async with Session("s", path=str(tmp_path)).start():
+            pass
+
+    task = asyncio.create_task(start())
+    try:
+        while not reading.is_set():
+            await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        release.set()
+    assert browsers[0].events[-1] == "close"
+    assert real_read(str(tmp_path)) == ([_SSO], True)
 
 
 async def test_a_cookie_deleted_after_the_restore_stays_deleted(tmp_path, fake_launch):

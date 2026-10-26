@@ -239,11 +239,13 @@ class Session:
 
     async def _close_browser(self, browser) -> None:
         """Keep the cookie jar, then close Chrome (that even if the
-        first step fails or is cancelled)."""
+        first step fails or is cancelled). Not before the start has read
+        cookies.json: Chrome's jar lacks the cookies it holds, so writing it
+        would lose them."""
         try:
-            cookies = await session_cookies.snapshot(browser)
-            if self._reinjection is not None:  # those Chrome never took
-                cookies = self._reinjection.keep(cookies)
+            if self._reinjection is None:
+                return  # the finally still closes Chrome
+            cookies = self._reinjection.keep(await session_cookies.snapshot(browser))
             await asyncio.to_thread(session_cookies.save, self.path, cookies, at_close=True)
             self._session_cookies, self._cookies_at_close = cookies, True
         except Exception:  # noqa: BLE001 - Chrome gone: keep the previous file
