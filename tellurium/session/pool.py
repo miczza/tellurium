@@ -33,7 +33,8 @@ _SESSION_FILE = "session.json"
 
 
 class SessionPool:
-    """The identities under *directory*, at most *max_browsers* open at once.
+    """The identities under *directory* (``~`` expanded), at most *max_browsers*
+    open at once.
 
     *launch* are the :meth:`Session.start` keyword arguments of every open
     (``headless=True``, ``stealth=True``, ...); those given to :meth:`open`
@@ -46,7 +47,7 @@ class SessionPool:
         bad = _MANAGED_LAUNCH_KEYS & launch.keys()
         if bad:
             raise TypeError(f"the pool manages these parameters itself: {sorted(bad)}")
-        self.directory = os.path.abspath(os.fspath(directory))
+        self.directory = os.path.abspath(os.path.expanduser(os.fspath(directory)))
         self.max_browsers = max_browsers
         self._launch = dict(launch)
         self._slots = asyncio.Semaphore(max_browsers)

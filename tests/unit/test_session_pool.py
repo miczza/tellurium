@@ -237,3 +237,10 @@ def test_max_browsers_must_be_positive(tmp_path):
         SessionPool(tmp_path, max_browsers=0)
     with pytest.raises(TypeError):
         SessionPool(tmp_path, user_data_dir="x")
+
+
+def test_the_directory_may_start_with_a_tilde(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pool = SessionPool("~/sessions")
+    assert pool.directory == str(tmp_path / "sessions")
+    assert pool.path("a") == str(tmp_path / "sessions" / "a")

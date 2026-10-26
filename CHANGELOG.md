@@ -7,7 +7,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `SessionPool(directory, max_browsers=4, **launch)` (from `tellurium.session`): named
+- `SessionPool(directory, max_browsers=4, **launch)` (from `tellurium.session`; `~` in
+  `directory` is expanded): named
   identities side by side, each a `Session` in its own folder with its own Chrome, profile,
   cookie jar and fingerprint seed. `async with pool.open(name) as browser` starts one (a
   missing name is created, its `session.json` written so the seed lasts); at most

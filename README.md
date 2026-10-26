@@ -1351,6 +1351,47 @@ Tellurium sets `0600` permissions on POSIX; it does not encrypt the file.
 - `SessionLoginFailedError` — login callback raised (original exception preserved as `__cause__`).
 - `SessionCorruptError` — `session.json` is unparseable.
 
+### Several identities at once (`SessionPool`)
+
+A `SessionPool` keeps many named identities in one directory and opens them side
+by side, one Chrome per identity (so each keeps its own profile, cookie jar and
+fingerprint seed), never more than `max_browsers` at a time:
+
+```python
+import asyncio
+from tellurium.session import SessionPool
+
+pool = SessionPool("~/.tellurium/sessions", max_browsers=4, headless=True)
+
+async def scrape(name):
+    async with pool.open(name) as browser:   # waits for a free slot
+        tab = await browser.get("https://example.com/account")
+        return await tab.eval("document.title")
+
+titles = await asyncio.gather(*(scrape(f"user{i}") for i in range(20)))
+```
+
+| Construct | Meaning |
+|---|---|
+| `SessionPool(directory, max_browsers=4, **launch)` | The identities under `directory` (one folder each). `launch` goes to every `Session.start()`; the kwargs of `open()` win. |
+| `pool.open(name_or_session, **launch)` | Async context manager yielding the `Browser`. A missing name is created. A `Session` from `pool.get()`/`pool.create()` carries its validators and login. |
+| `await pool.list()` | Names of the identities, sorted. |
+| `await pool.create(name, seed=None)` | New identity, saved at once; `FileExistsError` if present. |
+| `await pool.get(name)` | Its `Session`, to register `@validate`/`@login` or metadata; `FileNotFoundError` if absent. |
+| `await pool.delete(name)` | Removes the identity and its folder. |
+
+- **The cap holds on failure too**: a slot is taken before Chrome starts and given
+  back only once it is closed, also when the launch fails, the body raises or the
+  task is cancelled; an `open()` still waiting for a slot can be cancelled.
+- **One identity, one owner**: opening a name the pool already has open, or one
+  another process holds (CLI, MCP server, another script), raises
+  `SessionBusyError` (with `.pid`) at once instead of queueing for a slot.
+  `delete()` of an open identity raises it too and leaves the folder alone.
+- **Names** are 1-64 letters, digits, `.`, `_` or `-`, starting with a letter or
+  digit: anything else is a `ValueError`, so no name escapes the directory.
+- `open()` writes `session.json` only for an identity that has none (so its seed
+  lasts); metadata you change is saved by `session.save()`, as with `Session`.
+
 ## Patched binary (chromium-telluride)
 
 Tellurium can drive a hardened Chromium build from the separate
