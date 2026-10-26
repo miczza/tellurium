@@ -5,8 +5,8 @@ no expiry (``expires == -1``: SSO, banks) are dropped when Chrome restarts, and
 a cookie written an instant before the close can be lost too (Chrome can stop
 before its cookie store commits it). So :func:`snapshot` reads the jar before
 Chrome closes, :func:`save` keeps the cookies not yet expired, and after the
-next launch a :class:`Reinjection` puts back those Chrome does not have,
-leaving the ones it kept untouched (its copy is the faithful one).
+next launch a :class:`Reinjection` puts back those Chrome does not have, and
+those it has with an older value when the file was written as Chrome closed.
 """
 
 from __future__ import annotations
@@ -49,24 +49,32 @@ def _key(cookie: Cookie) -> tuple[str, str, str, str | None]:
     )
 
 
-def save(folder: str, cookies: list[Cookie]) -> None:
-    """Write the cookies of *cookies* not yet expired to ``cookies.json`` (0600)."""
-    payload = {"cookies": [c.to_json() for c in _live(cookies)]}
+def save(folder: str, cookies: list[Cookie], *, at_close: bool = False) -> None:
+    """Write the cookies of *cookies* not yet expired to ``cookies.json`` (0600);
+    *at_close*: they are the jar Chrome had as it closed, newer than its own copy."""
+    payload = {"cookies": [c.to_json() for c in _live(cookies)], "at_close": at_close}
     storage.write_private(_file(folder), payload)
 
 
-def load(folder: str) -> list[Cookie]:
-    """The cookies of ``cookies.json`` not yet expired; none if it is missing,
-    a warning and none if it cannot be read (a bad file never blocks a start)."""
+def read(folder: str) -> tuple[list[Cookie], bool]:
+    """The cookies of ``cookies.json`` not yet expired, and whether they were
+    saved as Chrome closed; none if it is missing, a warning and none if it
+    cannot be read (a bad file never blocks a start)."""
     try:
         with open(_file(folder), encoding="utf-8") as f:
             raw: Any = json.load(f)
-        return _live([Cookie.from_json(c) for c in raw["cookies"]])
+        cookies = _live([Cookie.from_json(c) for c in raw["cookies"]])
+        return cookies, raw.get("at_close") is True
     except FileNotFoundError:
-        return []
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return [], False
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         warnings.warn(f"ignoring unreadable {_file(folder)}: {exc}", stacklevel=2)
-        return []
+        return [], False
+
+
+def load(folder: str) -> list[Cookie]:
+    """The cookies of :func:`read`."""
+    return read(folder)[0]
 
 
 async def snapshot(browser: Any) -> list[Cookie]:
@@ -79,15 +87,20 @@ class Reinjection:
     the close must keep of them if Chrome never confirmed they went in.
 
     :meth:`run` sends Chrome those it lacks (same name, domain, path and
-    partition), each call within :data:`TIMEOUT`. Until Chrome has taken them
+    partition), each call within :data:`TIMEOUT`; with *saved_wins* (the file
+    was written as Chrome closed, so it is newer than Chrome's own copy, which
+    may miss the last changes: a rotated token) also those Chrome has with
+    another value. Without it (the last run never closed: Chrome's copy may be
+    the newer) Chrome's are left alone. Until Chrome has taken them
     (a timeout, a cancelled start, a Chrome gone) they stay *pending*, and
     :meth:`keep` adds them to the jar the close reads, so a failed restore
     never costs the saved cookies; a cookie Chrome has set anew meanwhile
     (the site logged in again) is Chrome's, not ours.
     """
 
-    def __init__(self, saved: list[Cookie]) -> None:
+    def __init__(self, saved: list[Cookie], *, saved_wins: bool = False) -> None:
         self.pending = list(saved)
+        self._saved_wins = saved_wins
         # Chrome's jar as the start found it; None until read.
         self._seen: dict[tuple, Cookie] | None = None
 
@@ -95,14 +108,23 @@ class Reinjection:
         if not self.pending:
             return
         self._seen = {_key(c): c for c in await snapshot(browser)}
-        self.pending = [c for c in self.pending if _key(c) not in self._seen]
+        seen = self._seen
+        self.pending = [c for c in self.pending if self._differs(c, seen.get(_key(c)))]
         if self.pending:
             await asyncio.wait_for(browser.set_cookies(self.pending), TIMEOUT)
         self.pending = []  # in Chrome now: from here on its jar is the truth
 
     def keep(self, jar: list[Cookie]) -> list[Cookie]:
-        """*jar* (Chrome's at the close) with the pending cookies it lacks."""
+        """*jar* (Chrome's at the close) with the pending cookies it lacks, or
+        has still as the start found them."""
         kept = {_key(c): c for c in jar}
         for cookie in self.pending:
-            kept.setdefault(_key(cookie), cookie)
+            key = _key(cookie)
+            current = kept.get(key)
+            if current is None or (self._seen is not None and self._seen.get(key) == current):
+                kept[key] = cookie
         return list(kept.values())
+
+    def _differs(self, cookie: Cookie, chrome: Cookie | None) -> bool:
+        """Whether *cookie* must go back over Chrome's copy *chrome*."""
+        return chrome is None or (self._saved_wins and chrome != cookie)

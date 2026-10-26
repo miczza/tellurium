@@ -54,6 +54,8 @@ class Session:
         self._chromium_version_loaded: str | None = None
         # The cookie jar as of the last start or close (None: unknown).
         self._session_cookies: list | None = None
+        # Whether _session_cookies is the jar Chrome had as it closed.
+        self._cookies_at_close = False
         # The saved cookies the running start puts back (None: no start yet).
         self._reinjection: session_cookies.Reinjection | None = None
 
@@ -157,7 +159,7 @@ class Session:
 
         storage.save(self._json_path(), payload, full=full)
         if self._session_cookies is not None:
-            session_cookies.save(self.path, self._session_cookies)
+            session_cookies.save(self.path, self._session_cookies, at_close=self._cookies_at_close)
 
     @asynccontextmanager
     async def start(self, **kwargs):
@@ -221,10 +223,15 @@ class Session:
                 lock.release()  # last: after Chrome has let go of the profile
 
     async def _restore_cookies(self, browser) -> None:
-        saved = await asyncio.to_thread(session_cookies.load, self.path)
-        self._session_cookies = saved
-        # Set before the first await: a cancelled restore leaves it pending.
-        self._reinjection = session_cookies.Reinjection(saved)
+        saved, at_close = await asyncio.to_thread(session_cookies.read, self.path)
+        self._session_cookies, self._cookies_at_close = saved, False
+        # Set before the next await: a cancelled restore leaves it pending.
+        self._reinjection = session_cookies.Reinjection(saved, saved_wins=at_close)
+        if saved:  # a run under way: if it never closes, Chrome's copy is the newer
+            try:
+                await asyncio.to_thread(session_cookies.save, self.path, saved, at_close=False)
+            except OSError:
+                logger.warning("could not mark the cookies of %s", self.path, exc_info=True)
         try:
             await self._reinjection.run(browser)
         except Exception:  # noqa: BLE001 - the validators judge the session
@@ -237,8 +244,8 @@ class Session:
             cookies = await session_cookies.snapshot(browser)
             if self._reinjection is not None:  # those Chrome never took
                 cookies = self._reinjection.keep(cookies)
-            await asyncio.to_thread(session_cookies.save, self.path, cookies)
-            self._session_cookies = cookies
+            await asyncio.to_thread(session_cookies.save, self.path, cookies, at_close=True)
+            self._session_cookies, self._cookies_at_close = cookies, True
         except Exception:  # noqa: BLE001 - Chrome gone: keep the previous file
             logger.warning("could not save the cookies of %s", self.path, exc_info=True)
         finally:

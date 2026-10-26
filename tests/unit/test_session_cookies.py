@@ -228,3 +228,51 @@ async def test_a_cookie_deleted_after_the_restore_stays_deleted(tmp_path, fake_l
     async with Session("s", path=str(tmp_path)).start() as browser:
         browser.jar = []
     assert session_cookies.load(str(tmp_path)) == []
+
+
+_OLD = Cookie(name="tok", value="old", domain="127.0.0.1", expires=4102444800.0)
+_NEW = Cookie(name="tok", value="new", domain="127.0.0.1", expires=4102444800.0)
+
+
+async def test_a_jar_saved_at_close_wins_over_an_older_copy_in_chrome(tmp_path, fake_launch):
+    """A token rotated just before the close: the snapshot saw it, Chrome's
+    cookie store did not commit it and comes back with the old one."""
+    browsers, make = fake_launch
+    make["factory"] = lambda: _FakeBrowser(jar=[_OLD])
+    session_cookies.save(str(tmp_path), [_NEW], at_close=True)
+    async with Session("s", path=str(tmp_path)).start():
+        assert browsers[0].jar == [_NEW]
+    assert session_cookies.load(str(tmp_path)) == [_NEW]
+
+
+async def test_a_running_session_marks_its_file_as_not_saved_at_close(tmp_path, fake_launch):
+    """If the process dies before the close, Chrome's copy may be the newer
+    one: the next start only puts back what Chrome lacks."""
+    session_cookies.save(str(tmp_path), [_SSO, _NEW], at_close=True)
+    async with Session("s", path=str(tmp_path)).start():
+        assert session_cookies.read(str(tmp_path)) == ([_SSO, _NEW], False)
+    assert session_cookies.read(str(tmp_path))[1] is True
+
+
+async def test_a_failed_restore_keeps_the_rotated_value(tmp_path, fake_launch, monkeypatch):
+    browsers, make = fake_launch
+    monkeypatch.setattr(session_cookies, "TIMEOUT", 0.05)
+    make["factory"] = lambda: _FakeBrowser(jar=[_OLD, _KEPT], hang_write=True)
+    session_cookies.save(str(tmp_path), [_SSO, _NEW], at_close=True)
+    async with Session("s", path=str(tmp_path)).start():
+        pass
+    assert browsers[0].events[-1] == "close"
+    saved = session_cookies.load(str(tmp_path))
+    assert sorted(saved, key=lambda c: c.name) == [_KEPT, _SSO, _NEW]
+
+
+async def test_a_cookie_changed_after_a_failed_restore_is_kept(tmp_path, fake_launch, monkeypatch):
+    """The site set the cookie again during the run: Chrome's value is the live one."""
+    browsers, make = fake_launch
+    monkeypatch.setattr(session_cookies, "TIMEOUT", 0.05)
+    make["factory"] = lambda: _FakeBrowser(jar=[_OLD], hang_write=True)
+    session_cookies.save(str(tmp_path), [_NEW], at_close=True)
+    newest = Cookie(name="tok", value="newest", domain="127.0.0.1", expires=4102444800.0)
+    async with Session("s", path=str(tmp_path)).start() as browser:
+        browser.jar = [newest]
+    assert session_cookies.load(str(tmp_path)) == [newest]

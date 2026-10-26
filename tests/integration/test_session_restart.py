@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 _CHILD = str(Path(__file__).with_name("session_child.py"))
 _TIMEOUT = 90.0
 
@@ -30,22 +32,39 @@ async def _run_child(*args: str) -> str:
     return out.decode()
 
 
+async def _read_child(path: str) -> dict[str, str]:
+    return json.loads((await _run_child("read", path)).strip().splitlines()[-1])
+
+
 async def test_cookies_survive_a_restart_in_another_process(tmp_path, local_server):
     path = str(tmp_path / "child")
     await _run_child("write", path, local_server)
-    names = json.loads((await _run_child("read", path)).strip().splitlines()[-1])
-    assert "late" in names  # written right before close()
-    assert "http_sso" in names  # HttpOnly, no expiry, from Set-Cookie
-    assert "js_sso" in names  # no expiry, from document.cookie
+    jar = await _read_child(path)
+    assert jar["late"] == "1"  # written right before close()
+    assert jar["http_sso"] == "1"  # HttpOnly, no expiry, from Set-Cookie
+    assert jar["js_sso"] == "1"  # no expiry, from document.cookie
 
 
 async def test_cookies_with_no_expiry_outlive_a_second_restart(tmp_path, local_server):
     """Put back at start, they are kept again at the next close."""
     path = str(tmp_path / "child")
     await _run_child("write", path, local_server)
-    await _run_child("read", path)
-    names = json.loads((await _run_child("read", path)).strip().splitlines()[-1])
-    assert {"http_sso", "js_sso", "late"} <= set(names)
+    await _read_child(path)
+    jar = await _read_child(path)
+    assert {k: jar.get(k) for k in ("http_sso", "js_sso", "late")} == {
+        "http_sso": "1",
+        "js_sso": "1",
+        "late": "1",
+    }
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="kills Chrome via /proc")
+async def test_a_rotated_token_comes_back_with_its_new_value(tmp_path):
+    """Chrome's disk has tok=old, the jar read at the close had tok=new: the
+    restart must give new, not the copy Chrome kept."""
+    path = str(tmp_path / "child")
+    await _run_child("rotate", path)
+    assert (await _read_child(path))["tok"] == "new"
 
 
 async def test_a_partitioned_cookie_comes_back_partitioned(tmp_path):

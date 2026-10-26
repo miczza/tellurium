@@ -27,7 +27,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (atomic, mode 0600); the next `start()` puts back, before the validators run, those Chrome
   does not have (same name, domain and path), leaving the ones it kept untouched; until
   Chrome has taken them (the restore timed out, the start was cancelled) the close keeps
-  them in `cookies.json` next to Chrome's jar, so a failed restore never loses them. `save()`
+  them in `cookies.json` next to Chrome's jar, so a failed restore never loses them. A file
+  written as Chrome closed is newer than Chrome's own copy, which can miss the last change
+  (a token rotated just before the close): its cookies then go back over the ones Chrome kept
+  with another value. While a session runs the file is marked as not written at a close, so
+  after a process that died before closing the next start trusts Chrome's copy. `save()`
   also writes `cookies.json` with the jar known as of the last start or close.
   To log a session out by hand, delete `cookies.json` along with the profile's cookies.
 - `Cookie.partition_key`: the CHIPS partition (`partitionKey` of `Storage.getCookies`), kept
