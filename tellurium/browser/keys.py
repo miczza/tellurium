@@ -63,7 +63,9 @@ def parse(combo: str) -> Key:
     bits = 0
     for mod in mods:
         if mod.lower() not in _MODIFIERS:
-            raise ValueError(f"Unknown modifier {mod!r} in {combo!r}: use Control, Alt, Shift, Meta")
+            raise ValueError(
+                f"Unknown modifier {mod!r} in {combo!r}: use Control, Alt, Shift, Meta"
+            )
         bits |= _MODIFIERS[mod.lower()]
     if key in NAMED:
         code, text = NAMED[key]
