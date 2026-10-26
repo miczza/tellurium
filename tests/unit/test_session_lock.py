@@ -123,3 +123,101 @@ def test_windows_backend_uses_msvcrt_locking(tmp_path, monkeypatch):
     second = SessionLock(str(tmp_path))
     second.acquire()
     second.release()
+
+
+def _probed_for_a_moment(path, seconds=0.02):
+    """Hold *path*'s lock file as a probe does (shared, from another handle)
+    and let it go after *seconds*."""
+    import fcntl
+    import threading
+
+    fd = os.open(os.path.join(path, LOCK_FILE), os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+
+    def let_go():
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+    timer = threading.Timer(seconds, let_go)
+    timer.start()
+    return timer
+
+
+@pytest.fixture
+def fake_launch(monkeypatch):
+    import tellurium
+
+    class _Browser:
+        async def get_cookies(self, domain=None):
+            return []
+
+        async def close(self):
+            pass
+
+    async def launch(**kwargs):
+        return _Browser()
+
+    monkeypatch.setattr(tellurium.Browser, "launch", launch)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="flock")
+async def test_a_probe_does_not_make_a_start_busy(tmp_path, fake_launch):
+    from tellurium import Session
+
+    (tmp_path / LOCK_FILE).write_text("4242\n")  # a holder long gone
+    timer = _probed_for_a_moment(str(tmp_path))
+    try:
+        async with Session("s", path=str(tmp_path)).start():
+            pass
+    finally:
+        timer.join()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="flock")
+def test_a_probe_does_not_make_another_probe_see_a_holder(tmp_path):
+    (tmp_path / LOCK_FILE).write_text("4242\n")
+    timer = _probed_for_a_moment(str(tmp_path))
+    try:
+        assert SessionLock.holder(str(tmp_path)) is None
+    finally:
+        timer.join()
+
+
+_PROBER = """
+import sys, time
+from tellurium.session.lock import SessionLock
+print(flush=True)
+end = time.monotonic() + float(sys.argv[2])
+while time.monotonic() < end:
+    SessionLock.holder(sys.argv[1])
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="flock")
+async def test_concurrent_probes_never_make_a_start_busy(tmp_path, fake_launch):
+    """Two processes probing in a loop (MCP servers checking the name) while
+    this one starts and closes the session again and again."""
+    import subprocess
+
+    from tellurium import Session
+
+    stale = SessionLock(str(tmp_path))
+    stale.acquire()  # leaves its PID behind
+    stale.release()
+    argv = [sys.executable, "-c", _PROBER, str(tmp_path), "3"]
+    probers = [subprocess.Popen(argv, stdout=subprocess.PIPE) for _ in range(2)]
+    try:
+        for p in probers:
+            p.stdout.readline()
+        busy = 0
+        for _ in range(200):
+            try:
+                async with Session("s", path=str(tmp_path)).start():
+                    pass
+            except SessionBusyError:
+                busy += 1
+        assert busy == 0
+    finally:
+        for p in probers:
+            p.kill()
+            p.wait()

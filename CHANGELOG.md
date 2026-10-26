@@ -13,6 +13,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   closed, error and cancellation included. A second process, or a second `Session` on the
   same folder, gets `SessionBusyError` with `.pid` and `.path` instead of a Chrome launch
   error; the OS drops the lock when its holder dies, so a `kill -9` leaves nothing to clean.
+  Checking who holds a session (the MCP server does it before a launch) takes the lock only
+  for an instant and shared, and a start that meets such a check retries for up to 0.5 s, so
+  neither reports a session busy that is free.
   Before launching, `start()` also waits (up to 10 s) for the Chrome of a holder that died
   to let go of the profile (its `SingletonLock`), and names that Chrome's PID in a
   `SessionBusyError` if it stays. A Chrome counts as holding the profile only if its

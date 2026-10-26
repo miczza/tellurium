@@ -6,12 +6,18 @@ after it is closed; the file carries the holder's PID for the error message.
 The OS drops the lock when its holder dies, ``kill -9`` included, so a
 crashed process never leaves the session locked: there is nothing stale to
 clean up. Every call is a non-blocking syscall on a file of a few bytes.
+
+A probe (:meth:`SessionLock.holder`) takes the lock for an instant, shared, so
+probes never see each other as holders; a start that meets one waits a moment
+(:meth:`SessionLock.acquire_async`) instead of calling the session busy.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
+import time
 
 from tellurium.session.errors import SessionBusyError
 
@@ -19,6 +25,10 @@ LOCK_FILE = "session.lock"
 # Windows locks byte ranges, and a locked range cannot be read by anyone
 # else: lock one byte past the PID, so the PID stays readable.
 _WINDOWS_OFFSET = 1 << 20
+#: How long a start keeps trying while the lock is taken: long enough to
+#: outlast a probe its process was descheduled in the middle of.
+PATIENCE = 0.5
+_RETRY = 0.002
 
 
 class SessionLock:
@@ -51,6 +61,20 @@ class SessionLock:
             raise
         self._fd = fd
 
+    async def acquire_async(self, patience: float = PATIENCE) -> None:
+        """:meth:`acquire`, trying again for up to *patience* seconds while the
+        lock is taken: a probe holds it for an instant and must not make the
+        session look busy (with the PID of a holder long gone)."""
+        deadline = time.monotonic() + patience
+        while True:
+            try:
+                self.acquire()
+                return
+            except SessionBusyError:
+                if time.monotonic() >= deadline:
+                    raise
+            await asyncio.sleep(_RETRY)
+
     def release(self) -> None:
         """Let the lock go; safe to call when not held."""
         fd, self._fd = self._fd, None
@@ -70,7 +94,7 @@ class SessionLock:
         except FileNotFoundError:
             return None
         try:
-            if _try_lock(fd):
+            if _try_lock(fd, shared=True):
                 _unlock(fd)
                 return None
             return _read_pid(fd) or 0
@@ -81,8 +105,10 @@ class SessionLock:
         return os.path.join(self.path, LOCK_FILE)
 
 
-def _try_lock(fd: int) -> bool:
-    """Lock *fd* without waiting; ``False`` if someone else holds it."""
+def _try_lock(fd: int, shared: bool = False) -> bool:
+    """Lock *fd* without waiting; ``False`` if someone else holds it. *shared*
+    (POSIX only; Windows locks are always exclusive) does not conflict with
+    other shared locks, only with an exclusive one."""
     if sys.platform == "win32":
         import msvcrt
 
@@ -95,7 +121,7 @@ def _try_lock(fd: int) -> bool:
     import fcntl
 
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
     except BlockingIOError:
         return False
     return True

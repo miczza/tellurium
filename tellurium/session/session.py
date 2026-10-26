@@ -181,7 +181,7 @@ class Session:
         from tellurium import Browser
 
         lock = SessionLock(self.path)
-        lock.acquire()  # creates the folder; a non-blocking syscall
+        await lock.acquire_async()  # creates the folder; non-blocking syscalls
         chrome_dir = os.path.join(self.path, "chrome")
 
         # Single try covers both Browser.launch failure (leak prevention) and
