@@ -291,7 +291,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the first form does not compile (a `SyntaxError` before anything runs), and describing
   a thrown value can no longer throw (`throw Object.create(null)` raised inside the
   error handler, so the expression ran again as a body). A body now runs in an `async`
-  function, so `await` works in it.
+  function, so `await` works in it. A returned value that throws while Chrome
+  serializes it (a throwing getter, a Proxy) is a `RuntimeError`, not a `CDPError`.
 - `Tab.screenshot(full_page=True)` captures the whole page: the clip uses
   `cssContentSize` (falling back to `contentSize`) with `captureBeyondViewport`, scaled by
   `1/devicePixelRatio` so the image has the page's CSS size. Before, everything past the

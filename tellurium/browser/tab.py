@@ -290,7 +290,12 @@ class Tab:
         try:  # as a function or an expression; else, if it does not compile, as a body
             for source in (f"(\n{expression}\n)", f"async function() {{\n{expression}\n}}"):
                 call["functionDeclaration"] = _EVAL_ON_JS % source
-                res = await send("Runtime.callFunctionOn", call, timeout=timeout)
+                try:
+                    res = await send("Runtime.callFunctionOn", call, timeout=timeout)
+                except CDPError as exc:  # the value threw while Chrome serialized it
+                    if exc.code != -32603:
+                        raise
+                    raise RuntimeError(f"eval_on({selector!r}) failed: {exc}") from None
                 if not _not_compiled(res):  # it ran: the wrapper caught any throw
                     break
         finally:

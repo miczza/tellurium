@@ -94,3 +94,17 @@ async def test_a_throwing_expression_runs_once(page, expression):
 async def test_a_body_can_await(page):
     body = "await new Promise(r => setTimeout(r, 10)); return this.id"
     assert await page.eval_on("#content", body) == "content"
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        # the value throws while Chrome serializes it (P1, round 3)
+        f"el => {{ {_COUNT}; return {{ get x() {{ throw new SyntaxError('x') }} }} }}",
+        f"el => {{ {_COUNT}; return new Proxy({{}}, {{ ownKeys() {{ throw 1 }} }}) }}",
+    ],
+)
+async def test_a_value_that_throws_when_returned_is_a_runtime_error(page, expression):
+    with pytest.raises(RuntimeError, match=r"eval_on\('#content'\) failed"):
+        await page.eval_on("#content", expression)
+    assert await page.eval("window.count") == 1
