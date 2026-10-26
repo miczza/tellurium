@@ -40,7 +40,7 @@ class BrowserContext:
         context = cls(browser, result["browserContextId"])
         browser._contexts[context.context_id] = context
         try:
-            context._downloads_dir = await browser._downloads.add_context(
+            context._downloads_dir = await browser.downloads.add_context(
                 context.context_id, downloads_dir
             )
         except BaseException:
@@ -108,7 +108,7 @@ class BrowserContext:
         for tab in list(self._tabs):
             self._browser._forget_tab(tab._target_id)
         self._browser._contexts.pop(self._context_id, None)
-        downloads = self._browser._downloads
+        downloads = self._browser.downloads
         root = self._browser._router.root
         try:
             await downloads.stop("The browser context closed", self._context_id)

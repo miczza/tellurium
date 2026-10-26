@@ -259,7 +259,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - `Browser.downloads`: internal accessor of the browser's download tracker;
-  `Tab.expect_download` uses it instead of reading `Browser._downloads`.
+  `Tab.expect_download` and `BrowserContext` use it instead of reading `Browser._downloads`.
 - `NavigationError` for an aborted navigation (`net::ERR_ABORTED`, as for a
   download) now points at `Tab.expect_download()`.
 - `Tab.back()` / `Tab.forward()` bound their CDP calls (5 s each); the XPath
