@@ -1170,13 +1170,16 @@ class Tab:
 # element the viewport takes it from (<body>'s while <html>'s is visible: turning off
 # <html>'s there would make <body> the scroller and lose the scroll position).
 _VIEW_JS = "[innerWidth, innerHeight, devicePixelRatio]"
+# the viewport's own scrollbars, on scrollingElement: <body> in quirks mode, where
+# <html>'s clientHeight is the document's
 _GAPS_JS = (
-    "[innerWidth - document.documentElement.clientWidth,"
-    " innerHeight - document.documentElement.clientHeight]"
+    "(s => [innerWidth - s.clientWidth, innerHeight - s.clientHeight])"
+    "(document.scrollingElement || document.documentElement)"
 )
 _RELAYOUT_JS = """((gx, gy) => {
   const html = document.documentElement, body = document.body;
-  if (innerWidth - html.clientWidth >= gx && innerHeight - html.clientHeight >= gy) return false;
+  const view = document.scrollingElement || html;
+  if (innerWidth - view.clientWidth >= gx && innerHeight - view.clientHeight >= gy) return false;
   const css = getComputedStyle(html), x = scrollX, y = scrollY;
   const own = !body || css.overflowX !== 'visible' || css.overflowY !== 'visible';
   const kept = [...document.adoptedStyleSheets], sheet = new CSSStyleSheet();

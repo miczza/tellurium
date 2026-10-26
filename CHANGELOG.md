@@ -305,7 +305,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   shares the clip and the capture) relayouts it from tellurium's isolated world, only
   when a scrollbar went, through the element the viewport takes its overflow from, so
   `clientWidth`, `scrollY` and the absence of `scroll` events are as before (also with
-  `html, body {height: 100%}` and a scrolling `<body>`). Cancelled mid-capture, it
+  `html, body {height: 100%}` and a scrolling `<body>`, and in quirks mode, where the
+  scrollbars are measured on `document.scrollingElement`). Cancelled mid-capture, it
   restores once Chrome answers, in a task of the tab. The page's sizes are read only in
   the isolated world, never in the page's own, and checked before use.
 - `Tab.keyboard_press` sends keys Chrome acts on: `rawKeyDown` with the Windows virtual
