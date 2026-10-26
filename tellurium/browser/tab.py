@@ -1017,6 +1017,7 @@ class Tab:
         """
         if typos and not human:
             raise ValueError("keyboard_type(typos=True) requires human=True")
+        text = text.replace("\r\n", "\n")  # one Enter per line break, as "\r" alone
         if human:
             from tellurium.stealth.human import HumanTyping, apply_key_rollover
 

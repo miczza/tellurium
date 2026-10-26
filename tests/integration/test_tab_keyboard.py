@@ -68,9 +68,10 @@ async def test_shift_and_a_letter_types_the_capital(page):
     assert await page.eval("document.getElementById('second').value") == "A+"
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
 @pytest.mark.parametrize("human", [False, True])
-async def test_a_newline_is_enter_in_a_textarea(page, human):
+async def test_a_newline_is_enter_in_a_textarea(page, human, newline):
     await page.eval("document.getElementById('notes').focus()")
-    await page.keyboard_type("a\nb", **({"human": True, "wpm": 3000} if human else {}))
+    await page.keyboard_type(f"a{newline}b", **({"human": True, "wpm": 3000} if human else {}))
     assert await page.eval("document.getElementById('notes').value") == "a\nb"
     assert await page.eval("window.submits") == 0
