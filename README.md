@@ -634,6 +634,29 @@ await tab.wait_for_navigation(url="*/dashboard*")
 as a glob (`fnmatch`, matched against the whole URL) and anything else as a
 substring.
 
+#### Asking a person for help
+
+```python
+# Headed: a banner with the reason and a "Done" button. Returns when the person
+# clicks Done or the condition holds; TimeoutError after `timeout` seconds.
+await tab.wait_for_human("Solve the captcha", until="**/dashboard*", timeout=600)
+
+async def signed_in(tab):
+    return "session=" in await tab.eval("document.cookie")
+
+await tab.wait_for_human("Sign in with your 2FA code", until=signed_in)
+```
+
+`until` is a URL pattern (glob with `*`/`?`, substring otherwise, matched
+against the main frame's URL as Chrome reports it) or an async `(tab) -> bool`;
+`timeout=None` waits with no limit. The banner sits in a closed shadow root
+built from an isolated world, so the page can neither read nor hide it, and it
+comes back after every navigation. "Done" counts only for a real click: it
+reaches tellurium through a CDP binding that exists only in that isolated
+world, so neither the page nor a synthetic `click()` can end the wait. In
+headless Chrome there is no banner and `until` is required (`ValueError`
+otherwise). The banner is removed however the wait ends.
+
 #### Raw CDP
 
 ```python
@@ -1224,6 +1247,7 @@ tellurium update-browser [--check] [--security-only]
 tellurium prune-browsers [--keep N]
 tellurium verify-browser [--reinstall]
 tellurium mcp [--headed] [--allow-local-urls]              # MCP server on stdio (tellurium[mcp])
+tellurium login NAME [URL] [--dir D]                        # sign in to a session by hand
 ```
 
 | Command | What it does |
@@ -1238,6 +1262,7 @@ tellurium mcp [--headed] [--allow-local-urls]              # MCP server on stdio
 | `prune-browsers` | Delete old cached versions, keeping the `--keep N` most recent. The version behind `current` is never pruned. |
 | `verify-browser` | Re-hash the installed binary and compare with `binary_sha256` in `MANIFEST.json`. `--reinstall` re-downloads when the check fails. |
 | `mcp` | Serve tellurium's browser tools over MCP on stdio for an LLM agent. `--headed` shows the windows, `--allow-local-urls` lets the agent open `file:` and browser pages. Needs `pip install tellurium[mcp]`. |
+| `login` | Open Chrome with a window on the named session (`~/.tellurium/sessions/NAME`, the folder `tellurium mcp` uses; `--dir` picks another), on `URL` if given. Sign in (2FA and captchas included), then click "Done" on the banner, press Enter in the terminal or close the window: `session.json` and `cookies.json` are saved, and the MCP server and scripts find the session signed in. A session open elsewhere is an error naming its PID. |
 
 ---
 
@@ -1344,6 +1369,30 @@ Tellurium sets `0600` permissions on POSIX; it does not encrypt the file.
 
 - `validate_mode="all"` (default): all validators must return truthy. Short-circuits on first falsy / raising validator.
 - `validate_mode="any"`: at least one validator must return truthy. Raising validators are skipped.
+
+### Signing in by hand
+
+When a login cannot be scripted (2FA, captchas, SSO), let a person do it:
+
+```bash
+tellurium login github https://github.com/login   # once; then MCP and scripts reuse it
+```
+
+or, from a script, fall back to a person when the validators fail:
+
+```python
+async with session.start(headless=True, on_login_failure="manual") as browser:
+    ...
+```
+
+With `on_login_failure="manual"`, a failed validation with no `@login` (or a
+`@login` that raises) does not raise: a headless Chrome is closed, keeping its
+cookies, and reopened with a window on the same profile; a
+[`wait_for_human`](#asking-a-person-for-help) banner asks to sign in, and on
+"Done" the validators run again until they pass. The start then yields that
+headed browser, all within the same `start()` and its lock;
+`SessionLoginFailedError` if nobody signs in within 10 minutes. The default,
+`"raise"`, keeps the errors below.
 
 ### Errors
 
