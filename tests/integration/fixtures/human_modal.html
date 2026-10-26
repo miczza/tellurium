@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head><title>modal</title></head>
+<body>
+<p id="content">A page with a modal dialog: the rest of the document is inert.</p>
+<dialog id="login"><form method="dialog"><input name="user"><button>Sign in</button></form></dialog>
+<script>
+  const dialog = document.getElementById('login');
+  dialog.showModal();
+  // Close and open again: the dialog goes back on top of the top layer.
+  window.reopen = function () { dialog.close(); dialog.showModal(); };
+</script>
+</body>
+</html>

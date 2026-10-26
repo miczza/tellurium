@@ -233,3 +233,113 @@ async def test_headless_without_a_condition_is_refused(any_browser):
 async def test_a_condition_of_the_wrong_type_is_refused(browser):
     with pytest.raises(TypeError, match="until"):
         await browser.main_tab.wait_for_human("Sign in", until=42)
+
+
+# --- A page that fights the banner -------------------------------------------
+
+
+async def _click_done_until_it_ends(tab, task, seconds: float = 6) -> None:
+    """Click where the banner's button is, again and again, until *task* ends:
+    the banner may need a round or two to come back from what the page did."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    while not task.done():
+        if loop.time() > deadline:
+            raise AssertionError("Done never ended the wait")
+        try:
+            await _click_node(tab, await _done_button(tab))
+        except Exception:  # noqa: BLE001 - hidden (no box) or rebuilt meanwhile
+            pass
+        await _until_settled(task, 0.4)
+    await task
+
+
+async def _on_top(tab) -> bool:
+    """Whether the banner's button is what a click at its centre would hit."""
+    obj = (await tab.send_cdp("DOM.resolveNode", {"nodeId": await _done_button(tab)}))["object"]
+    hit = await tab.send_cdp(
+        "Runtime.callFunctionOn",
+        {
+            "objectId": obj["objectId"],
+            "functionDeclaration": "function () { const r = this.getBoundingClientRect();"
+            " if (!r.width || !r.height) return false;"
+            " const x = r.left + r.width / 2, y = r.top + r.height / 2;"
+            " return this.getRootNode().elementFromPoint(x, y) === this; }",
+            "returnByValue": True,
+        },
+    )
+    return hit["result"]["value"]
+
+
+@needs_display
+async def test_done_survives_a_page_that_hides_the_banner(headed, local_server):
+    tab = headed.main_tab
+    await tab.get(f"{local_server}/human_hide.html")  # html > div {display: none !important}
+    task = asyncio.create_task(tab.wait_for_human("Go on", timeout=30))
+    try:
+        await _done_button(tab)
+        await tab.eval("hideBanner()")  # an inline display:none !important on the host
+        await _click_done_until_it_ends(tab, task)
+    finally:
+        task.cancel()
+
+
+@needs_display
+async def test_done_survives_capture_listeners_that_stop_every_click(headed, local_server):
+    tab = headed.main_tab
+    await tab.get(f"{local_server}/human_capture.html")
+    task = asyncio.create_task(tab.wait_for_human("Go on", timeout=30))
+    try:
+        await _click_done_until_it_ends(tab, task)
+    finally:
+        task.cancel()
+
+
+@needs_display
+async def test_done_survives_clicks_cancelled_by_a_page_loaded_during_the_wait(
+    headed, local_server
+):
+    tab = headed.main_tab
+    await tab.get(f"{local_server}/basic.html")
+    task = asyncio.create_task(tab.wait_for_human("Go on", timeout=30))
+    try:
+        await _done_button(tab)
+        await tab.get(f"{local_server}/human_cancel.html")  # preventDefault on every click
+        await _click_done_until_it_ends(tab, task)
+    finally:
+        task.cancel()
+
+
+@needs_display
+async def test_done_stays_clickable_over_a_modal_dialog(headed, local_server):
+    tab = headed.main_tab
+    await tab.get(f"{local_server}/human_modal.html")  # showModal() on load
+    task = asyncio.create_task(tab.wait_for_human("Go on", timeout=30))
+    try:
+        await _done_button(tab)
+        await tab.eval("reopen()")  # the page's dialog back on top of the banner
+        await _click_done_until_it_ends(tab, task)
+    finally:
+        task.cancel()
+
+
+@needs_display
+async def test_the_banner_keeps_its_style_under_a_style_src_csp(headed, local_server):
+    tab = headed.main_tab
+    await tab.get(f"{local_server}/human_csp.html")  # style-src 'none'
+    task = asyncio.create_task(tab.wait_for_human("Go on", timeout=30))
+    try:
+        obj = await tab.send_cdp("DOM.resolveNode", {"nodeId": await _done_button(tab)})
+        style = await tab.send_cdp(
+            "Runtime.callFunctionOn",
+            {
+                "objectId": obj["object"]["objectId"],
+                "functionDeclaration": "function () { return getComputedStyle(this)"
+                ".backgroundColor; }",
+                "returnByValue": True,
+            },
+        )
+        assert style["result"]["value"] == "rgb(62, 189, 147)"
+        assert await _on_top(tab)
+    finally:
+        task.cancel()

@@ -29,10 +29,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and a "Done" button; the wait ends when the person clicks it or *until* holds: a URL
   pattern (glob with `*`/`?`, substring otherwise) matched against the main frame's URL as
   Chrome reports it, or an async `(tab) -> bool`. The banner is built from an isolated world
-  in a closed shadow root, so the page cannot read or style it, and is put back after every
-  navigation or if the page removes it; "Done" arrives through a CDP binding that exists
-  only in that isolated world and fires only on a trusted click, so neither the page nor a
-  synthetic `click()` can end the wait. In headless Chrome there is no banner and *until*
+  in a closed shadow root, so the page cannot read it, styled through the CSSOM (a
+  `style-src` CSP does not strip it), and put back after every navigation; every 0.3 s it is
+  repaired if the page removed it or overrode its inline style (`display: none
+  !important`), kept in the top layer, and raised again or moved into the page's modal
+  `<dialog>` when its button is not what a click there would hit. "Done" arrives through a
+  CDP binding that exists only in that isolated world and fires only for a person's input
+  (a trusted click, or a submission of the banner's form during a transient user
+  activation), so neither the page nor a synthetic `click()` can end the wait; the
+  submission never leaves the shadow root, so capture listeners that stop every click do
+  not block it, and on documents loaded during the wait the banner's own capture listener
+  runs first. A page that cancels the clicks on the banner in the document already open,
+  or hides it again faster than a round, can still block "Done" (see the README). In
+  headless Chrome there is no banner and *until*
   is required (`ValueError` otherwise). `TimeoutError` after *timeout* seconds (`None`: no
   limit); the banner is removed on every way out, cancellation included. A page too busy
   to answer within 5 s delays the next check instead of failing the wait.

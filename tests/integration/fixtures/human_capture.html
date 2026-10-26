@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head><title>capture</title></head>
+<body>
+<p id="content">A page that swallows every pointer event before it reaches its target.</p>
+<script>
+  for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+    window.addEventListener(type, function (event) {
+      event.stopImmediatePropagation();
+    }, true);
+  }
+</script>
+</body>
+</html>

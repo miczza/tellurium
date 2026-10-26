@@ -649,13 +649,32 @@ await tab.wait_for_human("Sign in with your 2FA code", until=signed_in)
 
 `until` is a URL pattern (glob with `*`/`?`, substring otherwise, matched
 against the main frame's URL as Chrome reports it) or an async `(tab) -> bool`;
-`timeout=None` waits with no limit. The banner sits in a closed shadow root
-built from an isolated world, so the page can neither read nor hide it, and it
-comes back after every navigation. "Done" counts only for a real click: it
-reaches tellurium through a CDP binding that exists only in that isolated
-world, so neither the page nor a synthetic `click()` can end the wait. In
-headless Chrome there is no banner and `until` is required (`ValueError`
-otherwise). The banner is removed however the wait ends.
+`timeout=None` waits with no limit. In headless Chrome there is no banner and
+`until` is required (`ValueError` otherwise). The banner is removed however the
+wait ends.
+
+The banner sits in a closed shadow root built from an isolated world, so the
+page cannot read it, and it is styled through the CSSOM, so a `style-src` CSP
+does not strip it. It comes back after every navigation, and every 0.3 s it is
+checked and repaired: put back if the page removed it, its inline style
+restored (a `display: none !important` from the page does not stick), kept in
+the top layer, and if its button is not what a click there would hit it is
+raised again or, under a modal `<dialog>` of the page, moved into the dialog
+(the only part of the page that is not inert). "Done" counts only for a
+person's input: it reaches tellurium through a CDP binding that exists only in
+that isolated world, from a trusted click or from a submission of the banner's
+form during a transient user activation, so neither the page nor a synthetic
+`click()` can end the wait. That submission never leaves the shadow root, so a
+page that stops every click in the capture phase does not block it; on a
+document loaded during the wait the banner's own capture listener runs before
+any script of the page.
+
+What a hostile page can still do: cancel (`preventDefault`) the clicks aimed at
+the banner in the document that was already open when the wait started; hide
+or cover the banner again as soon as it comes back (a `MutationObserver` beats
+the 0.3 s round); make the whole document inert or invisible. Against such a
+page "Done" may never arrive, so give the wait an `until` or a `timeout` (with
+`on_login_failure="manual"` that ends in `SessionLoginFailedError`).
 
 #### Raw CDP
 

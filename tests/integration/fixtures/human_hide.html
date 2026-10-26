@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>hide</title>
+<style>html > div { display: none !important; }</style>
+</head>
+<body>
+<p id="content">A page that hides whatever is added to the document element.</p>
+<script>
+  // Hides the banner the way a page can: an inline !important on the host.
+  window.hideBanner = function () {
+    for (const el of document.documentElement.children) {
+      if (el.tagName === 'DIV') el.style.setProperty('display', 'none', 'important');
+    }
+  };
+</script>
+</body>
+</html>

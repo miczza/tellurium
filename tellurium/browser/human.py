@@ -2,11 +2,14 @@
 
 In headed Chrome a banner tells the person why the script stopped and offers a
 "Done" button. The banner lives in a closed shadow root built from an isolated
-world, so the page can neither read nor style it, and it is put back after
-every navigation (or if the page removes it). "Done" reaches tellurium through
-a CDP binding that exists only in that isolated world and is called only for a
-trusted click: the page cannot pretend the person has finished. In headless
-Chrome there is nobody to click, so only the condition (*until*) ends the wait.
+world, so the page cannot read it, and every round it is put back, restyled,
+kept in the top layer and moved where its button can be clicked (see
+``_SHOW_JS``). "Done" reaches tellurium through a CDP binding that exists only
+in that isolated world and is called only for a person's input: the page
+cannot pretend the person has finished. A hostile page can still block it (it
+cancels the clicks on the banner, or hides it faster than a round): the README
+says how far this goes. In headless Chrome there is nobody to click, so only
+the condition (*until*) ends the wait.
 """
 
 from __future__ import annotations
@@ -34,52 +37,114 @@ POLL = 0.3
 CALL_TIMEOUT = 5.0
 DONE_LABEL = "Done"
 
-# Run in the banner's isolated world: (re)build the banner unless it is
-# already in the document. "unbound": the binding is missing from this world;
-# "nodoc": no document yet. The click looks the binding up when it happens,
-# so a binding added again later is the one called.
+# Run in the banner's isolated world, at every new document (before the
+# page's own scripts) and again every round of the wait. It (1) puts a click
+# listener on window in the capture phase, so on a document loaded during the
+# wait it runs before anything of the page; (2) builds the banner if it is
+# not in the document; (3) puts back its style and its place in the top layer
+# and, if its button is not what a click there would hit (hidden, covered,
+# inert under a modal dialog), moves it on top or into the modal dialog.
+# "unbound": the binding is missing from this world; "nodoc": no document
+# yet; "blocked": the button cannot be made reachable this round.
 _SHOW_JS = """
 (function (reason, done, label) {
+  const call = function () {
+    const binding = globalThis[done];
+    if (typeof binding === 'function') binding('done');
+  };
+  if (!globalThis.__tlGuard) {
+    globalThis.__tlGuard = true;
+    window.addEventListener('click', function (event) {
+      const b = globalThis.__tlBanner;
+      if (!event.isTrusted || !b || event.target !== b.host) return;
+      const r = b.button.getBoundingClientRect();
+      if (event.clientX >= r.left && event.clientX <= r.right &&
+          event.clientY >= r.top && event.clientY <= r.bottom) call();
+    }, true);
+  }
   if (typeof globalThis[done] !== 'function') return 'unbound';
-  const old = globalThis.__tlBanner;
-  if (old && old.isConnected) return 'shown';
   const root = document.documentElement;
   if (!root) return 'nodoc';
-  const host = document.createElement('div');
-  const place = {all: 'initial', position: 'fixed', top: '0', left: '0', right: '0',
-                 display: 'block', 'z-index': '2147483647'};
-  for (const k in place) host.style.setProperty(k, place[k], 'important');
-  const shadow = host.attachShadow({mode: 'closed'});
-  const style = document.createElement('style');
-  style.textContent = '.bar{display:flex;align-items:center;gap:12px;padding:10px 16px;' +
-    'background:#1f2933;color:#f5f7fa;font:14px/1.4 system-ui,sans-serif;' +
-    'box-shadow:0 2px 8px rgba(0,0,0,.35)}' +
-    '.reason{flex:1;white-space:pre-wrap}' +
-    'button{font:600 14px system-ui,sans-serif;padding:6px 18px;border:0;' +
-    'border-radius:4px;background:#3ebd93;color:#102a2a;cursor:pointer}';
-  const bar = document.createElement('div');
-  bar.className = 'bar';
-  const text = document.createElement('span');
-  text.className = 'reason';
-  text.textContent = reason;
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.textContent = label;
-  button.addEventListener('click', function (event) {
-    const call = globalThis[done];
-    if (event.isTrusted && typeof call === 'function') call('done');
-  });
-  bar.append(text, button);
-  shadow.append(style, bar);
-  root.appendChild(host);
-  globalThis.__tlBanner = host;
-  return 'shown';
+  // Inline CSSOM styles: a style-src CSP blocks <style>, not these.
+  const dress = function (el, props, important) {
+    for (const k in props) el.style.setProperty(k, props[k], important ? 'important' : '');
+  };
+  const HOST = {all: 'initial', position: 'fixed', top: '0', left: '0', right: '0',
+                display: 'block', visibility: 'visible', opacity: '1',
+                'pointer-events': 'auto', 'z-index': '2147483647'};
+  const build = function () {
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({mode: 'closed'});
+    // A form: its submit event is not composed, so it never leaves the shadow
+    // root and no listener of the page can stop it.
+    const form = document.createElement('form');
+    form.method = 'dialog';
+    dress(form, {display: 'flex', 'align-items': 'center', gap: '12px', margin: '0',
+                 padding: '10px 16px', background: '#1f2933', color: '#f5f7fa',
+                 font: '14px/1.4 system-ui, sans-serif',
+                 'box-shadow': '0 2px 8px rgba(0,0,0,.35)'});
+    const text = document.createElement('span');
+    dress(text, {flex: '1', 'white-space': 'pre-wrap'});
+    text.textContent = reason;
+    const button = document.createElement('button');
+    button.type = 'submit';
+    button.textContent = label;
+    dress(button, {font: '600 14px system-ui, sans-serif', padding: '6px 18px', border: '0',
+                   'border-radius': '4px', background: '#3ebd93', color: '#102a2a',
+                   cursor: 'pointer'});
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      // Only a person's input gives the window a transient activation:
+      // click(), requestSubmit() or a synthetic event do not.
+      if (navigator.userActivation.isActive) call();
+    });
+    form.append(text, button);
+    shadow.append(form);
+    return {host: host, shadow: shadow, button: button, css: null};
+  };
+  const raise = function (host) {
+    try {
+      if (host.matches(':popover-open')) host.hidePopover();
+      host.showPopover();
+    } catch (e) { /* not connected or not a popover: next round */ }
+  };
+  const reachable = function (b) {
+    const r = b.button.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return false;
+    const x = r.left + r.width / 2, y = r.top + r.height / 2;
+    if (document.elementFromPoint(x, y) !== b.host) return false;
+    if (b.shadow.elementFromPoint(x, y) !== b.button) return false;
+    return b.host.checkVisibility({opacityProperty: true, visibilityProperty: true});
+  };
+  let b = globalThis.__tlBanner;
+  if (!b || !b.host.isConnected) {
+    if (b) b.host.remove();
+    b = globalThis.__tlBanner = build();
+    root.appendChild(b.host);
+  }
+  if (b.host.style.cssText !== b.css) {
+    b.host.style.cssText = '';
+    dress(b.host, HOST, true);
+    b.css = b.host.style.cssText;
+  }
+  if (b.host.getAttribute('popover') !== 'manual') b.host.setAttribute('popover', 'manual');
+  if (b.host.inert) b.host.inert = false;
+  if (!b.host.matches(':popover-open')) raise(b.host);
+  if (reachable(b)) return 'shown';
+  // Inert under a modal dialog of the page: only the dialog's subtree is not.
+  const places = [root].concat(Array.from(document.querySelectorAll('dialog:modal')).reverse());
+  for (const place of places) {
+    if (b.host.parentNode !== place) place.appendChild(b.host);
+    raise(b.host);
+    if (reachable(b)) return 'shown';
+  }
+  return 'blocked';
 })(%s, %s, %s)
 """
 
 _HIDE_JS = (
-    "(function () { const h = globalThis.__tlBanner;"
-    " if (h) h.remove(); globalThis.__tlBanner = null; return true; })()"
+    "(function () { const b = globalThis.__tlBanner;"
+    " if (b) b.host.remove(); globalThis.__tlBanner = null; return true; })()"
 )
 
 
@@ -105,7 +170,7 @@ async def wait_for_human(
     banner = None if headless else _Banner(tab, reason)
     try:
         if banner is not None:
-            banner.open()
+            await banner.open()
         while True:
             frame = await _main_frame(tab)
             if banner is not None and banner.done.is_set():
@@ -200,20 +265,32 @@ class _Banner:
         token = secrets.token_hex(8)
         self._tab = tab
         self._session = tab._session
-        self._reason = reason
         self._world = f"__tl_human_{token}"
         self._binding = f"__tl_done_{token}"
         self._context: int | None = None
         self._loader: str | None = None  # the document the context belongs to
         self._bound = False
+        self._script: str | None = None  # the early script, run at every new document
+        self._expression = _SHOW_JS % (
+            json.dumps(reason),
+            json.dumps(self._binding),
+            json.dumps(DONE_LABEL),
+        )
         self.done = asyncio.Event()
 
     def _on_binding(self, params: dict) -> None:
         if params.get("name") == self._binding:
             self.done.set()
 
-    def open(self) -> None:
+    async def open(self) -> None:
+        """Listen for "Done" and have every new document run the banner's
+        script in its world before the page's own scripts."""
         self._session.on("Runtime.bindingCalled", self._on_binding)
+        added = await self._send(
+            "Page.addScriptToEvaluateOnNewDocument",
+            {"source": self._expression, "worldName": self._world},
+        )
+        self._script = added["identifier"]
 
     async def show(self, frame: dict) -> None:
         """Make sure the current document shows the banner."""
@@ -241,12 +318,7 @@ class _Banner:
                 if (await _main_frame(self._tab) or {}).get("loaderId") != frame.get("loaderId"):
                     return
                 self._context, self._loader = world["executionContextId"], frame.get("loaderId")
-            expression = _SHOW_JS % (
-                json.dumps(self._reason),
-                json.dumps(self._binding),
-                json.dumps(DONE_LABEL),
-            )
-            if await self._evaluate(expression) == "unbound":
+            if await self._evaluate(self._expression) == "unbound":
                 self._context = None  # world and binding again next round
         except asyncio.TimeoutError:
             pass  # a busy page: the same world next round (a new one would show a second banner)
@@ -260,6 +332,13 @@ class _Banner:
             try:
                 await self._evaluate(_HIDE_JS)
             except Exception:  # noqa: BLE001 - document or tab gone: nothing left to hide
+                pass
+        if self._script is not None:
+            try:
+                await self._send(
+                    "Page.removeScriptToEvaluateOnNewDocument", {"identifier": self._script}
+                )
+            except Exception:  # noqa: BLE001 - tab gone
                 pass
         if self._bound:
             try:

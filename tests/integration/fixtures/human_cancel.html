@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head><title>cancel</title></head>
+<body>
+<p id="content">A page that cancels every click, and stops it, before it reaches its target.</p>
+<script>
+  for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+    window.addEventListener(type, function (event) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }, true);
+  }
+</script>
+</body>
+</html>
