@@ -15,7 +15,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   error; the OS drops the lock when its holder dies, so a `kill -9` leaves nothing to clean.
   Before launching, `start()` also waits (up to 10 s) for the Chrome of a holder that died
   to let go of the profile (its `SingletonLock`), and names that Chrome's PID in a
-  `SessionBusyError` if it stays.
+  `SessionBusyError` if it stays. A Chrome counts as holding the profile only if its
+  `--user-data-dir` is that very folder, symlinks resolved (`/x/chrome2` is not `/x/chrome`).
 - `Session` carries its cookie jar across restarts: Chrome drops the cookies with no expiry
   (`expires == -1`: SSO, banks) when it restarts, and can lose one written an instant before
   it closes. Before Chrome closes (on error too, each call bounded by 5 s) the jar is read

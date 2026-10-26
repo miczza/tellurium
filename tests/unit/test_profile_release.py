@@ -110,3 +110,33 @@ async def test_start_waits_for_the_profile_before_launching(tmp_path, monkeypatc
     from tellurium.session.lock import SessionLock
 
     assert SessionLock.holder(str(tmp_path)) is None  # released on the way out
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc"), reason="needs /proc")
+async def test_a_chrome_seen_through_a_symlink_is_waited_for(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "link").symlink_to(real)
+    chrome_dir = real / "chrome"
+    chrome_dir.mkdir()
+    proc = _fake_chrome(chrome_dir, 30)
+    try:
+        _link(chrome_dir, proc.pid)
+        seen = str(tmp_path / "link" / "chrome")
+        assert await profile_release.wait(seen, 0.3) == proc.pid
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc"), reason="needs /proc")
+async def test_a_chrome_on_a_sibling_profile_is_not_ours(tmp_path):
+    sibling = tmp_path / "chrome2"
+    sibling.mkdir()
+    proc = _fake_chrome(sibling, 30)
+    try:
+        _link(tmp_path / "chrome", proc.pid)  # a stale link naming a reused PID
+        assert await profile_release.wait(str(tmp_path / "chrome"), 0.3) is None
+    finally:
+        proc.kill()
+        proc.wait()

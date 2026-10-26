@@ -62,13 +62,31 @@ def _alive(pid: int) -> bool:
 
 def _runs_on(pid: int, chrome_dir: str) -> bool:
     """Whether *pid* was started on *chrome_dir*: a stale link may name a PID
-    the system has since given to an unrelated process. Without ``/proc`` a
-    live PID is taken at its word."""
+    the system has since given to an unrelated process, or to a Chrome of
+    another profile. Its ``--user-data-dir`` must be *chrome_dir* itself, both
+    with symlinks resolved. Without ``/proc`` a live PID is taken at its word."""
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as f:
-            cmdline = f.read()
+            argv = f.read().split(b"\0")
     except FileNotFoundError:
         return not os.path.isdir("/proc")
     except OSError:
         return True  # unreadable: assume the worst, it may be Chrome
-    return os.path.abspath(chrome_dir).encode() in cmdline
+    wanted = os.path.realpath(chrome_dir)
+    for given in _user_data_dirs(argv):
+        # A relative one is relative to the process's own working directory.
+        if os.path.realpath(os.path.join(f"/proc/{pid}/cwd", os.fsdecode(given))) == wanted:
+            return True
+    return False
+
+
+def _user_data_dirs(argv: list[bytes]) -> list[bytes]:
+    """The values of ``--user-data-dir=X`` and ``--user-data-dir X`` in *argv*."""
+    flag = b"--user-data-dir"
+    found = []
+    for i, arg in enumerate(argv):
+        if arg.startswith(flag + b"="):
+            found.append(arg[len(flag) + 1 :])
+        elif arg == flag and i + 1 < len(argv):
+            found.append(argv[i + 1])
+    return found
