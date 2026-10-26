@@ -678,7 +678,12 @@ the banner in the document that was already open when the wait started; hide
 or cover the banner again as soon as it comes back (a `MutationObserver` beats
 the 0.3 s round); make the whole document inert or invisible. Against such a
 page "Done" may never arrive, so give the wait an `until` or a `timeout` (with
-`on_login_failure="manual"` that ends in `SessionLoginFailedError`).
+`on_login_failure="manual"` that ends in `SessionLoginFailedError`). The same
+`MutationObserver` can also make the banner invisible (`opacity: 0`) and lay
+its button over a button of the page: the person's real click on what looks
+like the page's button lands on "Done" and ends the wait. "Done" tells that a
+person clicked, not that the job is done: when it matters, check the outcome
+with `until` (or, for sessions, a validator).
 
 #### Raw CDP
 
@@ -1400,6 +1405,13 @@ When a login cannot be scripted (2FA, captchas, SSO), let a person do it:
 ```bash
 tellurium login github https://github.com/login   # once; then MCP and scripts reuse it
 ```
+
+"Done" (like Enter or closing the window) saves the session as it is: it does
+not prove that the sign-in worked, and a hostile page can even trick a click
+onto it (see [its limits](#asking-a-person-for-help)). Where the session is
+used, register a `@session.validate` that checks the sign-in (a cookie, a page
+only a signed-in user sees), so a session saved before the sign-in finished is
+caught at `start()` instead of trusted.
 
 or, from a script, fall back to a person when the validators fail:
 

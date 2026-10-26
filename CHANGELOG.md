@@ -41,7 +41,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   submission never leaves the shadow root, so capture listeners that stop every click do
   not block it, and on documents loaded during the wait the banner's own capture listener
   runs first. A page that cancels the clicks on the banner in the document already open,
-  or hides it again faster than a round, can still block "Done" (see the README). In
+  or hides it again faster than a round, can still block "Done"; one that makes it
+  invisible and lays it over a button of its own gets the person's real click onto it, so
+  "Done" says that a person clicked, not that the task is done (see the README, which also
+  advises a validator after `tellurium login`). In
   headless Chrome (told apart if any witness says so: the `--headless` Chrome was started
   with, which a wrapper script adding the flag hides, or `HeadlessChrome` in its user agent,
   which `--user-agent` rewrites) there is no banner and *until* is required (`ValueError` otherwise). `TimeoutError` after *timeout* seconds (`None`: no

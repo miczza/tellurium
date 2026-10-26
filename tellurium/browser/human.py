@@ -5,11 +5,14 @@ In headed Chrome a banner tells the person why the script stopped and offers a
 world, so the page cannot read it, and every round it is put back, restyled,
 kept in the top layer and moved where its button can be clicked (see
 ``_SHOW_JS``). "Done" reaches tellurium through a CDP binding that exists only
-in that isolated world and is called only for a person's input: the page
-cannot pretend the person has finished. A hostile page can still block it (it
-cancels the clicks on the banner, or hides it faster than a round): the README
-says how far this goes. In headless Chrome there is nobody to click, so only
-the condition (*until*) ends the wait.
+in that isolated world and is called only for a person's input: no script or
+synthetic event of the page fires it. A hostile page can still block it (it
+cancels the clicks on the banner, or hides it faster than a round) or trick
+the person into it (it makes the banner invisible and lays it over a button of
+its own, so the person's real click lands on "Done"): "Done" says that the
+person clicked, not that the task is done. The README says how far this goes.
+In headless Chrome there is nobody to click, so only the condition (*until*)
+ends the wait.
 """
 
 from __future__ import annotations
