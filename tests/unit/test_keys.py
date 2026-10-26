@@ -122,3 +122,25 @@ def test_typing_events_of_a_named_key_carry_no_text():
     assert down["code"] == "Backspace" and "text" not in down
     assert keys.typing_event("Backspace", "char") is None
     assert keys.typing_event("Backspace", "keyUp")["type"] == "keyUp"
+
+
+def test_plus_is_a_key_after_modifiers_too():
+    assert keys.parse("Control++") == ("+", 2, 0, "+")
+    assert keys.parse("Control+Shift++").modifiers == 2 | 8
+    with pytest.raises(ValueError, match="Unknown key"):
+        keys.parse("Control+")
+
+
+def test_shift_and_a_letter_is_the_capital_letter():
+    assert keys.parse("Shift+a") == ("A", 8, 65, "A")
+    assert keys.parse("Shift+A") == ("A", 8, 65, "A")
+    assert keys.parse("Shift+1") == ("1", 8, 49, "1")  # no layout table for the rest
+
+
+def test_a_newline_is_typed_as_enter():
+    down, up = keys.plain_events("\n")
+    assert down["key"] == "Enter" and down["windowsVirtualKeyCode"] == 13
+    assert down["text"] == "\r" and down["type"] == "keyDown"
+    assert up["key"] == "Enter" and up["type"] == "keyUp" and "text" not in up
+    assert keys.typing_event("\n", "rawKeyDown") == down
+    assert keys.typing_event("\n", "char") is None

@@ -59,3 +59,18 @@ async def test_keyboard_type_types_the_exact_text(page, human):
     options = {"human": True, "wpm": 3000, "typos": True} if human else {}
     await page.keyboard_type("Hello, World! 42", **options)
     assert await page.eval("document.getElementById('second').value") == "Hello, World! 42"
+
+
+async def test_shift_and_a_letter_types_the_capital(page):
+    await page.eval("document.getElementById('second').focus()")
+    await page.keyboard_press("Shift+a")
+    await page.keyboard_press("Shift++")
+    assert await page.eval("document.getElementById('second').value") == "A+"
+
+
+@pytest.mark.parametrize("human", [False, True])
+async def test_a_newline_is_enter_in_a_textarea(page, human):
+    await page.eval("document.getElementById('notes').focus()")
+    await page.keyboard_type("a\nb", **({"human": True, "wpm": 3000} if human else {}))
+    assert await page.eval("document.getElementById('notes').value") == "a\nb"
+    assert await page.eval("window.submits") == 0

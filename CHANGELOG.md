@@ -308,7 +308,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `key` was sent and the page did nothing. An unknown key or modifier raises
   `ValueError` before any event (it was silently ignored). New `human=True` holds the key
   40-110 ms. The key table lives in `tellurium.browser.keys`, shared by the human typing
-  path and the MCP tools (their messages are unchanged).
+  path and the MCP tools (their messages are unchanged). `"Control++"` presses `+`,
+  `"Shift+a"` types `A`, and `keyboard_type` types a newline as `Enter` (a textarea
+  got nothing for it).
 - `Browser.close()` removes the stealth extension's `tellurium_ext_*` temp
   directory right away instead of when the engine is garbage-collected.
 - A stealth launch no longer leaves `/tmp/tellurium_ext_*` behind: the stealth

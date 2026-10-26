@@ -59,7 +59,10 @@ class Key(NamedTuple):
 def parse(combo: str) -> Key:
     """``"Control+a"`` -> ``Key("a", 2, 65, "a")``; ``ValueError`` for an unknown
     key or modifier."""
-    *mods, key = combo.split("+") if combo != "+" else ["+"]
+    if combo == "+" or combo.endswith("++"):  # "+" is the key: "Control++"
+        mods, key = (combo[:-2].split("+") if combo[:-2] else []), "+"
+    else:
+        *mods, key = combo.split("+")
     bits = 0
     for mod in mods:
         if mod.lower() not in _MODIFIERS:
@@ -75,6 +78,8 @@ def parse(combo: str) -> Key:
             code = ord(key.upper())
         else:
             code = _PUNCTUATION.get(key, 0)
+        if bits & SHIFT and key.isascii() and key.isalpha():
+            key = key.upper()  # the letters' shifted text needs no layout table
         return Key(key, bits, code, key)
     names = ", ".join(sorted(NAMED))
     raise ValueError(f"Unknown key {key!r}: use one character or one of {names}")
@@ -125,5 +130,9 @@ def typing_event(char: str, kind: str) -> dict[str, Any] | None:
 
 
 def plain_events(char: str) -> list[dict[str, Any]]:
-    """The events that type *char* at once: ``keyDown`` with its text, ``keyUp``."""
+    """The events that type *char* at once: ``keyDown`` with its text, ``keyUp``
+    (a newline is ``Enter``)."""
+    if char in ("\r", "\n"):
+        enter = parse("Enter")
+        return [{**event(enter, "keyDown"), "text": enter.text}, event(enter, "keyUp")]
     return [{"type": "keyDown", "key": char, "text": char}, {"type": "keyUp", "key": char}]
