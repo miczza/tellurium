@@ -21,6 +21,9 @@ from tellurium.session.errors import (
 from tellurium.session.lock import SessionLock
 
 _VALID_MODES = ("all", "any")
+_LOGIN_FAILURE_POLICIES = ("raise", "manual")
+#: Seconds a person gets to sign in with ``on_login_failure="manual"``.
+MANUAL_TIMEOUT = 600.0
 
 logger = logging.getLogger(__name__)
 
@@ -162,9 +165,18 @@ class Session:
             session_cookies.save(self.path, self._session_cookies, at_close=self._cookies_at_close)
 
     @asynccontextmanager
-    async def start(self, **kwargs):
+    async def start(self, *, on_login_failure: str = "raise", **kwargs):
         """Launch a browser bound to this session, run validators, and optionally
         execute the login callback if validation fails.
+
+        *on_login_failure*: ``"raise"`` (default) raises when validation fails
+        with no login callback, or the callback raises; ``"manual"`` hands the
+        browser to a person instead: Chrome is reopened with a window if it was
+        headless, a :meth:`Tab.wait_for_human` banner asks to sign in, and on
+        "Done" the validators run again, until they pass
+        (:class:`SessionLoginFailedError` after :data:`MANUAL_TIMEOUT` seconds).
+        The yielded browser is then the headed one. All of it happens inside
+        this start, under its lock.
 
         Yields the Browser instance. Closes it on exit. Never auto-saves
         session.json; the cookie jar is written to cookies.json before Chrome
@@ -176,6 +188,11 @@ class Session:
         """
         if self._started:
             raise RuntimeError("session already started")
+        if on_login_failure not in _LOGIN_FAILURE_POLICIES:
+            raise ValueError(
+                f"on_login_failure must be one of {_LOGIN_FAILURE_POLICIES!r}, "
+                f"got {on_login_failure!r}"
+            )
 
         merged = _merge_launch_params(kwargs, self._launch_hints)
         if self._chromium_version_loaded and "chromium_version" not in merged:
@@ -195,14 +212,7 @@ class Session:
         browser = None
         self._reinjection = None
         try:
-            chrome_pid = await profile_release.wait(chrome_dir)  # a dead holder's Chrome
-            if chrome_pid is not None:
-                raise SessionBusyError(self.path, chrome_pid)
-            browser = await Browser.launch(
-                user_data_dir=chrome_dir,
-                seed=int(self.seed),
-                **merged,
-            )
+            browser = await self._launch(Browser, chrome_dir, merged)
             # Only record params of a successful launch, so save(full=True)
             # after a failed start() does not persist a bad configuration.
             self._last_launch_params = dict(merged)
@@ -212,7 +222,14 @@ class Session:
             )
             self._started = True
             await self._restore_cookies(browser)
-            await self._run_validation_and_login(browser)
+            manual = on_login_failure == "manual"
+            if not await self._run_validation_and_login(browser, manual=manual):
+                if merged.get("headless"):  # a person needs a window
+                    closing, browser = browser, None
+                    await self._close_browser(closing)
+                    browser = await self._launch(Browser, chrome_dir, {**merged, "headless": False})
+                    await self._restore_cookies(browser)
+                await self._manual_login(browser)
             yield browser
         finally:
             self._started = False
@@ -221,6 +238,12 @@ class Session:
                     await self._close_browser(browser)
             finally:
                 lock.release()  # last: after Chrome has let go of the profile
+
+    async def _launch(self, browser_cls, chrome_dir: str, params: dict):
+        chrome_pid = await profile_release.wait(chrome_dir)  # a dead holder's Chrome
+        if chrome_pid is not None:
+            raise SessionBusyError(self.path, chrome_pid)
+        return await browser_cls.launch(user_data_dir=chrome_dir, seed=int(self.seed), **params)
 
     async def _restore_cookies(self, browser) -> None:
         saved, at_close = await asyncio.to_thread(session_cookies.read, self.path)
@@ -256,22 +279,51 @@ class Session:
             except Exception:  # noqa: BLE001 - cleanup after failure
                 pass
 
-    async def _run_validation_and_login(self, browser) -> None:
+    async def _run_validation_and_login(self, browser, *, manual: bool) -> bool:
+        """Whether the session is good (no validators, they pass, or the login
+        callback went through); False, instead of raising, only when *manual*."""
         if not self._validators:
-            return
+            return True
         tab = browser.main_tab
         ok = await _combine_validators(self._validators, self.validate_mode, tab=tab)
         if ok:
-            return
+            return True
         # Validation failed
         if self._login is None:
+            if manual:
+                return False
             raise SessionInvalidError(
                 "session validation failed and no @session.login is registered"
             )
         try:
             await self._login(tab, self.metadata)
         except Exception as exc:
+            if manual:
+                logger.warning("login callback of %s raised", self.path, exc_info=True)
+                return False
             raise SessionLoginFailedError("login callback raised") from exc
+        return True
+
+    async def _manual_login(self, browser) -> None:
+        """A person signs in: a banner until "Done" and validators that pass."""
+        from tellurium.browser.human import wait_for_human
+
+        reason = f"Sign in to continue (session {self.name!r}), then click Done."
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + MANUAL_TIMEOUT
+        while True:
+            try:
+                await wait_for_human(
+                    browser.main_tab, reason, timeout=max(deadline - loop.time(), 0)
+                )
+            except TimeoutError as exc:
+                raise SessionLoginFailedError(
+                    f"nobody signed in to session {self.name!r} within {MANUAL_TIMEOUT:g} s"
+                ) from exc
+            tab = browser.main_tab
+            if await _combine_validators(self._validators, self.validate_mode, tab=tab):
+                return
+            reason = f"Still not signed in (session {self.name!r}): sign in, then click Done."
 
 
 _MANAGED_LAUNCH_KEYS = frozenset({"user_data_dir", "seed"})

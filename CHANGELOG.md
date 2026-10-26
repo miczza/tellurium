@@ -7,6 +7,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Session.start(..., on_login_failure="raise"|"manual")`. `"raise"` (default) keeps the
+  errors as they were; `"manual"` hands the browser to a person when validation fails with
+  no `@session.login`, or the login callback raises: a headless Chrome is closed (its cookie
+  jar kept) and reopened with a window on the same profile, a `wait_for_human` banner asks
+  to sign in, and on "Done" the validators run again (the banner comes back while they
+  fail). The start then yields the headed browser; `SessionLoginFailedError` if nobody
+  signs in within 600 s. All of it inside the same `start()` and its lock.
 - `tellurium login NAME [URL] [--dir D]`: opens Chrome with a window on the named session
   (`~/.tellurium/sessions/NAME` by default, the folder `tellurium mcp` uses, launched with
   stealth as MCP does), on *URL* if given, with a `wait_for_human` banner. Once the person
