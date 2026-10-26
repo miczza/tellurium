@@ -343,3 +343,16 @@ async def test_the_banner_keeps_its_style_under_a_style_src_csp(headed, local_se
         assert await _on_top(tab)
     finally:
         task.cancel()
+
+
+async def test_headless_is_told_apart_even_with_a_user_agent_of_headed_chrome():
+    """--user-agent rewrites the user agent Browser.getVersion reports, not its product."""
+    from tellurium import Browser
+
+    ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0"
+    b = await Browser.launch(headless=True, args=[f"--user-agent={ua}"])
+    try:
+        with pytest.raises(ValueError, match="until"):
+            await asyncio.wait_for(b.main_tab.wait_for_human("Sign in", timeout=3), 10)
+    finally:
+        await b.close()

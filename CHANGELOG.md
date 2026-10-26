@@ -41,7 +41,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   not block it, and on documents loaded during the wait the banner's own capture listener
   runs first. A page that cancels the clicks on the banner in the document already open,
   or hides it again faster than a round, can still block "Done" (see the README). In
-  headless Chrome there is no banner and *until*
+  headless Chrome (told from the `--headless` Chrome was started with, not from its user
+  agent, which `--user-agent` rewrites) there is no banner and *until*
   is required (`ValueError` otherwise). `TimeoutError` after *timeout* seconds (`None`: no
   limit); the banner is removed on every way out, cancellation included. A page too busy
   to answer within 5 s delays the next check instead of failing the wait.

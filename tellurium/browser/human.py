@@ -213,13 +213,19 @@ def _condition(until: Until) -> Callable[[Tab, dict], Awaitable[bool]] | None:
 
 
 async def _headless(tab: Tab) -> bool:
-    """Whether *tab*'s Chrome is headless: the stealth engine knows, else
-    Chrome's own user agent (the browser's, not a tab's override) says so."""
+    """Whether *tab*'s Chrome is headless: the stealth engine knows; else the
+    command line Chrome was started with (``--headless``); else, where that is
+    not kept (Windows), its user agent. The user agent alone is a poor witness
+    (``--user-agent`` rewrites it) and so is ``product``: Chrome's headless mode
+    reports ``Chrome/…`` there, only the old headless shell ``HeadlessChrome``."""
     engine = getattr(tab._browser, "_stealth_engine", None)
     if engine is not None:
         return bool(engine._headless)
+    argv = getattr(getattr(tab._browser._proc, "process", None), "args", None)
+    if isinstance(argv, (list, tuple)):
+        return any(str(a) == "--headless" or str(a).startswith("--headless=") for a in argv)
     info = await tab._browser._router.root.send("Browser.getVersion", {}, timeout=CALL_TIMEOUT)
-    return "HeadlessChrome" in info.get("userAgent", "")
+    return any("HeadlessChrome" in info.get(key, "") for key in ("product", "userAgent"))
 
 
 async def _main_frame(tab: Tab) -> dict | None:
