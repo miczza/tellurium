@@ -25,7 +25,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   it closes. Before Chrome closes (on error too, each call bounded by 5 s) the jar is read
   and its cookies not yet expired are written to `cookies.json` in the session folder
   (atomic, mode 0600); the next `start()` puts back, before the validators run, those Chrome
-  does not have (same name, domain and path), leaving the ones it kept untouched. `save()`
+  does not have (same name, domain and path), leaving the ones it kept untouched; until
+  Chrome has taken them (the restore timed out, the start was cancelled) the close keeps
+  them in `cookies.json` next to Chrome's jar, so a failed restore never loses them. `save()`
   also writes `cookies.json` with the jar known as of the last start or close.
   To log a session out by hand, delete `cookies.json` along with the profile's cookies.
 - `Cookie.partition_key`: the CHIPS partition (`partitionKey` of `Storage.getCookies`), kept

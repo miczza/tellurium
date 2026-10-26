@@ -54,6 +54,8 @@ class Session:
         self._chromium_version_loaded: str | None = None
         # The cookie jar as of the last start or close (None: unknown).
         self._session_cookies: list | None = None
+        # The saved cookies the running start puts back (None: no start yet).
+        self._reinjection: session_cookies.Reinjection | None = None
 
         loaded = storage.load(self._json_path())
         if loaded is None:
@@ -189,6 +191,7 @@ class Session:
         # an exception propagates through a generator frame, including the
         # pre-yield branch where validation/login can raise.
         browser = None
+        self._reinjection = None
         try:
             chrome_pid = await profile_release.wait(chrome_dir)  # a dead holder's Chrome
             if chrome_pid is not None:
@@ -219,17 +222,21 @@ class Session:
 
     async def _restore_cookies(self, browser) -> None:
         saved = await asyncio.to_thread(session_cookies.load, self.path)
+        self._session_cookies = saved
+        # Set before the first await: a cancelled restore leaves it pending.
+        self._reinjection = session_cookies.Reinjection(saved)
         try:
-            await session_cookies.restore(browser, saved)
+            await self._reinjection.run(browser)
         except Exception:  # noqa: BLE001 - the validators judge the session
             logger.warning("could not restore the cookies of %s", self.path, exc_info=True)
-        self._session_cookies = saved
 
     async def _close_browser(self, browser) -> None:
         """Keep the cookie jar, then close Chrome (that even if the
         first step fails or is cancelled)."""
         try:
             cookies = await session_cookies.snapshot(browser)
+            if self._reinjection is not None:  # those Chrome never took
+                cookies = self._reinjection.keep(cookies)
             await asyncio.to_thread(session_cookies.save, self.path, cookies)
             self._session_cookies = cookies
         except Exception:  # noqa: BLE001 - Chrome gone: keep the previous file

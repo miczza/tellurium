@@ -5,8 +5,8 @@ no expiry (``expires == -1``: SSO, banks) are dropped when Chrome restarts, and
 a cookie written an instant before the close can be lost too (Chrome can stop
 before its cookie store commits it). So :func:`snapshot` reads the jar before
 Chrome closes, :func:`save` keeps the cookies not yet expired, and after the
-next launch :func:`restore` puts back those Chrome does not have, leaving the
-ones it kept untouched (its copy is the faithful one).
+next launch a :class:`Reinjection` puts back those Chrome does not have,
+leaving the ones it kept untouched (its copy is the faithful one).
 """
 
 from __future__ import annotations
@@ -74,12 +74,35 @@ async def snapshot(browser: Any) -> list[Cookie]:
     return await asyncio.wait_for(browser.get_cookies(), TIMEOUT)
 
 
-async def restore(browser: Any, saved: list[Cookie]) -> None:
-    """Put back the cookies of *saved* the browser lacks (same name, domain,
-    path and partition), each call within :data:`TIMEOUT`."""
-    if not saved:
-        return
-    present = {_key(c) for c in await snapshot(browser)}
-    missing = [c for c in saved if _key(c) not in present]
-    if missing:
-        await asyncio.wait_for(browser.set_cookies(missing), TIMEOUT)
+class Reinjection:
+    """The cookies of ``cookies.json`` a start puts back into Chrome, and what
+    the close must keep of them if Chrome never confirmed they went in.
+
+    :meth:`run` sends Chrome those it lacks (same name, domain, path and
+    partition), each call within :data:`TIMEOUT`. Until Chrome has taken them
+    (a timeout, a cancelled start, a Chrome gone) they stay *pending*, and
+    :meth:`keep` adds them to the jar the close reads, so a failed restore
+    never costs the saved cookies; a cookie Chrome has set anew meanwhile
+    (the site logged in again) is Chrome's, not ours.
+    """
+
+    def __init__(self, saved: list[Cookie]) -> None:
+        self.pending = list(saved)
+        # Chrome's jar as the start found it; None until read.
+        self._seen: dict[tuple, Cookie] | None = None
+
+    async def run(self, browser: Any) -> None:
+        if not self.pending:
+            return
+        self._seen = {_key(c): c for c in await snapshot(browser)}
+        self.pending = [c for c in self.pending if _key(c) not in self._seen]
+        if self.pending:
+            await asyncio.wait_for(browser.set_cookies(self.pending), TIMEOUT)
+        self.pending = []  # in Chrome now: from here on its jar is the truth
+
+    def keep(self, jar: list[Cookie]) -> list[Cookie]:
+        """*jar* (Chrome's at the close) with the pending cookies it lacks."""
+        kept = {_key(c): c for c in jar}
+        for cookie in self.pending:
+            kept.setdefault(_key(cookie), cookie)
+        return list(kept.values())

@@ -51,10 +51,11 @@ def test_corrupt_file_warns_and_is_ignored(tmp_path):
 
 
 class _FakeBrowser:
-    def __init__(self, jar=(), fail_read=False, hang_read=False):
+    def __init__(self, jar=(), fail_read=False, hang_read=False, hang_write=False):
         self.jar = list(jar)
         self.fail_read = fail_read
         self.hang_read = hang_read
+        self.hang_write = hang_write
         self.events: list[str] = []
         self.main_tab = object()
 
@@ -68,10 +69,21 @@ class _FakeBrowser:
 
     async def set_cookies(self, cookies):
         self.events.append("set_cookies")
-        self.jar.extend(cookies)
+        if self.hang_write:
+            await asyncio.Event().wait()
+        for cookie in cookies:  # the same name, domain, path and partition: replaced
+            same = [i for i, c in enumerate(self.jar) if _ident(c) == _ident(cookie)]
+            if same:
+                self.jar[same[0]] = cookie
+            else:
+                self.jar.append(cookie)
 
     async def close(self):
         self.events.append("close")
+
+
+def _ident(c):
+    return (c.name, c.domain, c.path, str(c.partition_key))
 
 
 @pytest.fixture
@@ -177,3 +189,42 @@ async def test_a_partitioned_cookie_is_not_the_unpartitioned_one(tmp_path, fake_
     session_cookies.save(str(tmp_path), [plain, chips])
     async with Session("s", path=str(tmp_path)).start():
         assert browsers[0].jar == [plain, chips]  # the partitioned one went back
+
+
+async def test_a_failed_restore_does_not_lose_the_saved_cookies(tmp_path, fake_launch, monkeypatch):
+    browsers, make = fake_launch
+    monkeypatch.setattr(session_cookies, "TIMEOUT", 0.05)
+    make["factory"] = lambda: _FakeBrowser(jar=[_KEPT], hang_write=True)
+    session_cookies.save(str(tmp_path), [_SSO, _KEPT])
+    async with Session("s", path=str(tmp_path)).start():
+        pass
+    assert browsers[0].events[-1] == "close"
+    assert session_cookies.load(str(tmp_path)) == [_KEPT, _SSO]
+
+
+async def test_a_start_cancelled_during_the_restore_keeps_the_saved_cookies(tmp_path, fake_launch):
+    browsers, make = fake_launch
+    make["factory"] = lambda: _FakeBrowser(hang_write=True)
+    session_cookies.save(str(tmp_path), [_SSO])
+
+    async def start():
+        async with Session("s", path=str(tmp_path)).start():
+            pass
+
+    task = asyncio.create_task(start())
+    while not browsers or "set_cookies" not in browsers[0].events:
+        await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert browsers[0].events[-1] == "close"
+    assert session_cookies.load(str(tmp_path)) == [_SSO]
+
+
+async def test_a_cookie_deleted_after_the_restore_stays_deleted(tmp_path, fake_launch):
+    """A logout during the run: the restore was confirmed, so the close does
+    not bring the cookie back."""
+    session_cookies.save(str(tmp_path), [_SSO])
+    async with Session("s", path=str(tmp_path)).start() as browser:
+        browser.jar = []
+    assert session_cookies.load(str(tmp_path)) == []
