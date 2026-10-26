@@ -280,7 +280,9 @@ class _Banner:
         self._context: int | None = None
         self._loader: str | None = None  # the document the context belongs to
         self._bound = False
-        self._script: str | None = None  # the early script, run at every new document
+        # Chrome's reply to the early script (run at every new document): its
+        # identifier, needed to take it away.
+        self._adding: asyncio.Task | None = None
         self._expression = _SHOW_JS % (
             json.dumps(reason),
             json.dumps(self._binding),
@@ -294,13 +296,22 @@ class _Banner:
 
     async def open(self) -> None:
         """Listen for "Done" and have every new document run the banner's
-        script in its world before the page's own scripts."""
+        script in its world before the page's own scripts.
+
+        A page whose main thread is busy answers late: the reply is awaited
+        in the background (bounded by :meth:`close`), never by the wait,
+        which a busy page must not shorten. Meanwhile :meth:`show` puts the
+        banner up round by round, as it does anyway."""
         self._session.on("Runtime.bindingCalled", self._on_binding)
-        added = await self._send(
-            "Page.addScriptToEvaluateOnNewDocument",
-            {"source": self._expression, "worldName": self._world},
+        self._adding = asyncio.create_task(
+            self._session.send(
+                "Page.addScriptToEvaluateOnNewDocument",
+                {"source": self._expression, "worldName": self._world},
+                timeout=math.inf,
+            )
         )
-        self._script = added["identifier"]
+        # Read its outcome even if close() is cut short: no "never retrieved".
+        self._adding.add_done_callback(lambda t: t.cancelled() or t.exception())
 
     async def show(self, frame: dict) -> None:
         """Make sure the current document shows the banner."""
@@ -343,11 +354,10 @@ class _Banner:
                 await self._evaluate(_HIDE_JS)
             except Exception:  # noqa: BLE001 - document or tab gone: nothing left to hide
                 pass
-        if self._script is not None:
+        script = await self._early_script()
+        if script is not None:
             try:
-                await self._send(
-                    "Page.removeScriptToEvaluateOnNewDocument", {"identifier": self._script}
-                )
+                await self._send("Page.removeScriptToEvaluateOnNewDocument", {"identifier": script})
             except Exception:  # noqa: BLE001 - tab gone
                 pass
         if self._bound:
@@ -355,6 +365,23 @@ class _Banner:
                 await self._send("Runtime.removeBinding", {"name": self._binding})
             except Exception:  # noqa: BLE001 - tab gone
                 pass
+
+    async def _early_script(self) -> str | None:
+        """The early script's identifier, waiting at most ``CALL_TIMEOUT`` more
+        for Chrome's reply; ``None`` if it never came (tab gone or still busy:
+        the script, if Chrome adds it later, finds no binding and shows nothing)."""
+        task = self._adding
+        if task is None:
+            return None
+        if not task.done():
+            await asyncio.wait({task}, timeout=CALL_TIMEOUT)
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            return None
+        if task.cancelled() or task.exception() is not None:
+            return None
+        return task.result().get("identifier")
 
     async def _evaluate(self, expression: str) -> Any:
         params = {"expression": expression, "contextId": self._context, "returnByValue": True}

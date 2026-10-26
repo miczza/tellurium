@@ -425,3 +425,28 @@ async def test_cancelling_the_wait_takes_banner_binding_and_script_away(
     await tab.get(f"{local_server}/form.html")
     await asyncio.sleep(0.5)
     assert await _closed_roots(tab) == []
+
+
+# --- A busy page ------------------------------------------------------------
+
+
+@needs_display
+async def test_a_page_busier_than_a_cdp_call_does_not_shorten_the_wait(headed, local_server):
+    """A main thread busy past CALL_TIMEOUT delays the banner, never ends the wait."""
+    from tellurium.browser import human
+
+    tab = headed.main_tab
+    await tab.get(f"{local_server}/human_busy.html")
+    busy = human.CALL_TIMEOUT + 3
+    await tab.eval(f"busy({busy * 1000:.0f})")
+    await asyncio.sleep(0.3)  # the loop has started
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    await tab.wait_for_human("Go on", until="**/busy_done", timeout=busy + 20)
+    assert loop.time() - started >= busy - 1
+    # The banner works once the page is free again.
+    task = asyncio.create_task(tab.wait_for_human("Go on", timeout=30))
+    try:
+        await _click_done_until_it_ends(tab, task)
+    finally:
+        task.cancel()

@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>busy</title>
+</head>
+<body>
+<p id="content">A page whose main thread is busy for a while, then moves on.</p>
+<script>
+  // Spins the main thread for ms milliseconds (no CDP command to the page is
+  // answered meanwhile), then changes the URL to /busy_done.
+  window.busy = function (ms) {
+    setTimeout(function () {
+      const end = Date.now() + ms;
+      while (Date.now() < end) { /* busy */ }
+      history.pushState(null, '', '/busy_done');
+    }, 0);
+  };
+</script>
+</body>
+</html>

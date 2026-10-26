@@ -46,7 +46,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   agent, which `--user-agent` rewrites) there is no banner and *until*
   is required (`ValueError` otherwise). `TimeoutError` after *timeout* seconds (`None`: no
   limit); the banner is removed on every way out, cancellation included. A page too busy
-  to answer within 5 s delays the next check instead of failing the wait.
+  to answer within 5 s delays the next check (and the banner) instead of failing the wait,
+  from its very first call on: the script that brings the banner to new documents is
+  registered in the background, and its reply awaited until the wait ends.
   The banner's isolated world and its binding are kept only when both were set up in the
   document still showing, so a navigation to another renderer as the wait starts (Chrome's
   first page to the site) cannot leave a "Done" that reaches nobody.
