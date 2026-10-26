@@ -84,3 +84,16 @@ async def test_full_page_leaves_the_page_as_it_was(browser, local_server):
         assert reply.image_type == "image/png"
         assert reply.image[16:24] == before[1].to_bytes(4, "big") + (4000).to_bytes(4, "big")
         assert await tab.eval(layout) == before
+
+
+async def test_full_page_leaves_a_scrolled_body_scroller_alone(any_browser, local_server):
+    """``html, body {height: 100%}`` + ``body {overflow-y: auto}`` scrolled to 2000: the
+    tool's capture keeps scrollY, fires no scroll and leaves the scrollbar (P1, round 3)."""
+    from tests.integration.test_tab_screenshot import check_left_alone, scrolled_body_scroller
+
+    tab = any_browser.main_tab
+    before = await scrolled_body_scroller(tab, local_server)
+    for _ in range(2):
+        reply = await pages._screenshot(_Pool(tab), {"targetId": "t1", "fullPage": True})
+        assert reply.image[20:24] == (4000).to_bytes(4, "big")
+        await check_left_alone(tab, before)

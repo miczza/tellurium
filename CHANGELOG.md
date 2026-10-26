@@ -300,9 +300,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   larger than before. The capture lays the page out at its full height, without a
   vertical scrollbar, so the clip is at least `innerWidth` wide (the right edge is in it;
   CDP's content size, floored under a fractional ratio, no longer drops a column).
-  Chrome leaves the scrollbar hidden after such a capture until the root scroller is
-  laid out again: the screenshot (and the MCP `screenshot` tool, which now shares the
-  clip) relayouts it from tellurium's isolated world, so `clientWidth` is as before.
+  Chrome may leave the scrollbar hidden after such a capture until the viewport's
+  scroller is laid out again: the screenshot (and the MCP `screenshot` tool, which now
+  shares the clip and the capture) relayouts it from tellurium's isolated world, only
+  when a scrollbar went, through the element the viewport takes its overflow from, so
+  `clientWidth`, `scrollY` and the absence of `scroll` events are as before (also with
+  `html, body {height: 100%}` and a scrolling `<body>`). Cancelled mid-capture, it
+  restores once Chrome answers, in a task of the tab. The page's sizes are read only in
+  the isolated world, never in the page's own, and checked before use.
 - `Tab.keyboard_press` sends keys Chrome acts on: `rawKeyDown` with the Windows virtual
   key code, a `char` event when the key types text (none with Control/Meta), `keyUp`.
   `"Enter"` now submits the focused form and `"Control+a"` selects all; before, only

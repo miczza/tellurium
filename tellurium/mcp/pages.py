@@ -10,7 +10,7 @@ import re
 from typing import Any
 
 from tellurium.browser.element import Element
-from tellurium.browser.tab import Tab, full_page_clip, relayout
+from tellurium.browser.tab import Tab, capture_beyond, full_page_clip
 from tellurium.mcp import page_state, screenshots, urls
 from tellurium.mcp.results import Reply, ToolError
 from tellurium.mcp.tool import Tool, param
@@ -141,16 +141,11 @@ async def _shoot(tab: Tab, fmt: str, quality: int | None, clip: dict | None) -> 
     params: dict[str, Any] = {"format": fmt}
     if quality is not None:
         params["quality"] = quality
-    if clip is not None:
-        params["clip"] = clip
-        params["captureBeyondViewport"] = True
-    try:
-        shot = await asyncio.wait_for(
-            tab.send_cdp("Page.captureScreenshot", params), CAPTURE_TIMEOUT
-        )
-    finally:
-        if clip is not None:  # Chrome leaves the scrollbar hidden after it
-            await relayout(tab, METRICS_TIMEOUT)
+    if clip is None:
+        capture = tab.send_cdp("Page.captureScreenshot", params)
+        shot = await asyncio.wait_for(capture, CAPTURE_TIMEOUT)
+    else:  # beyond the viewport; any scrollbar Chrome hides for it is given back
+        shot = await capture_beyond(tab, {**params, "clip": clip}, CAPTURE_TIMEOUT)
     return base64.b64decode(shot["data"])
 
 

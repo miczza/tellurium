@@ -93,7 +93,66 @@ async def test_headed_fractional_device_pixel_ratio_keeps_the_css_size(local_ser
         await browser.close()
 
 
+_FRAMES = "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))"
+
+
+async def scrolled_body_scroller(tab, server):
+    """``html, body {height: 100%}`` and ``body {overflow-y: auto}``, scrolled to 2000:
+    turning <html>'s overflow off there would make <body> the scroller (scrollY 0)."""
+    await tab.get(server + "/body_scroller.html")
+    await tab.eval("scrollTo(0, 2000)")
+    await tab.eval(_FRAMES)
+    await tab.eval("window.scrolls = 0")
+    return await tab.eval(_LAYOUT)
+
+
+async def check_left_alone(tab, before):
+    await tab.eval(_FRAMES)
+    assert await tab.eval(_LAYOUT) == before  # scrollbar there, scrollY still 2000
+    assert await tab.eval("window.scrolls") == 0  # and the page saw no scroll
+
+
+async def test_full_page_leaves_a_scrolled_body_scroller_alone(any_browser, local_server):
+    tab = any_browser.main_tab
+    before = await scrolled_body_scroller(tab, local_server)
+    assert before[3] == 2000 and before[0] < before[1]  # the premise
+    for _ in range(2):
+        png = await tab.screenshot(full_page=True, timeout=10)
+        assert _png_size(png)[1] == 4000
+        await check_left_alone(tab, before)
+
+
 async def test_viewport_screenshot_is_unchanged(browser, local_server):
     tab = await browser.get(local_server + "/tall_block.html")
     await _emulate(tab, 1)
     assert _png_size(await tab.screenshot()) == (800, 600)
+
+
+async def test_cancelled_mid_capture_the_scrollbar_still_comes_back(browser, local_server):
+    """Cancelled while Chrome captures: the scrollbar is given back once it answers,
+    by a task of the tab that ends then (P1, round 3)."""
+    import asyncio
+
+    tab = await browser.get(local_server + "/tall_block.html")
+    await tab.eval("document.body.firstElementChild.style.height = '60000px'")
+    before = await tab.eval(_LAYOUT)
+    started, send = asyncio.Event(), tab._session.send
+
+    async def spy(method, params=None, **kwargs):
+        if method == "Page.captureScreenshot":
+            started.set()
+        return await send(method, params, **kwargs)
+
+    tab._session.send = spy
+    shot = asyncio.ensure_future(tab.screenshot(full_page=True, timeout=60))
+    await asyncio.wait_for(started.wait(), 10)
+    await asyncio.sleep(0.05)
+    shot.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await shot
+    pending = set(tab._background)
+    assert pending  # Chrome is still capturing: the tab restores once it answers
+    await asyncio.wait_for(asyncio.gather(*pending), 60)
+    await tab.eval(_FRAMES)
+    assert await tab.eval(_LAYOUT) == before
+    assert tab._background == set()

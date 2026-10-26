@@ -129,6 +129,7 @@ class Tab:
             self._idle_simulator = IdleSimulator()
         self._capture_manager = None
         self._hsim_worlds: dict[str, int] = {}  # frame_id -> executionContextId, per-frame
+        self._background: set[asyncio.Task] = set()  # tasks the tab owns (capture_beyond)
         self._frame_id: str = ""  # main frame id, populated on first navigation
         # P0.4 screenX/screenY parity — resolved lazily on first mouse input
         self._screen_offset: tuple[float, float] | None = None
@@ -581,12 +582,9 @@ class Tab:
                 params["quality"] = int(quality)
         if full_page:  # the whole page at its CSS size, also on a HiDPI screen
             params["clip"] = await full_page_clip(self, timeout)
-            params["captureBeyondViewport"] = True
-        try:
+            result = await capture_beyond(self, params, timeout)
+        else:
             result = await self._session.send("Page.captureScreenshot", params, timeout=timeout)
-        finally:
-            if full_page:
-                await relayout(self, timeout)
         data = base64.b64decode(result["data"])
         if path:
             await asyncio.to_thread(Path(path).write_bytes, data)
@@ -1166,34 +1164,57 @@ class Tab:
         return await self._session.send(method, params)
 
 
-# captureBeyondViewport lays the page out at its full height, without a vertical
-# scrollbar, and Chrome leaves it hidden afterwards until the root scroller is laid
-# out again: relayout() toggles its overflow with a sheet adopted for one task.
+# captureBeyondViewport lays the page out at its full height, without scrollbars, and
+# Chrome may leave them hidden until the viewport's scroller is laid out again.
+# _RELAYOUT_JS does it, only for a scrollbar that went: it toggles the overflow of the
+# element the viewport takes it from (<body>'s while <html>'s is visible: turning off
+# <html>'s there would make <body> the scroller and lose the scroll position).
 _VIEW_JS = "[innerWidth, innerHeight, devicePixelRatio]"
-_RELAYOUT_JS = (
-    "(() => { const kept = [...document.adoptedStyleSheets], sheet = new CSSStyleSheet();"
-    " sheet.replaceSync('html { overflow: hidden !important; }');"
-    " document.adoptedStyleSheets = [...kept, sheet]; document.documentElement.offsetWidth;"
-    " document.adoptedStyleSheets = kept; return document.documentElement.offsetWidth; })()"
+_GAPS_JS = (
+    "[innerWidth - document.documentElement.clientWidth,"
+    " innerHeight - document.documentElement.clientHeight]"
 )
+_RELAYOUT_JS = """((gx, gy) => {
+  const html = document.documentElement, body = document.body;
+  if (innerWidth - html.clientWidth >= gx && innerHeight - html.clientHeight >= gy) return false;
+  const css = getComputedStyle(html), x = scrollX, y = scrollY;
+  const own = !body || css.overflowX !== 'visible' || css.overflowY !== 'visible';
+  const kept = [...document.adoptedStyleSheets], sheet = new CSSStyleSheet();
+  sheet.replaceSync((own ? 'html' : 'body') + ' { overflow: hidden !important; }');
+  document.adoptedStyleSheets = [...kept, sheet];
+  html.offsetWidth;
+  document.adoptedStyleSheets = kept;
+  html.offsetWidth;
+  if (scrollX !== x || scrollY !== y) scrollTo(x, y);
+  return true;
+})(%d, %d)"""
 
 
 async def _isolated_value(tab: Tab, expression: str, timeout: float | None) -> Any:
-    """*expression* evaluated in the tab's isolated world (page JS cannot fake it
-    there), in the page's own world when there is none."""
+    """*expression* evaluated in the tab's isolated world, where page JS can neither
+    fake nor see it; ``None`` when there is none (never in the page's own world)."""
     from tellurium.stealth._isolated import get_hsim_world
 
-    params: dict[str, Any] = {"expression": expression, "returnByValue": True}
-    world = await get_hsim_world(tab, frame_id=tab._frame_id)
-    where = {"contextId": world} if world is not None else {}
-    try:
-        res = await tab._session.send("Runtime.evaluate", params | where, timeout=timeout)
-    except CDPError:
-        if world is None:
-            raise
-        tab._hsim_worlds.pop(tab._frame_id, None)  # the world went with its document
-        res = await tab._session.send("Runtime.evaluate", params, timeout=timeout)
-    return res.get("result", {}).get("value")
+    for _ in range(2):  # a world gone with its document: once more, in a fresh one
+        if (world := await get_hsim_world(tab, frame_id=tab._frame_id)) is None:
+            return None
+        params = {"expression": expression, "returnByValue": True, "contextId": world}
+        try:
+            res = await tab._session.send("Runtime.evaluate", params, timeout=timeout)
+            return res.get("result", {}).get("value")
+        except CDPError:
+            tab._hsim_worlds.pop(tab._frame_id, None)
+    return None
+
+
+def _numbers(value: Any, highs: tuple[float, ...]) -> list[float] | None:
+    """*value* if it is one finite number in ``[0, high]`` per *highs*, else ``None``."""
+    if not isinstance(value, list) or len(value) != len(highs):
+        return None
+    for v, high in zip(value, highs, strict=True):
+        if isinstance(v, bool) or not isinstance(v, int | float) or not 0 <= v <= high:
+            return None  # NaN and infinities fail the range check too
+    return [float(v) for v in value]
 
 
 async def full_page_clip(tab: Tab, timeout: float | None = None) -> dict[str, float]:
@@ -1202,15 +1223,41 @@ async def full_page_clip(tab: Tab, timeout: float | None = None) -> dict[str, fl
     a fractional ratio). Its scale undoes ``devicePixelRatio``: the image is CSS size."""
     metrics = await tab._session.send("Page.getLayoutMetrics", {}, timeout=timeout)
     size = metrics.get("cssContentSize") or metrics.get("contentSize") or {}
-    width, height, ratio = await _isolated_value(tab, _VIEW_JS, timeout) or (0, 0, 1)
+    view = _numbers(await _isolated_value(tab, _VIEW_JS, timeout), (1e6, 1e6, 20))
+    width, height, ratio = view or (0, 0, 1)
     clip = {"x": 0, "y": 0, "width": max(size.get("width", 0), width) or 1}
     return {**clip, "height": max(size.get("height", 0), height) or 1, "scale": 1 / (ratio or 1)}
 
 
-async def relayout(tab: Tab, timeout: float | None = None) -> None:
-    """After a ``captureBeyondViewport`` capture: give the page its scrollbar back."""
+async def capture_beyond(tab: Tab, params: dict, timeout: float | None = None) -> dict:
+    """``Page.captureScreenshot`` with ``captureBeyondViewport``, then any scrollbar it
+    hid given back; if the caller is cancelled meanwhile, once Chrome answers, in a
+    task of the tab (it ends with the capture's own timeout or the session)."""
+    gaps = _numbers(await _isolated_value(tab, _GAPS_JS, timeout), (1000, 1000))
+    shot = {**params, "captureBeyondViewport": True}
+    sent = asyncio.ensure_future(tab._session.send("Page.captureScreenshot", shot, timeout=timeout))
     try:
-        await _isolated_value(tab, _RELAYOUT_JS, timeout)
+        await asyncio.wait([sent])  # a cancellation here leaves the capture running
+    finally:
+        restore = _restore(tab, sent, gaps, timeout)
+        if sent.done():
+            await restore
+        else:
+            task = asyncio.ensure_future(restore)
+            tab._background.add(task)
+            task.add_done_callback(tab._background.discard)
+    return sent.result()
+
+
+async def _restore(tab: Tab, sent: asyncio.Future, gaps: list | None, timeout: float | None):
+    """After the capture *sent*: the scrollbars back, if it hid any."""
+    await asyncio.wait([sent])
+    if not sent.cancelled():
+        sent.exception()  # retrieved: the caller, if still there, gets it from result()
+    if gaps is None:
+        return
+    try:
+        await _isolated_value(tab, _RELAYOUT_JS % (gaps[0], gaps[1]), timeout)
     except (CDPError, ConnectionError, TimeoutError) as exc:  # the page went meanwhile
         logger.debug("relayout after a full page capture failed: %s", exc)
 

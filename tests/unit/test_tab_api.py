@@ -398,3 +398,50 @@ def test_expect_download_goes_through_the_browser_accessor():
     waiter = tab.expect_download(timeout=5)
     downloads.expect_frames.assert_called_once_with(tab._frames, timeout=5)
     assert waiter is downloads.expect_frames.return_value
+
+
+# ---------------------------------------------------------------------------
+# Full page capture: values read in the isolated world only
+# ---------------------------------------------------------------------------
+
+
+def test_page_values_are_checked_before_use():
+    from tellurium.browser.tab import _numbers
+
+    assert _numbers([800, 600, 2], (1e6, 1e6, 20)) == [800.0, 600.0, 2.0]
+    for bad in (None, "x", [800, 600], [800, 600, 1e9], [-1, 600, 1], [True, 1, 1]):
+        assert _numbers(bad, (1e6, 1e6, 20)) is None
+    assert _numbers([float("nan"), 1, 1], (1e6, 1e6, 20)) is None
+    assert _numbers([float("inf"), 1, 1], (1e6, 1e6, 20)) is None
+
+
+async def test_isolated_value_never_runs_in_the_page_world():
+    from tellurium.browser.tab import _isolated_value
+    from tellurium.cdp.types import CDPError
+
+    worlds = iter([11, 12])
+    evaluated = []
+
+    def evaluate(params):
+        evaluated.append(params.get("contextId"))
+        if params["contextId"] == 11:
+            raise CDPError("Cannot find context with specified id", -32000)
+        return {"result": {"value": 7}}
+
+    responses = {
+        "Page.createIsolatedWorld": lambda p: {"executionContextId": next(worlds)},
+        "Runtime.evaluate": evaluate,
+    }
+    tab = _fake_tab(responses=responses)
+    tab._frame_id = "F1"
+    assert await _isolated_value(tab, "1 + 6", 5) == 7
+    assert evaluated == [11, 12]  # a fresh isolated world, never the page's
+
+    def no_world(params):
+        raise CDPError("No frame", -32000)
+
+    tab = _fake_tab(responses={"Page.createIsolatedWorld": no_world, "Runtime.evaluate": evaluate})
+    tab._frame_id = "F1"
+    evaluated.clear()
+    assert await _isolated_value(tab, "1 + 6", 5) is None
+    assert evaluated == []
