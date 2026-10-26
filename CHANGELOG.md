@@ -296,7 +296,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `cssContentSize` (falling back to `contentSize`) with `captureBeyondViewport`, scaled by
   `1/devicePixelRatio` so the image has the page's CSS size. Before, everything past the
   viewport came out blank, and a HiDPI screen doubled the size. The image can now be
-  larger than before.
+  larger than before. The capture lays the page out at its full height, without a
+  vertical scrollbar, so the clip is at least `innerWidth` wide (the right edge is in it;
+  CDP's content size, floored under a fractional ratio, no longer drops a column).
+  Chrome leaves the scrollbar hidden after such a capture until the root scroller is
+  laid out again: the screenshot (and the MCP `screenshot` tool, which now shares the
+  clip) relayouts it from tellurium's isolated world, so `clientWidth` is as before.
 - `Tab.keyboard_press` sends keys Chrome acts on: `rawKeyDown` with the Windows virtual
   key code, a `char` event when the key types text (none with Control/Meta), `keyUp`.
   `"Enter"` now submits the focused form and `"Control+a"` selects all; before, only

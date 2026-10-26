@@ -575,13 +575,13 @@ class Tab:
             else:
                 params["quality"] = int(quality)
         if full_page:  # the whole page at its CSS size, also on a HiDPI screen
-            metrics = await self._session.send("Page.getLayoutMetrics", {}, timeout=timeout)
-            size = metrics.get("cssContentSize") or metrics.get("contentSize") or {}
-            ratio = float(await self.eval("window.devicePixelRatio", timeout=timeout) or 1)
-            clip = {"x": 0, "y": 0, "width": size.get("width", 1920), "scale": 1 / ratio}
-            params["clip"] = {**clip, "height": size.get("height", 1080)}
+            params["clip"] = await full_page_clip(self, timeout)
             params["captureBeyondViewport"] = True
-        result = await self._session.send("Page.captureScreenshot", params, timeout=timeout)
+        try:
+            result = await self._session.send("Page.captureScreenshot", params, timeout=timeout)
+        finally:
+            if full_page:
+                await relayout(self, timeout)
         data = base64.b64decode(result["data"])
         if path:
             await asyncio.to_thread(Path(path).write_bytes, data)
@@ -1159,6 +1159,55 @@ class Tab:
     async def send_cdp(self, method: str, params: dict | None = None) -> dict:
         """Send a raw CDP command on this tab's session."""
         return await self._session.send(method, params)
+
+
+# captureBeyondViewport lays the page out at its full height, without a vertical
+# scrollbar, and Chrome leaves it hidden afterwards until the root scroller is laid
+# out again: relayout() toggles its overflow with a sheet adopted for one task.
+_VIEW_JS = "[innerWidth, innerHeight, devicePixelRatio]"
+_RELAYOUT_JS = (
+    "(() => { const kept = [...document.adoptedStyleSheets], sheet = new CSSStyleSheet();"
+    " sheet.replaceSync('html { overflow: hidden !important; }');"
+    " document.adoptedStyleSheets = [...kept, sheet]; document.documentElement.offsetWidth;"
+    " document.adoptedStyleSheets = kept; return document.documentElement.offsetWidth; })()"
+)
+
+
+async def _isolated_value(tab: Tab, expression: str, timeout: float | None) -> Any:
+    """*expression* evaluated in the tab's isolated world (page JS cannot fake it
+    there), in the page's own world when there is none."""
+    from tellurium.stealth._isolated import get_hsim_world
+
+    params: dict[str, Any] = {"expression": expression, "returnByValue": True}
+    world = await get_hsim_world(tab, frame_id=tab._frame_id)
+    where = {"contextId": world} if world is not None else {}
+    try:
+        res = await tab._session.send("Runtime.evaluate", params | where, timeout=timeout)
+    except CDPError:
+        if world is None:
+            raise
+        tab._hsim_worlds.pop(tab._frame_id, None)  # the world went with its document
+        res = await tab._session.send("Runtime.evaluate", params, timeout=timeout)
+    return res.get("result", {}).get("value")
+
+
+async def full_page_clip(tab: Tab, timeout: float | None = None) -> dict[str, float]:
+    """The clip of the whole page as ``captureBeyondViewport`` lays it out: no vertical
+    scrollbar, so at least ``innerWidth`` wide (CDP also floors the content size under
+    a fractional ratio). Its scale undoes ``devicePixelRatio``: the image is CSS size."""
+    metrics = await tab._session.send("Page.getLayoutMetrics", {}, timeout=timeout)
+    size = metrics.get("cssContentSize") or metrics.get("contentSize") or {}
+    width, height, ratio = await _isolated_value(tab, _VIEW_JS, timeout) or (0, 0, 1)
+    clip = {"x": 0, "y": 0, "width": max(size.get("width", 0), width) or 1}
+    return {**clip, "height": max(size.get("height", 0), height) or 1, "scale": 1 / (ratio or 1)}
+
+
+async def relayout(tab: Tab, timeout: float | None = None) -> None:
+    """After a ``captureBeyondViewport`` capture: give the page its scrollbar back."""
+    try:
+        await _isolated_value(tab, _RELAYOUT_JS, timeout)
+    except (CDPError, ConnectionError, TimeoutError) as exc:  # the page went meanwhile
+        logger.debug("relayout after a full page capture failed: %s", exc)
 
 
 def _not_compiled(res: dict) -> bool:

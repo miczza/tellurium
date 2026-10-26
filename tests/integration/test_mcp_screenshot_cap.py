@@ -70,3 +70,17 @@ async def test_small_page_stays_png(browser, local_server):
     reply = await pages._screenshot(_Pool(tab), {"targetId": "t1"})
     assert reply.image_type == "image/png" and reply.image[:4] == b"\x89PNG"
     assert reply.data["format"] == "png" and "cap" not in reply.text
+
+
+async def test_full_page_leaves_the_page_as_it_was(browser, local_server):
+    """Chrome hides the scrollbar for a full page capture and leaves it hidden; the
+    tool gives it back, and the image has the page's right edge (P1)."""
+    tab = await browser.get(f"{local_server}/tall_block.html")
+    layout = "[document.documentElement.clientWidth, innerWidth, innerHeight, scrollY]"
+    before = await tab.eval(layout)
+    assert before[0] < before[1]  # the premise: a vertical scrollbar takes room
+    for _ in range(2):
+        reply = await pages._screenshot(_Pool(tab), {"targetId": "t1", "fullPage": True})
+        assert reply.image_type == "image/png"
+        assert reply.image[16:24] == before[1].to_bytes(4, "big") + (4000).to_bytes(4, "big")
+        assert await tab.eval(layout) == before

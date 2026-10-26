@@ -10,7 +10,7 @@ import re
 from typing import Any
 
 from tellurium.browser.element import Element
-from tellurium.browser.tab import Tab
+from tellurium.browser.tab import Tab, full_page_clip, relayout
 from tellurium.mcp import page_state, screenshots, urls
 from tellurium.mcp.results import Reply, ToolError
 from tellurium.mcp.tool import Tool, param
@@ -144,7 +144,13 @@ async def _shoot(tab: Tab, fmt: str, quality: int | None, clip: dict | None) -> 
     if clip is not None:
         params["clip"] = clip
         params["captureBeyondViewport"] = True
-    shot = await asyncio.wait_for(tab.send_cdp("Page.captureScreenshot", params), CAPTURE_TIMEOUT)
+    try:
+        shot = await asyncio.wait_for(
+            tab.send_cdp("Page.captureScreenshot", params), CAPTURE_TIMEOUT
+        )
+    finally:
+        if clip is not None:  # Chrome leaves the scrollbar hidden after it
+            await relayout(tab, METRICS_TIMEOUT)
     return base64.b64decode(shot["data"])
 
 
@@ -179,12 +185,10 @@ async def _full_page(tab: Tab) -> tuple[screenshots.Capture, tuple[int, int], bo
     """A capture of the whole page, but at most SHOT_MAX px per side (top-left
     part): image clients refuse larger ones. Also the page size and whether it
     was cut."""
-    metrics = await _metrics(tab)
-    size = metrics.get("cssContentSize") or metrics.get("contentSize") or {}
-    width, height = int(size.get("width", 0)) or 1, int(size.get("height", 0)) or 1
+    whole = await full_page_clip(tab, METRICS_TIMEOUT)
+    width, height = int(whole["width"]) or 1, int(whole["height"]) or 1
     clip = {"x": 0, "y": 0, "width": min(width, SHOT_MAX), "height": min(height, SHOT_MAX)}
-    ratio = float(await tab.eval("window.devicePixelRatio", timeout=5) or 1)
-    base = min(1.0, 1 / ratio)  # a HiDPI screen would double the pixels past the cap
+    base = min(1.0, whole["scale"])  # a HiDPI screen would double the pixels past the cap
 
     async def capture(fmt: str, quality: int | None, scale: float) -> bytes:
         return await _shoot(tab, fmt, quality, {**clip, "scale": base * scale})

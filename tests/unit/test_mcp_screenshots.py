@@ -132,7 +132,13 @@ async def test_page_metrics_have_their_own_timeout(monkeypatch):
 
     from tellurium.mcp import pages
 
+    class _HungSession:  # a session that never answers, within its timeout
+        async def send(self, method, params=None, timeout=None):
+            await asyncio.wait_for(asyncio.sleep(60), timeout)
+
     class _HungTab:
+        _session = _HungSession()
+
         async def send_cdp(self, method, params=None):
             await asyncio.sleep(60)
 
