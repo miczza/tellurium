@@ -45,6 +45,6 @@ def busy(name: str, pid: int | None) -> ToolError:
     """The error for a session another process (*pid*, if known) has open."""
     who = f"another process (PID {pid})" if pid else "another process"
     return ToolError(
-        f"Session {name!r} is open in {who}: a CLI, a script or another server. "
-        "Close it there, or open another name"
+        f"Session {name!r} is already open in {who}: a CLI, a script or another "
+        "server. Close it there, or open another name"
     )
