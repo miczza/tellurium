@@ -128,6 +128,28 @@ async def test_the_banner_comes_back_after_a_navigation(headed, local_server):
 
 
 @needs_display
+async def test_done_works_after_a_cross_process_navigation_as_the_wait_starts(local_server):
+    """The person leaves Chrome's first page (another renderer) while the banner
+    is being set up: world and binding must still end up in the same document."""
+    from tellurium import Browser
+
+    for _ in range(3):
+        browser = await Browser.launch(headless=False)
+        try:
+            tab = browser.main_tab
+            task = asyncio.create_task(tab.wait_for_human("Go on", timeout=20))
+            try:
+                await tab.get(f"{local_server}/basic.html")
+                await _click_node(tab, await _done_button(tab))
+                assert await _until_settled(task, 5)
+                await task
+            finally:
+                task.cancel()
+        finally:
+            await browser.close()
+
+
+@needs_display
 async def test_the_banner_comes_back_when_the_page_removes_it(headed, local_server):
     tab = headed.main_tab
     await tab.get(f"{local_server}/basic.html")

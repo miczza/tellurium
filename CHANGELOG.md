@@ -36,6 +36,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   is required (`ValueError` otherwise). `TimeoutError` after *timeout* seconds (`None`: no
   limit); the banner is removed on every way out, cancellation included. A page too busy
   to answer within 5 s delays the next check instead of failing the wait.
+  The banner's isolated world and its binding are kept only when both were set up in the
+  document still showing, so a navigation to another renderer as the wait starts (Chrome's
+  first page to the site) cannot leave a "Done" that reaches nobody.
 - `SessionBusyError` (from `tellurium` and `tellurium.session`): `Session.start()` locks the
   session folder (`session.lock`, `fcntl.flock` on POSIX, `msvcrt.locking` on Windows,
   mode 0600, with the holder's PID inside) from before Chrome starts until after it is

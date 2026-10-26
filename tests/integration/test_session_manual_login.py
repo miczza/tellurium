@@ -18,6 +18,12 @@ from tests.integration.test_wait_for_human import _click_node, _done_button
 pytestmark = pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="needs a display (xvfb-run)")
 
 
+@pytest.fixture(autouse=True)
+def _short_manual_timeout(monkeypatch):
+    """A Done that is lost fails the test in a minute, not in ten."""
+    monkeypatch.setattr(session_mod, "MANUAL_TIMEOUT", 60.0)
+
+
 @pytest.fixture
 def launched(monkeypatch):
     """(kwargs, browser) of each Browser.launch, as they come."""

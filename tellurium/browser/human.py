@@ -35,15 +35,16 @@ CALL_TIMEOUT = 5.0
 DONE_LABEL = "Done"
 
 # Run in the banner's isolated world: (re)build the banner unless it is
-# already in the document. Returns false when there is no document yet.
+# already in the document. "unbound": the binding is missing from this world;
+# "nodoc": no document yet. The click looks the binding up when it happens,
+# so a binding added again later is the one called.
 _SHOW_JS = """
 (function (reason, done, label) {
-  const call = globalThis[done];
-  if (typeof call !== 'function') return false;
+  if (typeof globalThis[done] !== 'function') return 'unbound';
   const old = globalThis.__tlBanner;
-  if (old && old.isConnected) return true;
+  if (old && old.isConnected) return 'shown';
   const root = document.documentElement;
-  if (!root) return false;
+  if (!root) return 'nodoc';
   const host = document.createElement('div');
   const place = {all: 'initial', position: 'fixed', top: '0', left: '0', right: '0',
                  display: 'block', 'z-index': '2147483647'};
@@ -65,13 +66,14 @@ _SHOW_JS = """
   button.type = 'button';
   button.textContent = label;
   button.addEventListener('click', function (event) {
-    if (event.isTrusted) call('done');
+    const call = globalThis[done];
+    if (event.isTrusted && typeof call === 'function') call('done');
   });
   bar.append(text, button);
   shadow.append(style, bar);
   root.appendChild(host);
   globalThis.__tlBanner = host;
-  return true;
+  return 'shown';
 })(%s, %s, %s)
 """
 
@@ -196,6 +198,7 @@ class _Banner:
 
     def __init__(self, tab: Tab, reason: str) -> None:
         token = secrets.token_hex(8)
+        self._tab = tab
         self._session = tab._session
         self._reason = reason
         self._world = f"__tl_human_{token}"
@@ -232,13 +235,19 @@ class _Banner:
                     {"name": self._binding, "executionContextName": self._world},
                 )
                 self._bound = True
+                # A navigation may have committed meanwhile, so the world and
+                # the binding may sit in different documents: keep them only
+                # if the document is still the one they were made for.
+                if (await _main_frame(self._tab) or {}).get("loaderId") != frame.get("loaderId"):
+                    return
                 self._context, self._loader = world["executionContextId"], frame.get("loaderId")
             expression = _SHOW_JS % (
                 json.dumps(self._reason),
                 json.dumps(self._binding),
                 json.dumps(DONE_LABEL),
             )
-            await self._evaluate(expression)
+            if await self._evaluate(expression) == "unbound":
+                self._context = None  # world and binding again next round
         except asyncio.TimeoutError:
             pass  # a busy page: the same world next round (a new one would show a second banner)
         except (CDPError, KeyError):
