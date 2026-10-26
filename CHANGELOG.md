@@ -39,6 +39,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   The banner's isolated world and its binding are kept only when both were set up in the
   document still showing, so a navigation to another renderer as the wait starts (Chrome's
   first page to the site) cannot leave a "Done" that reaches nobody.
+- `SessionPool(directory, max_browsers=4, **launch)` (`~` in `directory` is expanded): named
+  identities side by side, each a `Session` in its own folder with its own Chrome, profile,
+  cookie jar and fingerprint seed. `async with pool.open(name) as browser` starts one (a
+  missing name is created, its `session.json` written so the seed lasts); at most
+  `max_browsers` are open at once: a slot is taken before Chrome starts and given back only
+  after it is closed, on a failed launch, an error in the body and a cancellation too, and
+  an open waiting for a slot can be cancelled. The same name opened twice in the pool, or a
+  session another process holds, fails at once with `SessionBusyError` without waiting for
+  a slot. `await pool.list()`, `create(name, seed=None)`, `get(name)` and `delete(name)`
+  manage the identities; `delete` of a session open in the pool or in another process
+  raises `SessionBusyError` and leaves the folder alone. Names are 1-64 letters, digits,
+  `.`, `_`, `-` (starting with a letter or digit), so none leaves the pool directory.
 - `SessionBusyError` (from `tellurium` and `tellurium.session`): `Session.start()` locks the
   session folder (`session.lock`, `fcntl.flock` on POSIX, `msvcrt.locking` on Windows,
   mode 0600, with the holder's PID inside) from before Chrome starts until after it is
@@ -359,6 +371,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A new `Session` no longer draws its fingerprint seed from the global `random`: a script
+  that called `random.seed()` gave every new identity the same seed.
 - A session start waits again for a live Chrome still holding the session profile: on
   Linux Chrome rewrites its process title (`/proc/<pid>/cmdline` becomes one string of
   space-joined arguments) and its `--user-data-dir` was never found, so the start went

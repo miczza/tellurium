@@ -6,7 +6,7 @@ import asyncio
 import logging
 import math
 import os
-import random
+import secrets
 import warnings
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -65,14 +65,14 @@ class Session:
         loaded = storage.load(self._json_path())
         if loaded is None:
             # Fresh session
-            self.seed = seed if seed is not None else random.randint(1, 0xFFFFFFFF)
+            self.seed = seed if seed is not None else _fresh_seed()
             self.metadata: dict[str, Any] = {}
         else:
             # File wins: constructor seed is ignored
             self.seed = (
                 int(loaded["seed"])
                 if "seed" in loaded
-                else (seed if seed is not None else random.randint(1, 0xFFFFFFFF))
+                else (seed if seed is not None else _fresh_seed())
             )
             self.metadata = dict(loaded.get("metadata", {}))
             if "launch" in loaded and isinstance(loaded["launch"], dict):
@@ -401,3 +401,8 @@ def _validate_json_value(value: Any) -> None:
         f"metadata values must be JSON-serializable "
         f"(str, int, float, bool, None, list, dict); got {type(value).__name__}"
     )
+
+
+def _fresh_seed() -> int:
+    # Not the global `random`: a script that seeds it would give every identity one fingerprint.
+    return secrets.randbelow(0xFFFFFFFF) + 1
