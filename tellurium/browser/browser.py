@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import logging
 import os
@@ -553,6 +554,10 @@ class Browser:
     def tabs(self) -> list[Tab]:
         return list(self._tabs)
 
+    @property
+    def downloads(self) -> Downloads:  # internal: Tab.expect_download, contexts
+        return self._downloads
+
     async def wait_for_tab(self, url: str, *, timeout: float = 30) -> Tab:
         """Return the first open tab whose URL matches *url*, waiting for one.
 
@@ -570,10 +575,8 @@ class Browser:
             if remaining <= 0:
                 raise TimeoutError(f"Timed out waiting for a tab matching {url!r}")
             self._tabs_changed.clear()
-            try:
+            with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._tabs_changed.wait(), timeout=remaining)
-            except asyncio.TimeoutError:
-                pass
 
     # ------------------------------------------------------------------
     # Page target tracking
@@ -717,10 +720,7 @@ class Browser:
         return self._main_tab
 
     async def get(self, url: str, **kwargs: Any) -> Tab:
-        """Navigate the main tab to *url* and return it.
-
-        Opens a new main tab when there is none (all closed or crashed).
-        """
+        """Navigate the main tab (a new one if all closed or crashed) to *url*; return it."""
         if self._main_tab is None:
             self._main_tab = await self.new_tab("about:blank")
         tab = self._main_tab

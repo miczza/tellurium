@@ -155,7 +155,7 @@ async def test_waiter_ignores_downloads_of_other_frames(local_server):
     browser = await Browser.launch(headless=True)
     try:
         tab = await browser.get(local_server + "/download.html")
-        frame = browser._downloads.expect(lambda frame_id: frame_id != tab._target_id)
+        frame = browser.downloads.expect(lambda frame_id: frame_id != tab._target_id)
         async with frame, expect_download(tab) as info:
             await tab.eval(
                 "document.getElementById('frame').contentDocument.getElementById('inner').click()"
@@ -177,7 +177,7 @@ async def test_block_error_discards_the_waiter(local_server):
                 raise ValueError("boom")
         with pytest.raises(DownloadError):
             await info.value
-        assert browser._downloads._waiters == []
+        assert browser.downloads._waiters == []
     finally:
         await browser.close()
 
@@ -267,7 +267,7 @@ async def test_a_raising_filter_fails_only_its_waiter(local_server):
     browser = await Browser.launch(headless=True)
     try:
         tab = await browser.get(local_server + "/download.html")
-        broken = browser._downloads.expect(lambda frame_id: 1 / 0)
+        broken = browser.downloads.expect(lambda frame_id: 1 / 0)
         await broken.__aenter__()
         async with expect_download(tab, timeout=10) as info:
             await _click(tab, "#report")
@@ -297,7 +297,7 @@ async def test_an_unfiltered_waiter_follows_the_download_context(local_server, t
     try:
         context = await browser.new_context(downloads_dir=str(tmp_path))
         tab = await context.new_tab(local_server + "/download.html")
-        async with browser._downloads.expect() as info:
+        async with browser.downloads.expect() as info:
             await _click(tab, "#slow")
         download = await info.value
         assert download.context_id == context.context_id
@@ -325,7 +325,7 @@ async def test_closing_a_context_fails_its_waits(local_server, tmp_path):
             await asyncio.wait_for(waiting, 5)
         with pytest.raises(DownloadError, match="context"):
             await asyncio.wait_for(pending.value, 5)
-        assert other in browser._downloads._waiters, "another context's waiter survives"
+        assert other in browser.downloads._waiters, "another context's waiter survives"
         assert list(tmp_path.iterdir()) == []
     finally:
         await browser.close()
@@ -342,8 +342,8 @@ async def test_a_download_nobody_waits_for_lands_in_the_folder(local_server, tmp
                 break
             await asyncio.sleep(0.05)
         assert [p.read_bytes() for p in tmp_path.iterdir()] == [DOWNLOAD_BODY]
-        assert browser._downloads._active == {}
-        assert browser._downloads._waiters == []
+        assert browser.downloads._active == {}
+        assert browser.downloads._waiters == []
     finally:
         await browser.close()
 

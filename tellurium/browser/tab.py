@@ -396,7 +396,7 @@ class Tab:
     def expect_download(self, timeout: float = 30) -> DownloadWaiter:
         """``async with tab.expect_download() as info: <start it>``, then
         ``download = await info.value``: the next download of this tab (iframes too)."""
-        return self._browser._downloads.expect_frames(self._frames, timeout=timeout)
+        return self._browser.downloads.expect_frames(self._frames, timeout=timeout)
 
     async def select_all(self, selector: str, *, timeout: float = 0) -> list[Element]:
         """Return all elements matching a CSS selector, polling up to *timeout* s for one.

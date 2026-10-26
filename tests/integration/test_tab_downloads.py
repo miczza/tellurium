@@ -39,7 +39,7 @@ async def test_download_started_by_a_ref_click(browser, local_server, tmp_path):
     assert download.suggested_filename == "report.csv"
     path = await download.path()
     assert path.read_bytes() == DOWNLOAD_BODY
-    assert path.parent == browser._downloads.folder()
+    assert path.parent == browser.downloads.folder()
     copy = await download.save_as(tmp_path / "kept.csv")
     assert copy.read_bytes() == DOWNLOAD_BODY
 

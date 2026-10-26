@@ -375,3 +375,26 @@ async def test_named_keys_are_dispatched_without_text(monkeypatch):
     assert all("text" not in p for p in backspaces)
     assert all(p["windowsVirtualKeyCode"] == 8 for p in backspaces)
     assert {p["type"] for p in backspaces} == {"keyDown", "keyUp"}
+
+
+# ---------------------------------------------------------------------------
+# Downloads accessor
+# ---------------------------------------------------------------------------
+
+
+def test_browser_exposes_its_downloads():
+    from tellurium.browser.browser import Browser
+    from tellurium.browser.download import Downloads
+
+    browser = Browser()
+    assert isinstance(browser.downloads, Downloads)
+    assert browser.downloads is browser.downloads
+
+
+def test_expect_download_goes_through_the_browser_accessor():
+    tab = _fake_tab()
+    downloads = MagicMock()
+    tab._browser = MagicMock(spec=["downloads"], downloads=downloads)
+    waiter = tab.expect_download(timeout=5)
+    downloads.expect_frames.assert_called_once_with(tab._frames, timeout=5)
+    assert waiter is downloads.expect_frames.return_value
