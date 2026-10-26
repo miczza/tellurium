@@ -34,7 +34,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   only in that isolated world and fires only on a trusted click, so neither the page nor a
   synthetic `click()` can end the wait. In headless Chrome there is no banner and *until*
   is required (`ValueError` otherwise). `TimeoutError` after *timeout* seconds (`None`: no
-  limit); the banner is removed on every way out, cancellation included.
+  limit); the banner is removed on every way out, cancellation included. A page too busy
+  to answer within 5 s delays the next check instead of failing the wait.
 - `SessionBusyError` (from `tellurium` and `tellurium.session`): `Session.start()` locks the
   session folder (`session.lock`, `fcntl.flock` on POSIX, `msvcrt.locking` on Windows,
   mode 0600, with the holder's PID inside) from before Chrome starts until after it is

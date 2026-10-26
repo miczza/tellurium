@@ -108,10 +108,11 @@ async def wait_for_human(
             frame = await _main_frame(tab)
             if banner is not None and banner.done.is_set():
                 return
-            if check is not None and await _bounded(check(tab, frame), deadline, reason):
-                return
-            if banner is not None:
-                await banner.show(frame)
+            if frame is not None:  # None: the page is busy, look again next round
+                if check is not None and await _bounded(check(tab, frame), deadline, reason):
+                    return
+                if banner is not None:
+                    await banner.show(frame)
             left = deadline - loop.time()
             if left <= 0:
                 raise _timeout(reason, timeout)
@@ -154,8 +155,12 @@ async def _headless(tab: Tab) -> bool:
     return "HeadlessChrome" in info.get("userAgent", "")
 
 
-async def _main_frame(tab: Tab) -> dict:
-    tree = await tab._session.send("Page.getFrameTree", {}, timeout=CALL_TIMEOUT)
+async def _main_frame(tab: Tab) -> dict | None:
+    """The main frame as Chrome reports it; ``None`` if the page is too busy to say."""
+    try:
+        tree = await tab._session.send("Page.getFrameTree", {}, timeout=CALL_TIMEOUT)
+    except asyncio.TimeoutError:
+        return None
     return tree["frameTree"]["frame"]
 
 
@@ -234,6 +239,8 @@ class _Banner:
                 json.dumps(DONE_LABEL),
             )
             await self._evaluate(expression)
+        except asyncio.TimeoutError:
+            pass  # a busy page: the same world next round (a new one would show a second banner)
         except (CDPError, KeyError):
             self._context = None  # the document went meanwhile: a new world next round
 
