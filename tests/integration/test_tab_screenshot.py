@@ -97,10 +97,18 @@ _FRAMES = "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)
 
 
 async def scrolled_body_scroller(tab, server):
-    """``html, body {height: 100%}`` and ``body {overflow-y: auto}``, scrolled to 2000:
+    """``html, body {height: 100%}`` and ``body {overflow-y: auto}``, scrolled to 1000:
     turning <html>'s overflow off there would make <body> the scroller (scrollY 0)."""
     await tab.get(server + "/body_scroller.html")
-    await tab.eval("scrollTo(0, 2000)")
+    size = None
+    for _ in range(50):  # a loaded machine may still be sizing the window
+        if size == (size := await tab.eval("[innerWidth, innerHeight]")):
+            break
+        await tab.eval(_FRAMES)
+    scrolled = (
+        "new Promise(r => { addEventListener('scroll', r, {once: true}); scrollTo(0, 1000) })"
+    )
+    await tab.eval(scrolled, timeout=10)
     await tab.eval(_FRAMES)
     await tab.eval("window.scrolls = 0")
     return await tab.eval(_LAYOUT)
@@ -108,14 +116,14 @@ async def scrolled_body_scroller(tab, server):
 
 async def check_left_alone(tab, before):
     await tab.eval(_FRAMES)
-    assert await tab.eval(_LAYOUT) == before  # scrollbar there, scrollY still 2000
+    assert await tab.eval(_LAYOUT) == before  # scrollbar there, scrollY still 1000
     assert await tab.eval("window.scrolls") == 0  # and the page saw no scroll
 
 
 async def test_full_page_leaves_a_scrolled_body_scroller_alone(any_browser, local_server):
     tab = any_browser.main_tab
     before = await scrolled_body_scroller(tab, local_server)
-    assert before[3] == 2000 and before[0] < before[1]  # the premise
+    assert before[3] == 1000 and before[0] < before[1]  # the premise
     for _ in range(2):
         png = await tab.screenshot(full_page=True, timeout=10)
         assert _png_size(png)[1] == 4000
