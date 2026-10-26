@@ -358,6 +358,23 @@ async def test_headless_is_told_apart_even_with_a_user_agent_of_headed_chrome():
         await b.close()
 
 
+async def test_headless_is_told_apart_when_a_wrapper_adds_the_flag(tmp_path):
+    """A wrapper script that adds --headless=new: its own command line says
+    nothing, Chrome's user agent does."""
+    from tellurium import Browser
+    from tellurium.browser.launcher import find_chrome
+
+    wrapper = tmp_path / "chrome-headless"
+    wrapper.write_text(f'#!/bin/sh\nexec "{await find_chrome()}" "$@" --headless=new\n')
+    wrapper.chmod(0o755)
+    b = await Browser.launch(headless=False, executable=str(wrapper))
+    try:
+        with pytest.raises(ValueError, match="until"):
+            await asyncio.wait_for(b.main_tab.wait_for_human("Sign in", timeout=3), 10)
+    finally:
+        await b.close()
+
+
 @pytest.mark.parametrize("pattern", ["**/dashboard*", "/dashboard"])
 async def test_the_url_pattern_ignores_query_and_fragment(browser, local_server, pattern):
     """A sign-in page naming where it goes next (?next=/dashboard, #/dashboard)

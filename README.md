@@ -652,7 +652,9 @@ against the main frame's URL without query and fragment, so `**/dashboard*`
 does not take `/login?next=/dashboard` or `/#/dashboard` for the dashboard) or
 an async `(tab) -> bool`;
 `timeout=None` waits with no limit. In headless Chrome there is no banner and
-`until` is required (`ValueError` otherwise). The banner is removed however the
+`until` is required (`ValueError` otherwise); Chrome counts as headless when
+either the `--headless` flag on its command line or `HeadlessChrome` in its
+user agent says so. The banner is removed however the
 wait ends.
 
 The banner sits in a closed shadow root built from an isolated world, so the
