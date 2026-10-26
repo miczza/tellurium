@@ -7,8 +7,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `SessionPool(directory, max_browsers=4, **launch)` (from `tellurium.session`; `~` in
-  `directory` is expanded): named
+- `SessionPool(directory, max_browsers=4, **launch)` (`~` in `directory` is expanded): named
   identities side by side, each a `Session` in its own folder with its own Chrome, profile,
   cookie jar and fingerprint seed. `async with pool.open(name) as browser` starts one (a
   missing name is created, its `session.json` written so the seed lasts); at most
@@ -337,6 +336,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A new `Session` no longer draws its fingerprint seed from the global `random`: a script
+  that called `random.seed()` gave every new identity the same seed.
 - A session start waits again for a live Chrome still holding the session profile: on
   Linux Chrome rewrites its process title (`/proc/<pid>/cmdline` becomes one string of
   space-joined arguments) and its `--user-data-dir` was never found, so the start went

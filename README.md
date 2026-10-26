@@ -1359,7 +1359,7 @@ fingerprint seed), never more than `max_browsers` at a time:
 
 ```python
 import asyncio
-from tellurium.session import SessionPool
+from tellurium import SessionPool
 
 pool = SessionPool("~/.tellurium/sessions", max_browsers=4, headless=True)
 

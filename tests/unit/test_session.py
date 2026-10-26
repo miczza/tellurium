@@ -375,3 +375,22 @@ def test_save_full_with_last_launch_params(tmp_path):
 
     data = _json.loads((tmp_path / "s" / "session.json").read_text())
     assert data["launch"] == {"stealth": True, "headless": False}
+
+
+def test_fresh_seed_ignores_the_global_random_state(tmp_path):
+    # A script that calls random.seed() must not hand every new identity one fingerprint.
+    import random
+
+    random.seed(42)
+    a = Session("a", path=str(tmp_path / "a")).seed
+    random.seed(42)
+    b = Session("b", path=str(tmp_path / "b")).seed
+    assert a != b
+
+
+def test_session_pool_is_exported_from_tellurium():
+    import tellurium
+    from tellurium.session import SessionPool
+
+    assert tellurium.SessionPool is SessionPool
+    assert "SessionPool" in tellurium.__all__
