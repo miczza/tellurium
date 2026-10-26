@@ -374,3 +374,54 @@ async def test_the_url_pattern_ignores_query_and_fragment(browser, local_server,
         await task
     finally:
         task.cancel()
+
+
+@needs_display
+async def test_cancelling_the_wait_takes_banner_binding_and_script_away(
+    headed, local_server, monkeypatch
+):
+    tab = headed.main_tab
+    await tab.get(f"{local_server}/basic.html")
+    sent = []
+    real_send = tab._session.send
+
+    async def spy(method, params=None, timeout=None):
+        sent.append((method, params))
+        return await real_send(method, params, timeout=timeout)
+
+    monkeypatch.setattr(tab._session, "send", spy)
+    task = asyncio.create_task(tab.wait_for_human("Go on", timeout=30))
+    await _done_button(tab)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert await _closed_roots(tab) == []
+
+    binding = next(p["name"] for m, p in sent if m == "Runtime.addBinding")
+    world = next(p["worldName"] for m, p in sent if m == "Page.createIsolatedWorld")
+    assert ("Runtime.removeBinding", {"name": binding}) in sent
+    assert any(m == "Page.removeScriptToEvaluateOnNewDocument" for m, _ in sent)
+
+    # The binding no longer reaches tellurium, even called from its own world.
+    called = []
+    tab._session.on("Runtime.bindingCalled", called.append)
+    try:
+        frame = (await tab.send_cdp("Page.getFrameTree", {}))["frameTree"]["frame"]["id"]
+        ctx = await tab.send_cdp("Page.createIsolatedWorld", {"frameId": frame, "worldName": world})
+        await tab.send_cdp(
+            "Runtime.evaluate",
+            {
+                "expression": f"typeof globalThis[{binding!r}] === 'function'"
+                f" && globalThis[{binding!r}]('done')",
+                "contextId": ctx["executionContextId"],
+            },
+        )
+        await asyncio.sleep(0.5)
+        assert called == []
+    finally:
+        tab._session.off("Runtime.bindingCalled", called.append)
+
+    # A new document runs nothing of the banner any more.
+    await tab.get(f"{local_server}/form.html")
+    await asyncio.sleep(0.5)
+    assert await _closed_roots(tab) == []
