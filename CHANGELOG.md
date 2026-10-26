@@ -13,6 +13,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   closed, error and cancellation included. A second process, or a second `Session` on the
   same folder, gets `SessionBusyError` with `.pid` and `.path` instead of a Chrome launch
   error; the OS drops the lock when its holder dies, so a `kill -9` leaves nothing to clean.
+  Before launching, `start()` also waits (up to 10 s) for the Chrome of a holder that died
+  to let go of the profile (its `SingletonLock`), and names that Chrome's PID in a
+  `SessionBusyError` if it stays.
 - `Session` keeps the cookies with no expiry (`expires == -1`: SSO, banks), which Chrome
   drops on restart: before Chrome closes (on error too, each call bounded by 5 s) they are
   read and written to `cookies.json` in the session folder (atomic, mode 0600), and the next

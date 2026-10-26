@@ -12,8 +12,9 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
-from tellurium.session import session_cookies, storage
+from tellurium.session import profile_release, session_cookies, storage
 from tellurium.session.errors import (
+    SessionBusyError,
     SessionInvalidError,
     SessionLoginFailedError,
 )
@@ -189,6 +190,9 @@ class Session:
         # pre-yield branch where validation/login can raise.
         browser = None
         try:
+            chrome_pid = await profile_release.wait(chrome_dir)  # a dead holder's Chrome
+            if chrome_pid is not None:
+                raise SessionBusyError(self.path, chrome_pid)
             browser = await Browser.launch(
                 user_data_dir=chrome_dir,
                 seed=int(self.seed),
