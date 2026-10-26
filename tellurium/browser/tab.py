@@ -568,16 +568,13 @@ class Tab:
                 )
             else:
                 params["quality"] = int(quality)
-        if full_page:
+        if full_page:  # the whole page at its CSS size, also on a HiDPI screen
             metrics = await self._session.send("Page.getLayoutMetrics", {}, timeout=timeout)
-            content_size = metrics.get("contentSize", metrics.get("cssContentSize", {}))
-            params["clip"] = {
-                "x": 0,
-                "y": 0,
-                "width": content_size.get("width", 1920),
-                "height": content_size.get("height", 1080),
-                "scale": 1,
-            }
+            size = metrics.get("cssContentSize") or metrics.get("contentSize") or {}
+            ratio = float(await self.eval("window.devicePixelRatio", timeout=timeout) or 1)
+            clip = {"x": 0, "y": 0, "width": size.get("width", 1920), "scale": 1 / ratio}
+            params["clip"] = {**clip, "height": size.get("height", 1080)}
+            params["captureBeyondViewport"] = True
         result = await self._session.send("Page.captureScreenshot", params, timeout=timeout)
         data = base64.b64decode(result["data"])
         if path:

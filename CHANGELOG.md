@@ -285,6 +285,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Tab.screenshot(full_page=True)` captures the whole page: the clip uses
+  `cssContentSize` (falling back to `contentSize`) with `captureBeyondViewport`, scaled by
+  `1/devicePixelRatio` so the image has the page's CSS size. Before, everything past the
+  viewport came out blank, and a HiDPI screen doubled the size. The image can now be
+  larger than before.
 - `Tab.keyboard_press` sends keys Chrome acts on: `rawKeyDown` with the Windows virtual
   key code, a `char` event when the key types text (none with Control/Meta), `keyUp`.
   `"Enter"` now submits the focused form and `"Control+a"` selects all; before, only
