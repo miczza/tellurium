@@ -3,7 +3,7 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from tellurium import cli
+from tellurium.cdp import update_command
 
 
 def _minimal_protocol() -> dict:
@@ -37,10 +37,10 @@ def test_update_cdp_without_version_uses_bundled(tmp_path, monkeypatch, capsys):
     domains_dir.mkdir()
     protocol_path.write_text(json.dumps(_minimal_protocol()))
 
-    monkeypatch.setattr(cli, "_protocol_path", lambda: protocol_path)
-    monkeypatch.setattr(cli, "_domains_dir", lambda: domains_dir)
+    monkeypatch.setattr(update_command, "_protocol_path", lambda: protocol_path)
+    monkeypatch.setattr(update_command, "_domains_dir", lambda: domains_dir)
 
-    cli._update_cdp(None)
+    update_command.update_cdp(None)
 
     out = capsys.readouterr().out
     assert "11 CDP domains regenerated" in out
@@ -57,8 +57,8 @@ def test_update_cdp_with_version_downloads(tmp_path, monkeypatch, capsys):
     domains_dir.mkdir()
     protocol_bytes = json.dumps(_minimal_protocol()).encode()
 
-    monkeypatch.setattr(cli, "_protocol_path", lambda: protocol_path)
-    monkeypatch.setattr(cli, "_domains_dir", lambda: domains_dir)
+    monkeypatch.setattr(update_command, "_protocol_path", lambda: protocol_path)
+    monkeypatch.setattr(update_command, "_domains_dir", lambda: domains_dir)
 
     # Mock urlopen to return fake response
     fake_response = MagicMock()
@@ -73,7 +73,7 @@ def test_update_cdp_with_version_downloads(tmp_path, monkeypatch, capsys):
         return fake_response
 
     with patch("urllib.request.urlopen", fake_urlopen):
-        cli._update_cdp("146")
+        update_command.update_cdp("146")
 
     assert any("146" in u for u in captured_urls), (
         f"Expected Chrome 146 in download URL, got: {captured_urls}"
@@ -87,3 +87,14 @@ def test_update_cdp_with_version_downloads(tmp_path, monkeypatch, capsys):
     # Verify protocol file was written
     assert protocol_path.exists()
     assert protocol_path.read_bytes() == protocol_bytes
+
+
+def test_cli_dispatches_update_cdp(monkeypatch):
+    """`tellurium update-cdp --chrome-version V` reaches update_cdp(V)."""
+    from tellurium import cli
+
+    calls: list[str | None] = []
+    monkeypatch.setattr(update_command, "update_cdp", calls.append)
+    monkeypatch.setattr("sys.argv", ["tellurium", "update-cdp", "--chrome-version", "150"])
+    cli.main()
+    assert calls == ["150"]

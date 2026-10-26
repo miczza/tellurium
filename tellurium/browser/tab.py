@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from tellurium.browser import keys
+from tellurium.browser import keys, window
 from tellurium.browser.dialog import DialogGuard, DialogHandler
 from tellurium.browser.download import DownloadWaiter, TabFrames
 from tellurium.browser.element import Element, css_selector
@@ -624,92 +624,21 @@ class Tab:
     # Window
     # ------------------------------------------------------------------
 
-    async def _get_window_id(self) -> int | None:
-        """Resolve (and cache) this tab's browser window id, or *None*."""
-        if self._window_id is not None:
-            return self._window_id
-        try:
-            resp = await self._browser._router.root.send(
-                "Browser.getWindowForTarget",
-                {"targetId": self._target_id},
-                timeout=5.0,
-            )
-        except Exception:  # noqa: BLE001 — not implemented on every target type
-            return None
-        self._window_id = resp.get("windowId")
-        return self._window_id
-
-    async def _set_window_bounds(self, bounds: dict) -> bool:
-        """Send ``Browser.setWindowBounds``; return False when unavailable."""
-        window_id = await self._get_window_id()
-        if window_id is None:
-            return False
-        try:
-            await self._browser._router.root.send(
-                "Browser.setWindowBounds",
-                {
-                    "windowId": window_id,
-                    "bounds": bounds,
-                },
-                timeout=5.0,
-            )
-        except Exception:  # noqa: BLE001 — degrade, never break the caller
-            return False
-        # Window geometry changed → the cached screenX/screenY offset is stale.
-        self._screen_offset = None
-        return True
-
     async def set_viewport(self, width: int, height: int) -> None:
-        """Resize the browser window to *width* x *height*.
-
-        Resizing is done with ``Browser.setWindowBounds``, which moves the real
-        window — every JS-visible metric (``innerWidth``, ``outerWidth``,
-        ``screenX``…) stays self-consistent.  ``--window-size`` cannot be
-        changed after launch, so it is not an option here.
-
-        Fallback: if ``Browser.setWindowBounds`` is unavailable (older
-        headless shells, non-top-level targets) the call degrades to
-        ``Emulation.setDeviceMetricsOverride`` and logs a warning — that
-        command is itself a detection signal (it desynchronises
-        ``window.outerWidth``/``screen`` from the emulated viewport), so
-        prefer ``Browser.launch(viewport=(w, h))`` when stealth matters.
-        """
-        if await self._set_window_bounds(
-            {
-                "width": int(width),
-                "height": int(height),
-                "windowState": "normal",
-            }
-        ):
-            return
-        logger.warning(
-            "Browser.setWindowBounds unavailable; falling back to "
-            "Emulation.setDeviceMetricsOverride, which is a detectable "
-            "fingerprint signal. Prefer Browser.launch(viewport=(%d, %d)).",
-            int(width),
-            int(height),
-        )
-        await self._session.send(
-            "Emulation.setDeviceMetricsOverride",
-            {
-                "width": int(width),
-                "height": int(height),
-                "deviceScaleFactor": 0,
-                "mobile": False,
-            },
-        )
+        """Resize the window to *width* x *height* (see :func:`window.set_viewport`)."""
+        await window.set_viewport(self, width, height)
 
     async def maximize(self) -> None:
         """Maximize the browser window (no-op when unavailable)."""
-        await self._set_window_bounds({"windowState": "maximized"})
+        await window.maximize(self)
 
     async def minimize(self) -> None:
         """Minimize the browser window (no-op when unavailable)."""
-        await self._set_window_bounds({"windowState": "minimized"})
+        await window.minimize(self)
 
     async def bring_to_front(self) -> None:
         """Focus this tab / bring its window to the foreground."""
-        await self._session.send("Page.bringToFront", {})
+        await window.bring_to_front(self)
 
     # ------------------------------------------------------------------
     # Input

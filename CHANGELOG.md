@@ -292,6 +292,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Internal moves, no change in behaviour: the window controls of `Tab` (`set_viewport`,
+  `maximize`, `minimize`, `bring_to_front`) live in `tellurium/browser/window.py`, and
+  `tellurium update-cdp` in `tellurium/cdp/update_command.py`.
 - `Cookie.from_json()` leaves `same_site` at `None` when the data has no `sameSite` (Chrome
   reports none for a cookie set without it), and `to_json()` then omits it, instead of
   turning it into an explicit `Lax`. `Cookie(...)` still defaults to `Lax`.
