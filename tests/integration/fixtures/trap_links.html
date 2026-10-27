@@ -25,6 +25,7 @@
     .observe(document, {subtree: true, childList: true, attributes: true, characterData: true});
 </script>
 <style>
+  html { overflow-x: hidden; }  /* no horizontal scrolling: far right is off the page */
   body { margin: 0; font: 16px sans-serif; }
   section { padding: 8px; }
   .menu-closed ul { display: none; }
@@ -95,6 +96,7 @@
   <a id="trap-scale" href="/t/scale" style="display: inline-block; transform: scale(0);">scale</a>
   <a id="trap-left" href="/t/left" style="position: absolute; left: -9999px;">left</a>
   <a id="trap-top" href="/t/top" style="position: absolute; top: -9999px;">top</a>
+  <a id="trap-right" href="/t/right" style="position: absolute; left: 5000px;">right</a>
   <a id="trap-fixed-off" href="/t/fixed" style="position: fixed; left: -500px; top: 10px;">fixed</a>
   <div style="height: 0; overflow: hidden;"><a id="trap-clipped" href="/t/clipped">clipped</a></div>
   <a id="trap-clip-path" href="/t/clip-path" style="display: inline-block; clip-path: inset(50%);">clip-path</a>

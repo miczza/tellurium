@@ -20,7 +20,9 @@ signals that fired:
     clips it;
 ``off-page``
     wholly outside the scrollable document (``left: -9999px``), or outside the
-    viewport when ``position: fixed``; below the fold is not off-page;
+    viewport when ``position: fixed`` or along an axis the page does not scroll
+    (``overflow: hidden`` on the root, as while a modal is open); below the fold
+    is not off-page;
 ``clipped``
     nothing of it left inside the boxes of the ancestors that clip it
     (``overflow: hidden``, ``clip``, ``clip-path: inset()``);
@@ -135,14 +137,22 @@ function () {
         abs = s.position === 'absolute';
         fixed = s.position === 'fixed';
     }
+    // The page a person can scroll over, in viewport coordinates: the viewport alone
+    // for a fixed link, or along an axis the root does not let scroll (overflow: hidden).
     const pinned = chain.some((n) => css(n).position === 'fixed');
     const page = doc.scrollingElement || doc.documentElement;
-    const dx = pinned ? 0 : win.scrollX, dy = pinned ? 0 : win.scrollY;
-    const width = pinned ? win.innerWidth : Math.max(page.scrollWidth, win.innerWidth);
-    const height = pinned ? win.innerHeight : Math.max(page.scrollHeight, win.innerHeight);
+    const root = css(doc.documentElement);
+    const stuck = (axis) => pinned || clips(
+        root[axis] === 'visible' && doc.body ? css(doc.body)[axis] : root[axis]
+    );
+    const reach = (axis, scrolled, view, whole) => (
+        stuck(axis) ? [0, view] : [-scrolled, Math.max(whole, view) - scrolled]
+    );
+    const [x0, x1] = reach('overflowX', win.scrollX, win.innerWidth, page.scrollWidth);
+    const [y0, y1] = reach('overflowY', win.scrollY, win.innerHeight, page.scrollHeight);
     let geometry = null;
     if (small(area)) geometry = 'zero-size';
-    else if (area.r + dx <= 0 || area.b + dy <= 0 || area.l + dx >= width || area.t + dy >= height) {
+    else if (area.r <= x0 || area.b <= y0 || area.l >= x1 || area.t >= y1) {
         geometry = 'off-page';
     } else if (small(vis)) geometry = 'clipped';
 

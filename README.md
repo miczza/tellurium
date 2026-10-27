@@ -789,7 +789,7 @@ wears a honeypot marker. The signals `trap_link.reasons(link)` names:
 | `visibility-hidden` | `visibility: hidden` / `collapse` |
 | `transparent` | `opacity: 0` on it or an ancestor |
 | `zero-size` | under 2 CSS px wide or tall (`width: 0`, `1px`, `scale(0)`), content that overflows visibly included |
-| `off-page` | wholly outside the scrollable document (`left: -9999px`), or outside the viewport when `position: fixed` |
+| `off-page` | wholly outside the scrollable document (`left: -9999px`), or outside the viewport when `position: fixed` or along an axis the page does not scroll (`overflow: hidden` on the root, as while a modal is open) |
 | `clipped` | nothing left inside the ancestors that clip it (`overflow: hidden` on a 0-height box, `clip-path: inset(50%)`, `clip`) |
 | `empty` | nothing to see in its box: no text (or text pushed out by `text-indent`), image, icon, pseudo-element, background, border |
 | `same-color` | all its text transparent or the color of the background behind it |

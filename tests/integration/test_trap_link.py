@@ -25,6 +25,7 @@ TRAPS = {
     "trap-scale": ["zero-size"],
     "trap-left": ["off-page"],
     "trap-top": ["off-page"],
+    "trap-right": ["off-page"],
     "trap-fixed-off": ["off-page"],
     "trap-clipped": ["clipped"],
     "trap-clip-path": ["clipped"],
