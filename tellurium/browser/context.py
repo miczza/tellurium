@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from tellurium.browser.cookie import Cookie, clear_jar, read_jar
+from tellurium.browser.robots import close_on_robots
 
 if TYPE_CHECKING:
     from tellurium.browser.browser import Browser
@@ -77,7 +78,7 @@ class BrowserContext:
         )
         tab = await self._browser._wait_adopted(result["targetId"])
         if url and url != "about:blank":
-            await tab.get(url)
+            await close_on_robots(tab, tab.get(url))
         return tab
 
     async def get_cookies(self, domain: str | None = None) -> list[Cookie]:
@@ -108,6 +109,7 @@ class BrowserContext:
         for tab in list(self._tabs):
             self._browser._forget_tab(tab._target_id)
         self._browser._contexts.pop(self._context_id, None)
+        self._browser._robots.forget_context(self._context_id)
         downloads = self._browser.downloads
         root = self._browser._router.root
         try:

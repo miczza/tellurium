@@ -25,6 +25,7 @@ from tellurium.browser.launcher import (
 )
 from tellurium.browser.process import BrowserProcess
 from tellurium.browser.proxy import forwarder_for, proxy_server_flag
+from tellurium.browser.robots import Robots, close_on_robots
 from tellurium.browser.tab import Tab, url_matches
 from tellurium.cdp.transport._pipeline import CommandPipeline
 from tellurium.cdp.transport._session import SessionRouter
@@ -62,6 +63,7 @@ class Browser(CookieJar):
         self._mouse_profile = "normal"
         self._dialogs = "dismiss"  # policy for every tab, see Browser.launch
         self._downloads = Downloads(lambda frame_id: tab_context(self, frame_id))
+        self._robots = Robots()  # robots.txt policy and cache, see Browser.launch
         # Manual override applied to every session when stealth is off
         # (with stealth on the StealthEngine already owns the timezone).
         self._timezone_override: str | None = None
@@ -95,6 +97,8 @@ class Browser(CookieJar):
         chrome_log: str | Path | None = None,
         dialogs: str = "dismiss",
         downloads_dir: str | Path | None = None,
+        respect_robots: bool = False,
+        robots_agent: str = "*",
     ) -> Browser:
         """Launch a Chrome process and return a connected :class:`Browser`.
 
@@ -164,6 +168,13 @@ class Browser(CookieJar):
         downloads_dir:
             Folder that keeps the downloads (named by GUID; ``Download.save_as``
             names them). By default a temporary folder removed by :meth:`close`.
+        respect_robots:
+            ``Tab.get``, ``new_tab(url)`` and ``get`` raise
+            :class:`RobotsDisallowedError` for a URL the site's robots.txt
+            disallows, before any request. robots.txt is loaded by Chrome
+            (cached 24 h per origin); clicks and redirects are not checked.
+        robots_agent:
+            Product token whose robots.txt group applies (default ``"*"``).
 
         Launch is all-or-nothing: on failure or cancellation the process,
         pipe, temporary profile, downloads folder and proxy forwarder are
@@ -187,6 +198,7 @@ class Browser(CookieJar):
 
         self = cls()
         self._dialogs = check_policy(dialogs)
+        self._robots = Robots(respect_robots, robots_agent)
         self._stealth_idle = stealth_idle
         self._mouse_profile = mouse_profile
         languages = list(languages) if languages is not None else None
@@ -547,7 +559,7 @@ class Browser(CookieJar):
         result = await self._router.root.send("Target.createTarget", {"url": "about:blank"})
         tab = await self._wait_adopted(result["targetId"])
         if url and url != "about:blank":
-            await tab.get(url)
+            await close_on_robots(tab, tab.get(url))
         return tab
 
     @property
@@ -745,6 +757,7 @@ class Browser(CookieJar):
     async def close(self) -> None:
         """Terminate the browser and release every resource, even if this call is
         cancelled meanwhile (the cancellation is re-raised afterwards)."""
+        self._robots.close()  # downloads of robots.txt in flight
         try:  # unfinished downloads first: Chrome then deletes their partial files
             await self._downloads.stop("The browser closed")
         finally:

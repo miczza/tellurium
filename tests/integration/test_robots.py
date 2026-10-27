@@ -12,7 +12,7 @@ import base64
 
 import pytest
 
-from tellurium import Browser
+from tellurium import Browser, NavigationError, RobotsDisallowedError
 
 pytestmark = pytest.mark.asyncio
 
@@ -21,15 +21,17 @@ PAGE = b"<!doctype html><title>%s</title><p>page</p>"
 
 
 class SiteProxy:
-    """An HTTP proxy that serves the sites itself.
+    """An HTTP proxy that serves the sites itself (and, asked directly, one site).
 
-    *routes* maps a path to ``(status, headers, body)``; any other path is a
-    200 page titled with the path. Every request line and its headers are kept
+    *routes* maps ``"host/path"`` or ``"/path"`` to ``(status, headers, body)``;
+    any other path is a 200 page titled with the path. *delays* holds seconds to
+    wait before answering a path. Every request line and its headers are kept
     in *seen*.
     """
 
     def __init__(self, routes: dict[str, tuple[int, dict[str, str], bytes]] | None = None):
         self.routes = dict(routes or {})
+        self.delays: dict[str, float] = {}
         self.seen: list[tuple[str, dict[str, str]]] = []
 
     async def __aenter__(self) -> SiteProxy:
@@ -47,6 +49,10 @@ class SiteProxy:
         """The request lines of *path*, on any host."""
         return [line for line, _ in self.seen if line.split(" ")[1].endswith(path)]
 
+    def hits(self, fragment: str) -> int:
+        """How many requests had *fragment* in their target."""
+        return sum(fragment in line.split(" ")[1] for line, _ in self.seen)
+
     async def _serve(self, reader, writer) -> None:
         try:
             while request := await reader.readuntil(b"\r\n\r\n"):
@@ -56,10 +62,13 @@ class SiteProxy:
                 }
                 self.seen.append((lines[0], headers))
                 target = lines[0].split(" ")[1]
-                path = "/" + target.split("://", 1)[-1].partition("/")[2]
-                status, extra, body = self.routes.get(
-                    path, (200, {"Content-Type": "text/html"}, PAGE % path.encode())
-                )
+                host, _, rest = target.split("://", 1)[-1].partition("/")
+                path = "/" + rest
+                host = host if "://" in target else headers.get("host", "")
+                if delay := self.delays.get(path):
+                    await asyncio.sleep(delay)
+                default = (200, {"Content-Type": "text/html"}, PAGE % path.encode())
+                status, extra, body = self.routes.get(host + path, self.routes.get(path, default))
                 head = f"HTTP/1.1 {status} X\r\nContent-Length: {len(body)}\r\n"
                 head += "".join(f"{k}: {v}\r\n" for k, v in extra.items())
                 writer.write(head.encode() + b"\r\n" + body)
@@ -145,3 +154,218 @@ async def test_load_network_resource_has_the_navigation_user_agent():
 async def test_load_network_resource_has_the_stealth_user_agent():
     robots, page = await _user_agents(stealth=True)
     assert robots == page
+
+
+TEXT = {"Content-Type": "text/plain"}
+
+
+@pytest.fixture
+async def site():
+    """A proxy playing ``site.test`` (robots.txt: ``/private`` disallowed) and a
+    plain browser behind it, respecting robots.txt."""
+    async with SiteProxy({"/robots.txt": (200, TEXT, ROBOTS)}) as proxy:
+        browser = await Browser.launch(headless=True, proxy=proxy.url, respect_robots=True)
+        try:
+            yield proxy, browser
+        finally:
+            await browser.close()
+
+
+async def test_a_disallowed_path_is_not_requested(site):
+    proxy, browser = site
+    tab = await browser.new_tab()
+    with pytest.raises(RobotsDisallowedError) as caught:
+        await tab.get("http://site.test/private/page?x=1", timeout=15)
+    assert str(caught.value) == "robots.txt of http://site.test disallows /private/page?x=1"
+    assert isinstance(caught.value, NavigationError)
+    await tab.get("http://site.test/public", timeout=15)
+    assert await tab.eval("document.title") == "/public"
+    assert proxy.hits("/private") == 0
+    assert proxy.hits("/robots.txt") == 1
+    assert tab.url == "http://site.test/public"
+
+
+async def test_new_tab_and_browser_get_are_checked_too(site):
+    proxy, browser = site
+    before = len(browser.tabs)
+    with pytest.raises(RobotsDisallowedError):
+        await browser.new_tab("http://site.test/private")
+    assert len(browser.tabs) == before  # the blank tab it made is closed again
+    with pytest.raises(RobotsDisallowedError):
+        await browser.get("http://site.test/private")
+    context = await browser.new_context()
+    try:
+        with pytest.raises(RobotsDisallowedError):
+            await context.new_tab("http://site.test/private")
+        assert context.tabs == []
+        tab = await context.new_tab("http://site.test/open")
+        assert await tab.eval("document.title") == "/open"
+    finally:
+        await context.close()
+    assert proxy.hits("/private") == 0
+
+
+async def test_clicks_and_redirects_are_not_blocked(site):
+    """Only the navigations tellurium starts are checked (spec, decision 3)."""
+    proxy, browser = site
+    proxy.routes["/hop"] = (302, {"Location": "/private/landing"}, b"")
+    tab = await browser.new_tab()
+    await tab.get("http://site.test/hop", timeout=15)
+    assert await tab.eval("document.title") == "/private/landing"
+    assert not await tab.is_allowed("http://site.test/private/landing")
+
+
+async def test_a_hundred_concurrent_gets_download_robots_txt_once(site):
+    proxy, browser = site
+    proxy.delays["/robots.txt"] = 0.5
+    tabs = [await browser.new_tab() for _ in range(10)]
+    gets = [tabs[i % 10].get(f"http://site.test/private/{i}", timeout=20) for i in range(100)]
+    results = await asyncio.gather(*gets, return_exceptions=True)
+    assert all(isinstance(r, RobotsDisallowedError) for r in results), results
+    assert proxy.paths("/robots.txt") == ["GET http://site.test/robots.txt HTTP/1.1"]
+    assert proxy.hits("/private") == 0
+
+
+@pytest.mark.parametrize("status, allowed", [(404, True), (410, True), (500, False), (503, False)])
+async def test_status_of_robots_txt(site, status, allowed):
+    proxy, browser = site
+    proxy.routes["other.test/robots.txt"] = (status, TEXT, b"User-agent: *\nDisallow: /\n")
+    tab = await browser.new_tab()
+    assert await tab.is_allowed("http://other.test/page") is allowed
+    if allowed:
+        await tab.get("http://other.test/page", timeout=15)
+    else:
+        with pytest.raises(RobotsDisallowedError):
+            await tab.get("http://other.test/page", timeout=15)
+    assert proxy.hits("other.test/page") == int(allowed)
+    assert proxy.hits("other.test/robots.txt") == 1
+
+
+async def test_an_unreachable_robots_txt_disallows_everything():
+    """A network error (here: no proxy listening) counts as unreachable."""
+    browser = await Browser.launch(headless=True, proxy="http://127.0.0.1:9", respect_robots=True)
+    try:
+        tab = await browser.new_tab()
+        assert not await tab.is_allowed("http://site.test/x")
+        with pytest.raises(RobotsDisallowedError):
+            await tab.get("http://site.test/x", timeout=15)
+    finally:
+        await browser.close()
+
+
+async def test_a_robots_txt_that_never_answers_times_out(site, monkeypatch):
+    from tellurium.browser import robots
+
+    monkeypatch.setattr(robots, "FETCH_TIMEOUT", 1.0)
+    proxy, browser = site
+    proxy.delays["/robots.txt"] = 5
+    proxy.routes["slow.test/robots.txt"] = (200, TEXT, b"")
+    tab = await browser.new_tab()
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    assert not await tab.is_allowed("http://slow.test/page")
+    assert loop.time() - start < 4
+
+
+async def test_a_navigation_timeout_bounds_the_robots_wait(site, monkeypatch):
+    proxy, browser = site
+    proxy.delays["/robots.txt"] = 5
+    tab = await browser.new_tab()
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    with pytest.raises(TimeoutError) as caught:
+        await tab.get("http://late.test/page", timeout=1)
+    assert loop.time() - start < 3
+    assert caught.value.phase == "robots.txt"
+    assert proxy.hits("late.test/page") == 0
+
+
+async def test_redirects_of_robots_txt_are_followed(site):
+    proxy, browser = site
+    proxy.routes["moved.test/robots.txt"] = (301, {"Location": "http://moved.test/r2"}, b"")
+    proxy.routes["moved.test/r2"] = (302, {"Location": "http://moved.test/r3"}, b"")
+    proxy.routes["moved.test/r3"] = (200, TEXT, b"User-agent: *\nDisallow: /no\n")
+    tab = await browser.new_tab()
+    assert not await tab.is_allowed("http://moved.test/no")
+    assert await tab.is_allowed("http://moved.test/yes")
+
+
+async def test_robots_agent_picks_its_group():
+    robots_txt = b"User-agent: *\nDisallow: /\n\nUser-agent: mybot\nDisallow: /secret\n"
+    async with SiteProxy({"/robots.txt": (200, TEXT, robots_txt)}) as proxy:
+        browser = await Browser.launch(
+            headless=True, proxy=proxy.url, respect_robots=True, robots_agent="mybot"
+        )
+        try:
+            tab = await browser.get("http://site.test/page", timeout=15)
+            assert await tab.eval("document.title") == "/page"
+            with pytest.raises(RobotsDisallowedError):
+                await tab.get("http://site.test/secret", timeout=15)
+        finally:
+            await browser.close()
+
+
+async def test_without_the_flag_no_robots_txt_is_requested():
+    async with SiteProxy({"/robots.txt": (200, TEXT, ROBOTS)}) as proxy:
+        browser = await Browser.launch(headless=True, proxy=proxy.url)
+        try:
+            tab = await browser.get("http://site.test/private", timeout=15)
+            await browser.new_tab("http://site.test/private/2")
+            await tab.get("http://site.test/x", timeout=15)
+            assert proxy.hits("/robots.txt") == 0
+            # is_allowed answers without the flag: it downloads the file, once
+            assert not await tab.is_allowed("http://site.test/private")
+            assert await tab.is_allowed("http://site.test/x")
+            assert proxy.hits("/robots.txt") == 1
+        finally:
+            await browser.close()
+
+
+async def test_non_web_urls_are_never_checked(site):
+    proxy, browser = site
+    tab = await browser.new_tab()
+    await tab.get("about:blank", timeout=15)
+    await tab.get("data:text/html,<title>d</title>", timeout=15)
+    assert await tab.is_allowed("about:blank")
+    assert proxy.hits("robots.txt") == 0
+
+
+async def test_closing_the_browser_mid_download(site):
+    proxy, browser = site
+    proxy.delays["/robots.txt"] = 5
+    tab = await browser.new_tab()
+    waiting = asyncio.ensure_future(tab.get("http://site.test/private", timeout=30))
+    await asyncio.sleep(0.5)
+    await asyncio.wait_for(browser.close(), 10)
+    with pytest.raises(ConnectionError):
+        await waiting
+
+
+async def test_a_page_with_a_strict_csp_does_not_block_the_download(site):
+    """From the page itself the load would obey its connect-src (CSP violation)."""
+    proxy, browser = site
+    strict = {"Content-Type": "text/html", "Content-Security-Policy": "default-src 'none'"}
+    proxy.routes["csp.test/page"] = (200, strict, b"<title>csp</title>")
+    proxy.routes["csp.test/robots.txt"] = (200, TEXT, b"")
+    tab = await browser.new_tab("http://csp.test/page")
+    await tab.get("http://site.test/public", timeout=15)
+    with pytest.raises(RobotsDisallowedError):
+        await tab.get("http://site.test/private", timeout=15)
+
+
+async def test_the_first_tab_on_the_new_tab_page_is_checked(site):
+    """Chrome's first tab shows chrome://newtab, whose CSP refuses any load."""
+    proxy, browser = site
+    tab = await browser.get("http://site.test/public", timeout=15)
+    assert await tab.eval("document.title") == "/public"
+    with pytest.raises(RobotsDisallowedError):
+        await browser.get("http://site.test/private", timeout=15)
+
+
+async def test_the_hidden_target_is_not_a_tab(site):
+    proxy, browser = site
+    before = [t._target_id for t in browser.tabs]
+    tab = await browser.new_tab()
+    assert await tab.is_allowed("http://site.test/public")
+    await asyncio.sleep(0.3)
+    assert [t._target_id for t in browser.tabs] == [*before, tab._target_id]

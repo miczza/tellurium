@@ -1,8 +1,10 @@
 """robots.txt: parsed as RFC 9309 says, downloaded through Chrome, cached per browser.
 
-The file is fetched with ``Network.loadNetworkResource`` from the tab's main
-frame, so it leaves through the tab's own network stack (proxy, IP, TLS), never
-from Python. One download per origin at a time, kept 24 hours.
+The file is fetched with ``Network.loadNetworkResource``, never from Python,
+so it leaves through Chrome's network stack (proxy, IP, TLS) of the tab's browser
+context. The load runs in a hidden ``about:blank`` target of that context: from
+the tab itself it would be subject to the page's Content-Security-Policy. One
+download per origin at a time, kept 24 hours.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ ERROR_TTL = 60.0  # an unreachable robots.txt is asked again after a minute
 CACHE_SIZE = 256  # origins kept per browser, least recently used out first
 _READ_CHUNK = 64 * 1024
 _CLOSE_TIMEOUT = 2.0
-_ATTEMPTS = 3  # a download whose tab went is started again from the caller's tab
+_OPEN_TIMEOUT = 5.0  # creating and attaching the hidden target
 
 _AGENT = re.compile(r"[A-Za-z_-]+")
 _UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
@@ -176,12 +178,38 @@ def _now() -> float:
     return time.monotonic()
 
 
-async def download(tab: Tab, origin: str, agent: str) -> tuple[RobotsRules, float]:
-    """The rules of *origin*'s robots.txt, loaded from *tab*'s main frame, and
-    how long to keep them. ``ConnectionError`` if the tab itself is gone."""
+@dataclass(frozen=True)
+class Frame:
+    """The hidden ``about:blank`` target robots.txt is loaded from."""
+
+    session: Any
+    target_id: str
+
+
+async def open_frame(browser: Any, context_id: str) -> Frame:
+    """A hidden blank target in *context_id* (``""``: the default context),
+    attached. Hidden targets are of type ``other``: no Tab is made for them."""
+    root = browser._router.root
+    params: dict[str, Any] = {"url": "about:blank", "hidden": True}
+    if context_id:
+        params["browserContextId"] = context_id
+    target_id = (await root.send("Target.createTarget", params, timeout=_OPEN_TIMEOUT))["targetId"]
+    try:
+        session = await browser._router.attach(target_id, timeout=_OPEN_TIMEOUT)
+    except BaseException:
+        close = root.send("Target.closeTarget", {"targetId": target_id}, timeout=_CLOSE_TIMEOUT)
+        task = asyncio.ensure_future(close)  # even when cancelled: never leave it open
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())
+        raise
+    return Frame(session, target_id)
+
+
+async def download(frame: Frame, origin: str, agent: str) -> tuple[RobotsRules, float]:
+    """The rules of *origin*'s robots.txt, loaded from *frame*, and how long to
+    keep them. ``ConnectionError`` if the frame's target is gone."""
     url = origin + "/robots.txt"
     try:
-        status, body = await asyncio.wait_for(_load(tab, url), FETCH_TIMEOUT)
+        status, body = await asyncio.wait_for(_load(frame, url), FETCH_TIMEOUT)
     except (CDPError, asyncio.TimeoutError, TimeoutError) as exc:
         logger.info("robots.txt of %s unreachable (%s): nothing allowed", origin, exc)
         return DISALLOW_ALL, ERROR_TTL
@@ -191,12 +219,12 @@ async def download(tab: Tab, origin: str, agent: str) -> tuple[RobotsRules, floa
     return rules, (CACHE_TTL if status < 500 else ERROR_TTL)
 
 
-async def _load(tab: Tab, url: str) -> tuple[int | None, bytes]:
+async def _load(frame: Frame, url: str) -> tuple[int | None, bytes]:
     """``(status, body)`` of *url*, no cookies sent; status ``None`` when the
     load failed before any response; a redirect loop counts as a 404."""
-    session = tab._session
+    session = frame.session
     params = {
-        "frameId": tab._frame_id or tab._target_id,
+        "frameId": frame.target_id,
         "url": url,
         "options": {"disableCache": False, "includeCredentials": False},
     }
@@ -235,15 +263,10 @@ async def _close_stream(session: Any, stream: str) -> None:
         logger.debug("IO.close of a robots.txt stream failed: %s", exc)
 
 
-@dataclass
-class _Flight:
-    task: asyncio.Future
-    tab: Any
-
-
 class Robots:
     """A browser's robots.txt policy and cache: *respect* blocks the navigations
-    tellurium starts; *agent* picks the group of the file."""
+    tellurium starts; *agent* picks the group of the file. Entries are per
+    browser context and origin (a context may have its own proxy)."""
 
     def __init__(self, respect: bool = False, agent: str = "*"):
         if agent != "*" and (not isinstance(agent, str) or not _AGENT.fullmatch(agent)):
@@ -252,8 +275,10 @@ class Robots:
             )
         self.respect = bool(respect)
         self.agent = agent
-        self._cache: OrderedDict[str, tuple[float, RobotsRules]] = OrderedDict()
-        self._flights: dict[str, _Flight] = {}
+        self._cache: OrderedDict[tuple[str, str], tuple[float, RobotsRules]] = OrderedDict()
+        self._flights: dict[tuple[str, str], asyncio.Future] = {}
+        self._frames: dict[str, Frame] = {}  # context id -> its hidden target
+        self._frame_lock = asyncio.Lock()
         self._closed = False
 
     async def check(self, tab: Tab, url: str, timeout: float | None = None) -> None:
@@ -272,59 +297,79 @@ class Robots:
         return (await self.rules(tab, origin)).allows(path)
 
     async def rules(self, tab: Tab, origin: str, timeout: float | None = None) -> RobotsRules:
-        """*origin*'s rules: from the cache, from the download in flight, or from
-        a new one from *tab*. The download belongs to this object: a caller that
-        gives up (cancelled, *timeout*) leaves it running for the others."""
-        exc: BaseException | None = None
-        for _ in range(_ATTEMPTS):
-            if (cached := self._cached(origin)) is not None:
-                return cached
-            flight = self._flights.get(origin) or self._start(tab, origin)
-            done, _ = await asyncio.wait([flight.task], timeout=timeout)
-            if not done:
-                raise NavigationTimeoutError(origin + "/robots.txt", "robots.txt", timeout or 0)
-            if flight.task.cancelled():
-                raise ConnectionError("The browser closed")
-            exc = flight.task.exception()
-            if exc is None:
-                return flight.task.result()[0]
-            if not isinstance(exc, ConnectionError) or flight.tab is tab:
-                raise exc
-        assert exc is not None
-        raise exc
+        """*origin*'s rules for *tab*'s context: from the cache, from the download
+        in flight, or from a new one. The download belongs to this object: a
+        caller that gives up (cancelled, *timeout*) leaves it to the others."""
+        browser = tab._browser
+        context = next((cid for cid, c in browser._contexts.items() if tab in c._tabs), "")
+        key = (context, origin)
+        if (cached := self._cached(key)) is not None:
+            return cached
+        flight = self._flights.get(key) or self._start(browser, key)
+        done, _ = await asyncio.wait([flight], timeout=timeout)
+        if not done:
+            raise NavigationTimeoutError(origin + "/robots.txt", "robots.txt", timeout or 0)
+        if flight.cancelled():
+            raise ConnectionError("The browser closed")
+        return flight.result()[0]
+
+    def forget_context(self, context_id: str) -> None:
+        """*context_id* was disposed of, its hidden target with it."""
+        self._frames.pop(context_id, None)
 
     def close(self) -> None:
-        """Cancel the downloads in flight; their waiters get ``ConnectionError``."""
+        """Cancel the downloads in flight; their waiters get ``ConnectionError``.
+        The hidden targets go with the browser."""
         self._closed = True
         for flight in list(self._flights.values()):
-            flight.task.cancel()
+            flight.cancel()
 
-    def _cached(self, origin: str) -> RobotsRules | None:
-        entry = self._cache.get(origin)
+    def _cached(self, key: tuple[str, str]) -> RobotsRules | None:
+        entry = self._cache.get(key)
         if entry is None:
             return None
         if entry[0] <= _now():
-            del self._cache[origin]
+            del self._cache[key]
             return None
-        self._cache.move_to_end(origin)
+        self._cache.move_to_end(key)
         return entry[1]
 
-    def _start(self, tab: Tab, origin: str) -> _Flight:
+    def _start(self, browser: Any, key: tuple[str, str]) -> asyncio.Future:
         if self._closed:
             raise ConnectionError("The browser closed")
-        flight = _Flight(asyncio.ensure_future(download(tab, origin, self.agent)), tab)
-        self._flights[origin] = flight
-        flight.task.add_done_callback(lambda _: self._landed(origin, flight))
+        flight = asyncio.ensure_future(self._fetch(browser, *key))
+        self._flights[key] = flight
+        flight.add_done_callback(lambda _: self._landed(key, flight))
         return flight
 
-    def _landed(self, origin: str, flight: _Flight) -> None:
-        if self._flights.get(origin) is flight:
-            del self._flights[origin]
-        if flight.task.cancelled() or flight.task.exception() is not None:
+    async def _fetch(self, browser: Any, context: str, origin: str) -> tuple[RobotsRules, float]:
+        """:func:`download` from the context's hidden target, opened again once
+        if it went (closed by someone, crashed)."""
+        for attempt in (1, 2):
+            frame = await self._frame(browser, context)
+            try:
+                return await download(frame, origin, self.agent)
+            except ConnectionError:
+                if self._frames.get(context) is frame:
+                    del self._frames[context]
+                if attempt == 2:
+                    raise
+        raise AssertionError("unreachable")
+
+    async def _frame(self, browser: Any, context: str) -> Frame:
+        async with self._frame_lock:
+            if (frame := self._frames.get(context)) is None:
+                frame = self._frames[context] = await open_frame(browser, context)
+            return frame
+
+    def _landed(self, key: tuple[str, str], flight: asyncio.Future) -> None:
+        if self._flights.get(key) is flight:
+            del self._flights[key]
+        if flight.cancelled() or flight.exception() is not None:
             return  # not cached: the next caller downloads again
-        rules, ttl = flight.task.result()
-        self._cache[origin] = (_now() + ttl, rules)
-        self._cache.move_to_end(origin)
+        rules, ttl = flight.result()
+        self._cache[key] = (_now() + ttl, rules)
+        self._cache.move_to_end(key)
         while len(self._cache) > CACHE_SIZE:
             self._cache.popitem(last=False)
 
@@ -348,3 +393,16 @@ async def guard(tab: Tab, url: str, timeout: float) -> float:
     except NavigationTimeoutError:
         raise NavigationTimeoutError(url, "robots.txt", timeout) from None
     return max(timeout - (loop.time() - start), 0.01)
+
+
+async def close_on_robots(tab: Tab, navigation: Any) -> None:
+    """Await *navigation* of the new *tab*; if robots.txt refuses it, close the
+    tab (nobody else holds it) and re-raise."""
+    try:
+        await navigation
+    except RobotsDisallowedError:
+        try:
+            await tab._browser._close_tab(tab)
+        except Exception:  # noqa: BLE001 — the refusal is what the caller needs
+            logger.debug("Could not close a tab robots.txt refused", exc_info=True)
+        raise

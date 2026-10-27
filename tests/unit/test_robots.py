@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
+from types import SimpleNamespace
 
 import pytest
 
@@ -246,6 +248,39 @@ def test_robots_disallowed_error_is_a_navigation_error():
     assert (exc.origin, exc.path) == ("http://site.test", "/private?q")
 
 
+_IDS = itertools.count()
+
+
+def _browser():
+    return SimpleNamespace(_contexts={})
+
+
+def _tab(browser=None, context: str | None = None):
+    """A stand-in tab: what Robots reads of it is its browser and context."""
+    browser = browser or _browser()
+    tab = SimpleNamespace(_browser=browser, _target_id=next(_IDS))  # distinct: compared by ==
+    if context is not None:
+        browser._contexts.setdefault(context, SimpleNamespace(_tabs=[]))._tabs.append(tab)
+    return tab
+
+
+@pytest.fixture
+def frames(monkeypatch):
+    """robots.open_frame replaced: each call adds a frame named after its context."""
+    made: list = []
+
+    async def open_frame(browser, context_id):
+        made.append(robots.Frame(session=None, target_id=f"{context_id}#{len(made)}"))
+        return made[-1]
+
+    monkeypatch.setattr(robots, "open_frame", open_frame)
+    return made
+
+
+def frames_of(made):
+    return [tuple(f.target_id.split("#")) for f in made]
+
+
 class _Fetcher:
     """A stand-in for the Chrome download: counts calls, answers when told."""
 
@@ -254,32 +289,32 @@ class _Fetcher:
         self.rules = rules
         self.release = asyncio.Event()
 
-    async def __call__(self, tab, origin: str, agent: str) -> tuple[RobotsRules, float]:
+    async def __call__(self, frame, origin: str, agent: str) -> tuple[RobotsRules, float]:
         self.calls.append(origin)
         await self.release.wait()
         return self.rules, robots.CACHE_TTL
 
 
-async def test_one_download_per_origin_for_concurrent_callers(monkeypatch):
+async def test_one_download_per_origin_for_concurrent_callers(frames, monkeypatch):
     fetcher = _Fetcher()
     monkeypatch.setattr(robots, "download", fetcher)
     r = robots.Robots()
-    waits = [asyncio.ensure_future(r.rules(object(), "http://a.test")) for _ in range(100)]
+    waits = [asyncio.ensure_future(r.rules(_tab(), "http://a.test")) for _ in range(100)]
     await asyncio.sleep(0)
     fetcher.release.set()
     assert all(x is robots.ALLOW_ALL for x in await asyncio.gather(*waits))
     assert fetcher.calls == ["http://a.test"]
-    await r.rules(object(), "http://a.test")  # cached
+    await r.rules(_tab(), "http://a.test")  # cached
     assert fetcher.calls == ["http://a.test"]
 
 
-async def test_the_starter_being_cancelled_does_not_cancel_the_others(monkeypatch):
+async def test_the_starter_being_cancelled_does_not_cancel_the_others(frames, monkeypatch):
     fetcher = _Fetcher()
     monkeypatch.setattr(robots, "download", fetcher)
     r = robots.Robots()
-    first = asyncio.ensure_future(r.rules(object(), "http://a.test"))
+    first = asyncio.ensure_future(r.rules(_tab(), "http://a.test"))
     await asyncio.sleep(0)
-    second = asyncio.ensure_future(r.rules(object(), "http://a.test"))
+    second = asyncio.ensure_future(r.rules(_tab(), "http://a.test"))
     await asyncio.sleep(0)
     first.cancel()
     await asyncio.sleep(0)
@@ -289,78 +324,87 @@ async def test_the_starter_being_cancelled_does_not_cancel_the_others(monkeypatc
     assert fetcher.calls == ["http://a.test"]
 
 
-async def test_a_cancelled_lone_caller_still_fills_the_cache(monkeypatch):
+async def test_a_cancelled_lone_caller_still_fills_the_cache(frames, monkeypatch):
     fetcher = _Fetcher()
     monkeypatch.setattr(robots, "download", fetcher)
     r = robots.Robots()
-    first = asyncio.ensure_future(r.rules(object(), "http://a.test"))
+    first = asyncio.ensure_future(r.rules(_tab(), "http://a.test"))
     await asyncio.sleep(0)
     first.cancel()
     fetcher.release.set()
     await asyncio.sleep(0.01)
-    await r.rules(object(), "http://a.test")
+    await r.rules(_tab(), "http://a.test")
     assert fetcher.calls == ["http://a.test"]
 
 
-async def test_a_gone_tab_is_not_cached_and_the_waiter_retries_with_its_own(monkeypatch):
-    tabs: list = []
+async def test_a_hidden_target_that_went_is_opened_again(frames, monkeypatch):
+    seen: list = []
 
-    async def download(tab, origin, agent):
-        tabs.append(tab)
-        if len(tabs) == 1:
-            await asyncio.sleep(0.01)
-            raise ConnectionError("the tab closed")
+    async def download(frame, origin, agent):
+        seen.append(frame)
+        if len(seen) == 1:
+            raise ConnectionError("the hidden target closed")
         return robots.DISALLOW_ALL, robots.CACHE_TTL
 
     monkeypatch.setattr(robots, "download", download)
     r = robots.Robots()
-    mine, other = object(), object()
-    first = asyncio.ensure_future(r.rules(mine, "http://a.test"))
-    await asyncio.sleep(0)
-    second = asyncio.ensure_future(r.rules(other, "http://a.test"))
-    with pytest.raises(ConnectionError):
-        await first
-    assert await second is robots.DISALLOW_ALL
-    assert tabs == [mine, other]
+    assert await r.rules(_tab(), "http://a.test") is robots.DISALLOW_ALL
+    assert len(frames) == 2 and seen == frames
 
 
-async def test_entries_expire(monkeypatch):
+async def test_one_hidden_target_per_context(frames, monkeypatch):
+    fetcher = _Fetcher()
+    fetcher.release.set()
+    monkeypatch.setattr(robots, "download", fetcher)
+    r = robots.Robots()
+    browser = _browser()
+    plain, other = _tab(browser), _tab(browser, context="C1")
+    await asyncio.gather(r.rules(plain, "http://a.test"), r.rules(plain, "http://b.test"))
+    await r.rules(other, "http://a.test")  # another context: its own entry
+    assert sorted(fetcher.calls) == ["http://a.test", "http://a.test", "http://b.test"]
+    assert [ctx for ctx, _ in frames_of(frames)] == ["", "C1"]
+    r.forget_context("C1")
+    await r.rules(other, "http://c.test")
+    assert [ctx for ctx, _ in frames_of(frames)] == ["", "C1", "C1"]
+
+
+async def test_entries_expire(frames, monkeypatch):
     clock = [1000.0]
     monkeypatch.setattr(robots, "_now", lambda: clock[0])
     fetcher = _Fetcher()
     fetcher.release.set()
     monkeypatch.setattr(robots, "download", fetcher)
     r = robots.Robots()
-    await r.rules(object(), "http://a.test")
+    await r.rules(_tab(), "http://a.test")
     clock[0] += robots.CACHE_TTL - 1
-    await r.rules(object(), "http://a.test")
+    await r.rules(_tab(), "http://a.test")
     assert len(fetcher.calls) == 1
     clock[0] += 2
-    await r.rules(object(), "http://a.test")
+    await r.rules(_tab(), "http://a.test")
     assert len(fetcher.calls) == 2
 
 
-async def test_the_cache_keeps_the_most_recent_origins(monkeypatch):
+async def test_the_cache_keeps_the_most_recent_origins(frames, monkeypatch):
     fetcher = _Fetcher()
     fetcher.release.set()
     monkeypatch.setattr(robots, "download", fetcher)
     r = robots.Robots()
     for i in range(robots.CACHE_SIZE):
-        await r.rules(object(), f"http://{i}.test")
-    await r.rules(object(), "http://0.test")  # used again: now the newest
-    await r.rules(object(), "http://new.test")  # pushes out the oldest, 1.test
+        await r.rules(_tab(), f"http://{i}.test")
+    await r.rules(_tab(), "http://0.test")  # used again: now the newest
+    await r.rules(_tab(), "http://new.test")  # pushes out the oldest, 1.test
     count = len(fetcher.calls)
-    await r.rules(object(), "http://0.test")
+    await r.rules(_tab(), "http://0.test")
     assert len(fetcher.calls) == count
-    await r.rules(object(), "http://1.test")
+    await r.rules(_tab(), "http://1.test")
     assert len(fetcher.calls) == count + 1
 
 
-async def test_close_cancels_the_downloads_in_flight(monkeypatch):
+async def test_close_cancels_the_downloads_in_flight(frames, monkeypatch):
     fetcher = _Fetcher()
     monkeypatch.setattr(robots, "download", fetcher)
     r = robots.Robots()
-    waiter = asyncio.ensure_future(r.rules(object(), "http://a.test"))
+    waiter = asyncio.ensure_future(r.rules(_tab(), "http://a.test"))
     await asyncio.sleep(0)
     r.close()
     with pytest.raises(ConnectionError):
@@ -370,17 +414,17 @@ async def test_close_cancels_the_downloads_in_flight(monkeypatch):
 async def test_check_without_the_flag_downloads_nothing(monkeypatch):
     fetcher = _Fetcher()
     monkeypatch.setattr(robots, "download", fetcher)
-    await robots.Robots(respect=False).check(object(), "http://a.test/private")
+    await robots.Robots(respect=False).check(_tab(), "http://a.test/private")
     assert fetcher.calls == []
 
 
-async def test_check_raises_for_a_disallowed_path(monkeypatch):
+async def test_check_raises_for_a_disallowed_path(frames, monkeypatch):
     fetcher = _Fetcher(parse("User-agent: *\nDisallow: /private\n"))
     fetcher.release.set()
     monkeypatch.setattr(robots, "download", fetcher)
     r = robots.Robots(respect=True)
-    await r.check(object(), "http://a.test/public")
+    await r.check(_tab(), "http://a.test/public")
     with pytest.raises(robots.RobotsDisallowedError, match="robots.txt of http://a.test"):
-        await r.check(object(), "http://a.test/private/x")
-    await r.check(object(), "about:blank")
+        await r.check(_tab(), "http://a.test/private/x")
+    await r.check(_tab(), "about:blank")
     assert fetcher.calls == ["http://a.test"]

@@ -7,6 +7,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Browser.launch(respect_robots=True, robots_agent="*")`: `Tab.get`, `Browser.get`,
+  `Browser.new_tab(url)` and `BrowserContext.new_tab(url)` raise `RobotsDisallowedError` (a
+  `NavigationError`, exported from `tellurium`; message `robots.txt of <origin> disallows
+  <path>`) for a URL the site's robots.txt disallows, before any request; the blank tab
+  `new_tab` made for it is closed. `await tab.is_allowed(url)` answers with or without the
+  flag. robots.txt is parsed per RFC 9309 (groups by product token, longest match wins,
+  `allow` wins a tie, `*` and `$`, percent-encoding normalised, first 500 KiB) and loaded by
+  Chrome with `Network.loadNetworkResource` from a hidden `about:blank` target of the tab's
+  browser context (same proxy, IP and TLS as the navigation; no cookies), once per origin
+  and context for 24 h (LRU of 256), one download at a time even for a hundred concurrent
+  calls. 2xx: its rules; 4xx: everything allowed; 5xx, network error or no answer within
+  10 s: everything disallowed, asked again after 60 s. Clicks, redirects and navigations
+  started by the page are not checked; `Crawl-delay` is ignored. Without the flag no
+  navigation requests robots.txt.
 - `Session.start(..., on_login_failure="raise"|"manual")`. `"raise"` (default) keeps the
   errors as they were; `"manual"` hands the browser to a person when validation fails with
   no `@session.login`, or the login callback raises: a headless Chrome is closed (its cookie

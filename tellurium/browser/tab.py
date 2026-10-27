@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from tellurium.browser import human, keys, window
+from tellurium.browser import human, keys, robots, window
 from tellurium.browser.dialog import DialogGuard, DialogHandler
 from tellurium.browser.download import DownloadWaiter, TabFrames
 from tellurium.browser.element import Element, css_selector
@@ -168,9 +168,12 @@ class Tab:
         A same-document navigation (``#fragment``) returns right away: there
         is no new document to wait for. *timeout* covers the whole navigation;
         on expiry :class:`NavigationTimeoutError` (a ``TimeoutError``) names
-        the URL and the phase. A refused navigation raises ``NavigationError``.
+        the URL and the phase. A refused navigation raises ``NavigationError``;
+        with ``Browser.launch(respect_robots=True)`` a URL robots.txt disallows
+        raises :class:`RobotsDisallowedError` before any request.
         """
         check_wait_until(wait_until)
+        timeout = await robots.guard(self, url, timeout)
         info = await navigate(
             self._session,
             url,
@@ -186,6 +189,12 @@ class Tab:
             # Design doc 05: navigate -> click / navigate -> type carry their
             # own (longer) transition delays.
             self._action_timer.mark("navigate")
+
+    async def is_allowed(self, url: str) -> bool:
+        """Whether the site's robots.txt lets *url* be crawled, with or without
+        ``respect_robots``: robots.txt is loaded through this tab (once per
+        origin per day). Use it before following a link or clicking."""
+        return await robots.of(self._browser).allowed(self, url)
 
     async def _enable_lifecycle_events(self) -> None:
         if self._lifecycle_enabled:
