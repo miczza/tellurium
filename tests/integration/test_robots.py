@@ -146,14 +146,37 @@ async def test_load_network_resource_has_the_navigation_user_agent():
     assert robots and robots == page
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Network.loadNetworkResource sends Chrome's own User-Agent, not the "
-    "per-tab Emulation.setUserAgentOverride of stealth (docs/decisioni.md, T8-B)",
+HINTS = ("sec-ch-ua", "sec-ch-ua-platform", "sec-ch-ua-mobile")
+_WORKER_UA = (
+    "new Promise(r => { const w = new Worker(URL.createObjectURL(new Blob("
+    "['postMessage(navigator.userAgent)']))); w.onmessage = e => r(e.data); })"
 )
-async def test_load_network_resource_has_the_stealth_user_agent():
-    robots, page = await _user_agents(stealth=True)
-    assert robots == page
+
+
+@pytest.mark.parametrize("headless", [True, False], ids=["headless", "headed"])
+async def test_robots_txt_has_the_stealth_user_agent_of_the_page(headless):
+    """With stealth, robots.txt (loaded by Robots from its hidden target) leaves
+    with the User-Agent of the page loaded right after it, and no client hint
+    contradicts the page's. Served straight from 127.0.0.1, a secure context,
+    so the page does send its client hints."""
+    async with SiteProxy({"/robots.txt": (200, TEXT, ROBOTS)}) as site:
+        browser = await Browser.launch(headless=headless, stealth=True)
+        try:
+            tab = await browser.new_tab()
+            assert await tab.is_allowed(site.url + "/public")
+            await tab.get(site.url + "/page", timeout=15)
+            main = await tab.eval("navigator.userAgent")
+            brands = await tab.eval("navigator.userAgentData.brands.map(b => b.brand)")
+            worker = await tab.eval(_WORKER_UA)
+        finally:
+            await browser.close()
+    seen = {line.split(" ")[1]: h for line, h in site.seen}
+    robots, page = seen["/robots.txt"], seen["/page"]
+    assert "HeadlessChrome" not in robots["user-agent"]
+    assert robots["user-agent"] == page["user-agent"] == main == worker
+    assert page["sec-ch-ua"] and "Google Chrome" in brands
+    for hint in HINTS:  # loadNetworkResource sends none (docs/decisioni.md)
+        assert robots.get(hint) in (None, page[hint]), hint
 
 
 TEXT = {"Content-Type": "text/plain"}

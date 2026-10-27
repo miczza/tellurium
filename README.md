@@ -1118,8 +1118,9 @@ if await tab.is_allowed("https://example.com/search?q=x"):
   concurrent `get` to one site make a single request. 2xx: its rules; 4xx: everything is
   allowed; 5xx, a network error or no answer within 10 s: everything is disallowed, and
   robots.txt is asked again after a minute.
-- Its `User-Agent` is Chrome's own, not a `stealth=True` override (that one only applies
-  to the page's requests): headless, it says `HeadlessChrome`.
+- With `stealth=True` it carries the pages' `User-Agent` (Chrome is launched with the
+  profile's); it sends no `Sec-CH-UA*` client hints, which Chrome adds to page requests
+  only. Without stealth it is Chrome's own (`HeadlessChrome` when headless).
 - Without `respect_robots` no navigation ever requests robots.txt; `is_allowed` still
   does, once per origin.
 - `tellurium mcp --respect-robots` does the same for the agent: `navigate` and `tab-open`

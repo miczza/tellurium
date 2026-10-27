@@ -325,6 +325,12 @@ class Browser(CookieJar):
                     manual["accept_language"] = build_accept_language(languages)
                 if manual:
                     stealth_profile = dataclasses.replace(stealth_profile, **manual)
+                # The UA goes on the command line too (step 7): it needs the
+                # binary's version now, before Browser.getVersion can tell.
+                if found := await asyncio.to_thread(_detect_chrome_version, chrome_path):
+                    stealth_profile = stealth_profile.with_browser_version(
+                        ".".join(map(str, found))
+                    )
 
                 stealth_engine = StealthEngine(
                     engine,
@@ -363,6 +369,10 @@ class Browser(CookieJar):
                 stealth_flags.append(f"--window-size={int(viewport[0])},{int(viewport[1])}")
 
             if stealth and stealth_engine is not None:
+                # What the browser process loads itself (robots.txt) gets no
+                # Emulation.setUserAgentOverride: only this flag reaches it.
+                if not any(a.startswith("--user-agent=") for a in args or []):
+                    stealth_flags.append("--user-agent=" + stealth_profile.user_agent)
                 ext_path = stealth_engine.build_extension()
                 if ext_path or user_exts:
                     stealth_flags.append(

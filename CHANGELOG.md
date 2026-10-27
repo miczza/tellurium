@@ -370,6 +370,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- With `stealth=True` Chrome is launched with `--user-agent=<profile User-Agent>` (the
+  profile aligned first with the binary's `--version`), so what the browser process loads
+  itself, such as robots.txt, carries the same User-Agent as the pages instead of
+  `HeadlessChrome/…`. A `--user-agent` in `args` wins.
+
 - Internal: `Tab.screenshot` and its full-page helpers moved to `tellurium/browser/screenshot.py`,
   the `Browser` cookie methods to the `CookieJar` mixin in `tellurium/browser/cookie_jar.py`.
   No behaviour change; `Tab.screenshot` and `Browser.get_cookies` & co. are where they were.
