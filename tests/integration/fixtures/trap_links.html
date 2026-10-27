@@ -91,6 +91,22 @@
     <div style="height: 200px;"></div>
     <a id="ok-scroller" href="/scrolled">In a scroll box</a>
   </div>
+  <div style="width: 300px; overflow-x: auto;">
+    <div style="display: flex; gap: 16px;">
+      <a id="ok-slide-first" href="/slide/1" style="flex: 0 0 280px;">First slide</a>
+      <a href="/slide/2" style="flex: 0 0 280px;">Second slide</a>
+      <a href="/slide/3" style="flex: 0 0 280px;">Third slide</a>
+      <a href="/slide/4" style="flex: 0 0 280px;">Fourth slide</a>
+      <a id="ok-slide-last" href="/slide/5" style="flex: 0 0 280px;">Last slide</a>
+    </div>
+  </div>
+  <div style="width: 100vw; overflow-x: auto;">
+    <div style="display: flex;">
+      <a href="/wide/1" style="flex: 0 0 90vw;">Wide slide</a>
+      <a href="/wide/2" style="flex: 0 0 90vw;">Second wide slide</a>
+      <a id="ok-slide-wide" href="/wide/3" style="flex: 0 0 90vw;">Next wide slide</a>
+    </div>
+  </div>
   <div class="menu-open"><ul><li><a id="ok-menu-open" href="/menu/open">Open menu item</a></li></ul></div>
   <details open><summary>More</summary><a id="ok-details-open" href="/more">More item</a></details>
 </section>

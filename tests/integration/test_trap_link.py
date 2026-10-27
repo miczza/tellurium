@@ -63,6 +63,9 @@ NORMAL = [
     "ok-hero-shade",
     "ok-triangle",
     "ok-scroller",
+    "ok-slide-first",
+    "ok-slide-last",
+    "ok-slide-wide",
     "ok-menu-open",
     "ok-details-open",
     "ok-skip",
@@ -149,3 +152,13 @@ async def test_without_an_isolated_world_the_check_refuses_to_run(page, monkeypa
     with pytest.raises(trap_link.NoIsolatedWorldError):
         await trap_link.reasons(await page.select("#trap-left"))
     assert await page.eval("window.__touched") == 0
+
+
+async def test_reach_is_that_of_the_box_that_scrolls(browser, local_server):
+    """An app scrolling in its own box under a root that never scrolls (``html, body
+    {overflow: hidden}``): what that box, or a fixed sidebar, scrolls to is on the page."""
+    tab = await browser.new_tab(f"{local_server}/trap_spa.html")
+    links = ["ok-spa-top", "ok-spa-slide", "ok-spa-below", "ok-side-below"]
+    links += ["trap-spa-before", "trap-spa-outside"]
+    expected = {link: ["off-page"] if link.startswith("trap") else [] for link in links}
+    assert await _reasons(tab, links) == expected

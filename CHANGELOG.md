@@ -14,7 +14,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `honeypot-marker`, `nofollow` next to another one); `clipped` reads `overflow`, `clip`
   and basic-shape `clip-path`s (`inset()`, `circle(0)`, `ellipse()`, a `polygon()` of no
   area); `same-color` only where the background is known (not over a hero image, a
-  gradient or an overlay). Below the fold, image links with
+  gradient or an overlay); `off-page` follows every box that scrolls the link, so a link
+  below the fold of an app scrolling in its own box, or a further slide of a carousel, is
+  reachable. Below the fold, image links with
   `alt`, icons with `aria-label`, open menus and skip links brought back by a `:focus`
   rule are not traps; a link of a closed menu is. One `Runtime.callFunctionOn` in the
   isolated world of the link's frame (OOPIFs included): no main-world call, global, node

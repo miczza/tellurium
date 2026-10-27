@@ -789,7 +789,7 @@ wears a honeypot marker. The signals `trap_link.reasons(link)` names:
 | `visibility-hidden` | `visibility: hidden` / `collapse` |
 | `transparent` | `opacity: 0` on it or an ancestor |
 | `zero-size` | under 2 CSS px wide or tall (`width: 0`, `1px`, `scale(0)`), content that overflows visibly included |
-| `off-page` | wholly outside the scrollable document (`left: -9999px`), or outside the viewport when `position: fixed` or along an axis the page does not scroll (`overflow: hidden` on the root, as while a modal is open) |
+| `off-page` | wholly outside what scrolling can reach (`left: -9999px`), or outside the viewport when `position: fixed` or along an axis the page does not scroll (`overflow: hidden` on the root, as while a modal is open). The reach is that of every box that scrolls the link, inner to outer: an app scrolling in its own box under `html, body { overflow: hidden }` and a carousel with `overflow-x: auto` are reachable |
 | `clipped` | nothing left inside the ancestors that clip it (`overflow: hidden` on a 0-height box, `clip`, a `clip-path` that leaves nothing: `inset(50%)`, `circle(0)`, `ellipse(0 0)`, a `polygon()` of no area) |
 | `empty` | nothing to see in its box: no text (or text pushed out by `text-indent`), image, icon, pseudo-element, background, border |
 | `same-color` | all its text transparent or the color of the background behind it; not when that background cannot be told (an image, a gradient, an overlay or another element under the text, as in a hero banner) |
@@ -800,7 +800,7 @@ wears a honeypot marker. The signals `trap_link.reasons(link)` names:
 | `nofollow` | `rel="nofollow"`, reported only next to another signal |
 
 Not traps: a link below the fold (it is the document that counts, not the
-viewport), inside a scrollable box, an image link with `alt`, an icon with
+viewport), inside a scrollable box or a slide of a scrollable carousel, an image link with `alt`, an icon with
 `aria-label`, a link in a `<nav>` or an open menu, a visible `rel="nofollow"` link,
 and a "skip to content" link that a `:focus` rule brings back on screen.
 

@@ -19,10 +19,13 @@ signals that fired:
     less than 2 CSS px wide or tall, its overflowing content included unless it
     clips it;
 ``off-page``
-    wholly outside the scrollable document (``left: -9999px``), or outside the
-    viewport when ``position: fixed`` or along an axis the page does not scroll
-    (``overflow: hidden`` on the root, as while a modal is open); below the fold
-    is not off-page;
+    wholly outside what scrolling can reach: before the scroll origin of the page or
+    of the box that scrolls it (``left: -9999px``), outside the viewport when
+    ``position: fixed`` or along an axis the page does not scroll (``overflow:
+    hidden`` on the root, as while a modal is open). The reach is that of each box
+    that scrolls, inner to outer: below the fold of the page, of an app that
+    scrolls in a box of its own under a root that does not, or a slide further
+    along a carousel is not off-page;
 ``clipped``
     nothing of it left inside the boxes of the ancestors that clip it
     (``overflow: hidden``, ``clip``, a ``clip-path`` basic shape: ``inset()``,
@@ -176,40 +179,70 @@ function () {
         if (['top', 'bottom'].includes(x) || ['left', 'right'].includes(y)) [x, y] = [y, x];
         return [r.left + exact(word[x] || x, r.width), r.top + exact(word[y] || y, r.height)];
     }
-    let vis = shape(el, own, {...area});
+    // The boxes that hold the link, inner to outer. One that clips cuts what is left
+    // of it; one that scrolls brings what lies in its scrollable overflow into its own
+    // box (a slide of a carousel, a row below the fold of an app that scrolls in a box
+    // of its own) and leaves out what lies before its scroll origin. The root comes last.
+    const html = doc.documentElement, body = doc.body;
+    const owner = css(html).overflowX === 'visible' && css(html).overflowY === 'visible' && body ? body : html;
+    const scrolls = (v) => v === 'auto' || v === 'scroll';
+    const axes = [['overflowX', 'l', 'r'], ['overflowY', 't', 'b']];
+    // shift: how far scrolling the boxes would move the link, to place its text in vis.
+    let vis = shape(el, own, {...area}), off = false;
+    const shift = {l: 0, t: 0};
+    const hold = (n, s) => {
+        const r = n.getBoundingClientRect();
+        const pad = {l: r.left + n.clientLeft, t: r.top + n.clientTop};
+        pad.r = pad.l + n.clientWidth;
+        pad.b = pad.t + n.clientHeight;
+        const span = {t: pad.t - n.scrollTop, b: pad.t - n.scrollTop + n.scrollHeight};
+        span.l = s.direction === 'rtl' ? pad.r - n.scrollLeft - n.scrollWidth : pad.l - n.scrollLeft;
+        span.r = span.l + n.scrollWidth;
+        for (const [axis, lo, hi] of axes) {
+            const scrolled = scrolls(s[axis]);
+            if (!scrolled && !clips(s[axis])) continue;
+            const room = scrolled ? span : pad;
+            if (vis[hi] <= room[lo] || vis[lo] >= room[hi]) {
+                if (scrolled || n === body) off = true;  // the page itself does not scroll there
+                vis[hi] = vis[lo];
+                continue;
+            }
+            const inside = Math.min(vis[hi], pad[hi]) - Math.max(vis[lo], pad[lo]);
+            if (!scrolled || inside >= MIN) {
+                vis[lo] = Math.max(vis[lo], pad[lo]);
+                vis[hi] = Math.min(vis[hi], pad[hi]);
+            } else {  // scrolled into view: as much of it as the box can show
+                const from = Math.max(vis[lo], span[lo]), length = Math.min(vis[hi], span[hi]) - from;
+                shift[lo] += pad[lo] - from;
+                vis[lo] = pad[lo];
+                vis[hi] = pad[lo] + Math.min(length, pad[hi] - pad[lo]);
+            }
+        }
+    };
     let abs = own.position === 'absolute', fixed = own.position === 'fixed';
-    for (let n = up(el); n && !fixed; n = up(n)) {
+    for (let n = up(el); n && !fixed && !off && !small(vis); n = up(n)) {
         const s = css(n);
         if (s.display === 'contents') continue;
         const positioned = s.position !== 'static';
         if (abs && !positioned) continue;
-        if (n !== doc.documentElement && n !== doc.body) {
-            const r = n.getBoundingClientRect();
-            if (clips(s.overflowX)) { vis.l = Math.max(vis.l, r.left); vis.r = Math.min(vis.r, r.right); }
-            if (clips(s.overflowY)) { vis.t = Math.max(vis.t, r.top); vis.b = Math.min(vis.b, r.bottom); }
-        }
+        if (n !== html && n !== owner) hold(n, s);
         vis = shape(n, s, vis);
         abs = s.position === 'absolute';
         fixed = s.position === 'fixed';
     }
     // The page a person can scroll over, in viewport coordinates: the viewport alone
-    // for a fixed link, or along an axis the root does not let scroll (overflow: hidden).
-    const pinned = chain.some((n) => css(n).position === 'fixed');
-    const page = doc.scrollingElement || doc.documentElement;
-    const root = css(doc.documentElement);
-    const stuck = (axis) => pinned || clips(
-        root[axis] === 'visible' && doc.body ? css(doc.body)[axis] : root[axis]
-    );
-    const reach = (axis, scrolled, view, whole) => (
-        stuck(axis) ? [0, view] : [-scrolled, Math.max(whole, view) - scrolled]
+    // for a fixed box, or along an axis the root does not let scroll (overflow: hidden).
+    const page = doc.scrollingElement || html, view = css(owner);
+    const reach = (axis, scrolled, size, whole) => (
+        fixed || clips(view[axis]) ? [0, size] : [-scrolled, Math.max(whole, size) - scrolled]
     );
     const [x0, x1] = reach('overflowX', win.scrollX, win.innerWidth, page.scrollWidth);
     const [y0, y1] = reach('overflowY', win.scrollY, win.innerHeight, page.scrollHeight);
+    if (!off && !small(vis) && (vis.r <= x0 || vis.b <= y0 || vis.l >= x1 || vis.t >= y1)) off = true;
     let geometry = null;
     if (small(area)) geometry = 'zero-size';
-    else if (area.r <= x0 || area.b <= y0 || area.l >= x1 || area.t >= y1) {
-        geometry = 'off-page';
-    } else if (small(vis)) geometry = 'clipped';
+    else if (off) geometry = 'off-page';
+    else if (small(vis)) geometry = 'clipped';
 
     const hidden = geometry || out.includes('transparent');
     if (hidden && revealedOnFocus()) {
@@ -229,7 +262,8 @@ function () {
         if (p.length < 3 || p.some(isNaN)) return null;
         return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
     };
-    const sees = (r) => r.width > 0 && r.height > 0 && !small(meet(rect(r), vis));
+    const moved = (r) => ({l: r.l + shift.l, t: r.t + shift.t, r: r.r + shift.l, b: r.b + shift.t});
+    const sees = (r) => r.width > 0 && r.height > 0 && !small(meet(moved(rect(r)), vis));
     const runs = [], glyphs = [];
     const walker = doc.createTreeWalker(el, NodeFilter.SHOW_TEXT);
     for (let i = 0; i < CAP && walker.nextNode(); i++) {
