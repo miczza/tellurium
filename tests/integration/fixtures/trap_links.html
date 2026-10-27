@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>trap links</title>
+<script>
+  // Every main-world reading the check could make is counted: it must make none.
+  window.__touched = 0;
+  window.__mutations = 0;
+  const count = (proto, name) => {
+    const real = proto[name];
+    proto[name] = function (...args) { window.__touched++; return real.apply(this, args); };
+  };
+  count(window, "getComputedStyle");
+  count(Element.prototype, "getBoundingClientRect");
+  count(Element.prototype, "getClientRects");
+  count(Element.prototype, "checkVisibility");
+  count(Element.prototype, "matches");
+  count(Element.prototype, "getAttribute");
+  count(Element.prototype, "hasAttribute");
+  count(Range.prototype, "getClientRects");
+  count(Document.prototype, "createRange");
+  count(Document.prototype, "createTreeWalker");
+  new MutationObserver((records) => { window.__mutations += records.length; })
+    .observe(document, {subtree: true, childList: true, attributes: true, characterData: true});
+</script>
+<style>
+  body { margin: 0; font: 16px sans-serif; }
+  section { padding: 8px; }
+  .menu-closed ul { display: none; }
+  .menu-open ul { display: block; }
+  .icon::before { content: "\2315"; }
+  .skip { position: absolute; left: -9999px; top: 0; }
+  .skip:focus { left: 0; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap;
+  }
+  .sr-only:focus-visible { position: static; width: auto; height: auto; clip: auto; }
+  .logo {
+    display: block; width: 120px; height: 40px; overflow: hidden; text-indent: -9999px;
+    background-image: linear-gradient(#36c, #69f);
+  }
+  .beige { background: #f5f5dc; }
+</style>
+</head>
+<body>
+<a id="ok-skip" class="skip" href="#main">Skip to content</a>
+<a id="ok-sr-skip" class="sr-only" href="#main">Skip to main</a>
+
+<nav id="topnav" style="position: fixed; top: 0; right: 0; background: #eee;">
+  <a id="ok-fixed" href="/account">Account</a>
+</nav>
+
+<nav>
+  <a id="ok-nav" href="/home">Home</a>
+  <a href="/about">About</a>
+</nav>
+
+<main id="main">
+<section>
+  <p>Read the <a id="ok-plain" href="/docs">documentation</a> first.</p>
+  <p><a id="ok-nofollow" rel="nofollow" href="/comment/1">user link</a></p>
+  <p><a id="ok-image" href="/brand"><img alt="Brand" width="48" height="24"
+    src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='24'%3E%3Crect width='48' height='24' fill='%2336c'/%3E%3C/svg%3E"></a></p>
+  <p><a id="ok-icon" href="/settings" aria-label="Settings"><svg width="16" height="16"
+    viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="#333"/></svg></a></p>
+  <p><a id="ok-icon-font" href="/search" aria-label="Search"><i class="icon"></i></a></p>
+  <p><a id="ok-button" href="/signup"
+    style="color: #fff; background: #0055aa; padding: 4px 8px;">Sign up</a></p>
+  <p><a id="ok-gray" href="/terms" style="color: #aaa;">Terms</a></p>
+  <p><a id="ok-honey" href="/shop/honey-pots">Honey pots</a></p>
+  <a id="ok-block" href="/card"><div>Card title</div></a>
+  <p><a id="ok-overflow" href="/overflow"
+    style="display: block; width: 0; height: 0; white-space: nowrap;">Overflowing text</a></p>
+  <a id="ok-logo" class="logo" href="/">Company</a>
+  <div style="height: 40px; overflow: auto;">
+    <div style="height: 200px;"></div>
+    <a id="ok-scroller" href="/scrolled">In a scroll box</a>
+  </div>
+  <div class="menu-open"><ul><li><a id="ok-menu-open" href="/menu/open">Open menu item</a></li></ul></div>
+  <details open><summary>More</summary><a id="ok-details-open" href="/more">More item</a></details>
+</section>
+
+<section>
+  <a id="trap-display" href="/t/display" style="display: none;">display</a>
+  <div class="menu-closed"><ul><li><a id="trap-menu-closed" href="/t/menu">Closed menu</a></li></ul></div>
+  <details><summary>Less</summary><a id="trap-details" href="/t/details">Hidden item</a></details>
+  <a id="trap-visibility" href="/t/visibility" style="visibility: hidden;">visibility</a>
+  <div style="opacity: 0;"><a id="trap-opacity" href="/t/opacity">opacity</a></div>
+  <a id="trap-zero" href="/t/zero"
+    style="display: block; width: 0; height: 0; overflow: hidden;">zero</a>
+  <a id="trap-1px" href="/t/1px"
+    style="display: block; width: 1px; height: 1px; overflow: hidden;">one pixel</a>
+  <a id="trap-scale" href="/t/scale" style="display: inline-block; transform: scale(0);">scale</a>
+  <a id="trap-left" href="/t/left" style="position: absolute; left: -9999px;">left</a>
+  <a id="trap-top" href="/t/top" style="position: absolute; top: -9999px;">top</a>
+  <a id="trap-fixed-off" href="/t/fixed" style="position: fixed; left: -500px; top: 10px;">fixed</a>
+  <div style="height: 0; overflow: hidden;"><a id="trap-clipped" href="/t/clipped">clipped</a></div>
+  <a id="trap-clip-path" href="/t/clip-path" style="display: inline-block; clip-path: inset(50%);">clip-path</a>
+  <a id="trap-empty" href="/t/empty" style="display: inline-block; width: 40px; height: 20px;"></a>
+  <a id="trap-indent" href="/t/indent"
+    style="display: block; width: 100px; height: 20px; overflow: hidden; text-indent: -9999px;">indent</a>
+  <p><a id="trap-white" href="/t/white" style="color: #fff;">white on white</a></p>
+  <p class="beige"><a id="trap-beige" href="/t/beige" style="color: #f5f5dc;">beige on beige</a></p>
+  <p><a id="trap-transparent-text" href="/t/transparent" style="color: transparent;">transparent</a></p>
+  <p><a id="trap-aria" href="/t/aria" aria-hidden="true">aria hidden</a></p>
+  <div inert><a id="trap-inert" href="/t/inert">inert</a></div>
+  <p><a id="trap-pointer" href="/t/pointer" style="pointer-events: none;">no pointer</a></p>
+  <p><a id="trap-marker" class="nav-link honeypot" href="/t/marker">marker</a></p>
+  <a id="trap-nofollow" rel="nofollow" href="/t/nofollow" style="display: none;">nofollow</a>
+</section>
+</main>
+
+<div style="height: 3000px;"></div>
+<a id="ok-below-fold" href="/footer">Below the fold</a>
+</body>
+</html>

@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Links</title>
+<script>
+  // Main-world readings the check could make are counted: it must make none.
+  window.__touched = 0;
+  for (const [proto, name] of [[window, 'getComputedStyle'],
+      [Element.prototype, 'getBoundingClientRect'], [Element.prototype, 'checkVisibility']]) {
+    const real = proto[name];
+    proto[name] = function (...args) { window.__touched++; return real.apply(this, args); };
+  }
+</script>
+</head>
+<body>
+  <a href="/framed/visible">Visible link</a>
+  <a href="/framed/away" style="position: absolute; left: -9999px;">Hidden away</a>
+</body>
+</html>

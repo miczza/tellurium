@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from tellurium.browser import drag, geometry
 from tellurium.browser.handles import elements_from_array, handles_of, resolve_node, send_on_handle
+from tellurium.stealth import trap_link
 
 if TYPE_CHECKING:
     from tellurium.browser.tab import Tab
@@ -301,6 +302,11 @@ class Element:
             )
             or False
         )
+
+    async def is_trap_link(self) -> bool:
+        """Whether a person could not see or click this link now, or it wears a honeypot
+        marker; read in the isolated world (see :mod:`tellurium.stealth.trap_link`)."""
+        return await trap_link.is_trap_link(self)
 
     async def is_enabled(self) -> bool:
         return not (await self._call("function() { return this.disabled; }") or False)

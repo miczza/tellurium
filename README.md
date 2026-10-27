@@ -765,6 +765,52 @@ price = await el.xpath(".//span[@class='price']")   # None if no match
 prices = await el.xpath_all(".//span[@class='price']")
 ```
 
+#### Trap links
+
+A crawler that follows every `<a href>` also follows the links a site hides from
+people to catch bots. `is_trap_link()` tells them apart before you follow one:
+
+```python
+from tellurium.stealth import trap_link
+
+for link in await tab.select_all("a[href]"):
+    if await link.is_trap_link():
+        print(await link.attr("href"), await trap_link.reasons(link))  # e.g. ['off-page']
+        continue
+    ...  # a link a person could see and click
+```
+
+It is true when a person could not see or click the link **right now**, or when it
+wears a honeypot marker. The signals `trap_link.reasons(link)` names:
+
+| Signal | Fires on |
+|---|---|
+| `not-rendered` | `display: none` on it or an ancestor, a closed `<details>` |
+| `visibility-hidden` | `visibility: hidden` / `collapse` |
+| `transparent` | `opacity: 0` on it or an ancestor |
+| `zero-size` | under 2 CSS px wide or tall (`width: 0`, `1px`, `scale(0)`), content that overflows visibly included |
+| `off-page` | wholly outside the scrollable document (`left: -9999px`), or outside the viewport when `position: fixed` |
+| `clipped` | nothing left inside the ancestors that clip it (`overflow: hidden` on a 0-height box, `clip-path: inset(50%)`, `clip`) |
+| `empty` | nothing to see in its box: no text (or text pushed out by `text-indent`), image, icon, pseudo-element, background, border |
+| `same-color` | all its text transparent or the color of the background behind it |
+| `aria-hidden` | `aria-hidden="true"` on it or an ancestor, though still clickable |
+| `inert` | inside an `inert` subtree |
+| `no-pointer` | `pointer-events: none` |
+| `honeypot-marker` | `honeypot` in its `id`, `class` or `name` |
+| `nofollow` | `rel="nofollow"`, reported only next to another signal |
+
+Not traps: a link below the fold (it is the document that counts, not the
+viewport), inside a scrollable box, an image link with `alt`, an icon with
+`aria-label`, a link in a `<nav>` or an open menu, a visible `rel="nofollow"` link,
+and a "skip to content" link that a `:focus` rule brings back on screen.
+
+The check is conservative and has no thresholds to tune: a link of a **closed**
+menu is a trap (a person does not click it without opening the menu), so open the
+menu first if you mean to follow it. It runs as one call in the isolated world of
+the link's frame (cross-site iframes included): the page can neither see it nor
+fake what it reads, and no global, node or attribute is left behind. Only when
+that frame has no isolated world does it run in the page's own world.
+
 #### Custom JS
 
 ```python

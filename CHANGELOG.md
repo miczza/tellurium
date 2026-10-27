@@ -7,6 +7,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Element.is_trap_link()` and `tellurium.stealth.trap_link.reasons(element)`: whether a
+  person could not see or click a link right now, or it wears a honeypot marker, and which
+  signals fired (`not-rendered`, `visibility-hidden`, `transparent`, `zero-size`,
+  `off-page`, `clipped`, `empty`, `same-color`, `aria-hidden`, `inert`, `no-pointer`,
+  `honeypot-marker`, `nofollow` next to another one). Below the fold, image links with
+  `alt`, icons with `aria-label`, open menus and skip links brought back by a `:focus`
+  rule are not traps; a link of a closed menu is. One `Runtime.callFunctionOn` in the
+  isolated world of the link's frame (OOPIFs included): no main-world call, global, node
+  or attribute.
 - `Session.start(..., on_login_failure="raise"|"manual")`. `"raise"` (default) keeps the
   errors as they were; `"manual"` hands the browser to a person when validation fails with
   no `@session.login`, or the login callback raises: a headless Chrome is closed (its cookie

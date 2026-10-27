@@ -1,0 +1,62 @@
+"""Where ``trap_link.reasons`` runs its check: the isolated world, retried once."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from tellurium.browser.element import Element
+from tellurium.cdp.types import CDPError
+from tellurium.stealth import trap_link
+
+
+class _Session:
+    def __init__(self, *, stale_worlds=0, worlds=True):
+        self.calls: list[tuple[str, dict]] = []
+        self._stale, self._worlds, self._next = stale_worlds, worlds, 100
+
+    async def send(self, method, params, timeout=None):
+        self.calls.append((method, params))
+        if method == "DOM.describeNode":
+            return {"node": {"backendNodeId": 7}}
+        if method == "Page.createIsolatedWorld":
+            if not self._worlds:
+                raise CDPError("No frame for given id found", -32000)
+            self._next += 1
+            return {"executionContextId": self._next}
+        if method == "DOM.resolveNode":
+            if self._stale:
+                self._stale -= 1
+                raise CDPError("Cannot find context with specified id", -32000)
+            return {"object": {"objectId": f"iso-{params['executionContextId']}"}}
+        if method == "Runtime.callFunctionOn":
+            return {"result": {"type": "object", "value": ["empty"]}}
+        raise AssertionError(method)
+
+    def target(self) -> str:
+        return next(p["objectId"] for m, p in self.calls if m == "Runtime.callFunctionOn")
+
+
+def _element(session: _Session, cached_world: int | None = None) -> Element:
+    worlds = {} if cached_world is None else {"F": cached_world}
+    tab = SimpleNamespace(_session=session, _frame_id="F", _hsim_worlds=worlds)
+    return Element(session, tab, object_id="page-1")
+
+
+async def test_the_check_runs_on_the_node_resolved_in_the_isolated_world():
+    session = _Session()
+    assert await trap_link.reasons(_element(session)) == ["empty"]
+    assert session.target() == "iso-101"
+
+
+async def test_a_world_of_a_gone_document_is_replaced_once():
+    session = _Session(stale_worlds=1)
+    element = _element(session, cached_world=99)
+    assert await trap_link.is_trap_link(element) is True
+    assert session.target() == "iso-101"
+    assert element._tab._hsim_worlds == {"F": 101}
+
+
+async def test_without_an_isolated_world_the_check_runs_on_the_element_itself():
+    session = _Session(worlds=False)
+    assert await trap_link.reasons(_element(session)) == ["empty"]
+    assert session.target() == "page-1"
