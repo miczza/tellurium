@@ -396,3 +396,17 @@ async def test_mcp_respect_robots_refuses_navigate_and_tab_open(tmp_path):
             await _call(client, "navigate", targetId=tid, url=f"{site.url}/private/x")
         assert site.hits("/private") == 1
         assert site.hits("/robots.txt") == 1
+
+
+async def test_the_hidden_target_stays_out_of_the_window_when_headed():
+    async with SiteProxy({"/robots.txt": (200, TEXT, ROBOTS)}) as proxy:
+        browser = await Browser.launch(headless=False, proxy=proxy.url, respect_robots=True)
+        try:
+            tab = await browser.get("http://site.test/public", timeout=15)
+            assert not await tab.is_allowed("http://site.test/private")
+            infos = (await browser._router.root.send("Target.getTargets", {}))["targetInfos"]
+            pages = [i["targetId"] for i in infos if i["type"] == "page"]
+            assert pages == [t._target_id for t in browser.tabs]
+            assert any(i["type"] == "other" and i["url"] == "about:blank" for i in infos)
+        finally:
+            await browser.close()
