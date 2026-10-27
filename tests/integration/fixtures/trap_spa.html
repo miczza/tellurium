@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>trap links in a single-page app</title>
+<style>
+  /* The app scrolls in #app, not in the document: the root never scrolls. */
+  html, body { margin: 0; height: 100%; overflow: hidden; font: 16px sans-serif; }
+  #app { height: 100%; overflow: auto; }
+  .tall { height: 3000px; }
+  .side {
+    position: fixed; right: 0; top: 0; width: 160px; height: 120px;
+    overflow-y: auto; background: #eee;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <a id="ok-spa-top" href="/top">Top of the app</a>
+  <div style="width: 300px; overflow-x: auto;">
+    <div style="display: flex; width: 2400px;">
+      <a id="ok-spa-slide" href="/slide" style="margin-left: 2200px;">Last slide</a>
+    </div>
+  </div>
+  <a id="trap-spa-before" href="/t/before" style="position: relative; left: -5000px;">before</a>
+  <div class="tall"></div>
+  <a id="ok-spa-below" href="/below">Below the fold of the app</a>
+</div>
+<div id="outside" class="tall"></div>
+<a id="trap-spa-outside" href="/t/outside">Under an app that fills the page</a>
+<nav class="side">
+  <div class="tall"></div>
+  <a id="ok-side-below" href="/side">Down a fixed sidebar</a>
+</nav>
+</body>
+</html>

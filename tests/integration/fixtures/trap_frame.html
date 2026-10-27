@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Trap links in a frame</title></head>
+<body>
+  <h1>Host</h1>
+  <iframe id="child" title="Links frame" width="400" height="200"></iframe>
+  <script>
+    // ?oopif: the frame comes from localhost (another site), in its own renderer.
+    const host = location.search.includes('oopif') ? 'localhost' : location.hostname;
+    document.getElementById('child').src =
+      location.protocol + '//' + host + ':' + location.port + '/trap_frame_child.html';
+  </script>
+</body>
+</html>

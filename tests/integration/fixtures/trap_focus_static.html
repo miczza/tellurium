@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>trap links and focus rules, read and never applied</title>
+<script>
+  // Whatever applying a focus rule would set off is recorded: none of it may happen.
+  window.__events = [];
+  for (const type of ["focus", "blur", "focusin", "focusout", "scroll", "transitionrun",
+                      "transitionstart", "transitionend", "transitioncancel",
+                      "animationstart", "animationend"]) {
+    // The window itself gaining focus (the tab coming to the front) is not the check.
+    window.addEventListener(type, (e) => e.target !== window && window.__events.push(type), true);
+  }
+  // A sheet from another origin (localhost): its rules cannot be read.
+  const cross = document.createElement("link");
+  cross.rel = "stylesheet";
+  cross.href = location.protocol + "//localhost:" + location.port + "/trap_focus_cross.css";
+  document.head.appendChild(cross);
+</script>
+<style>
+  @import url("/trap_focus_import.css");
+  @font-face { font-family: Probe; src: url("/probe/font.woff2"); }
+  body { margin: 0; font: 16px sans-serif; }
+  .off { position: absolute; left: -9999px; top: 0; }
+  /* What a forced :focus would fetch and animate: an image, a font, a descendant. */
+  .off span { transition: color 0.3s; }
+  .loud:focus {
+    left: 0; background-image: url("/probe/focus.png"); font-family: Probe;
+  }
+  .loud:focus span { color: red; }
+  @media (min-width: 1px) { .media:focus { left: 8px; } }
+  @media (max-width: 1px) { .no-media:focus { left: 0; } }
+  .nested { &:focus { left: 0; } }
+  .inline:focus { left: 0; }
+  .wrap:focus .ancestor { left: 0; }
+  .shy:focus { left: -9000px; }
+  .panel { opacity: 0; }
+  .panel:focus-within { opacity: 1; }
+  .faint { opacity: 0; }
+  .faint:focus-within { color: red; }
+  @layer base { @supports (display: grid) { .layered:focus { left: 0 !important; } } }
+  .layered:focus { left: -9999px; }
+</style>
+</head>
+<body>
+<a id="ok-loud" class="off loud" href="#main"><span>Skip to content</span></a>
+<a id="ok-imported" class="off imported" href="#main">Imported skip</a>
+<a id="ok-media" class="off media" href="#main">Media skip</a>
+<a id="ok-nested" class="off nested" href="#main">Nested skip</a>
+<a id="trap-no-media" class="off no-media" href="/t/media">media that does not apply</a>
+<a id="trap-cross" class="off cross" href="/t/cross">only a cross-origin rule</a>
+<a id="trap-inline" class="inline" style="position: absolute; left: -9999px;" href="/t/inline">inline wins</a>
+<div class="wrap"><a id="trap-ancestor" class="off ancestor" href="/t/ancestor">focus on a div</a></div>
+<a id="trap-shy" class="off shy" href="/t/shy">still away</a>
+<div class="panel"><a id="ok-panel" href="#main">In a panel that shows on focus</a></div>
+<div class="faint"><a id="trap-faint" href="/t/faint">in a panel that stays transparent</a></div>
+<a id="ok-layered" class="off layered" href="#main">Layered skip</a>
+<main id="main"><p>Content</p></main>
+</body>
+</html>

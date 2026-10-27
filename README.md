@@ -765,6 +765,82 @@ price = await el.xpath(".//span[@class='price']")   # None if no match
 prices = await el.xpath_all(".//span[@class='price']")
 ```
 
+#### Trap links
+
+A crawler that follows every `<a href>` also follows the links a site hides from
+people to catch bots. `is_trap_link()` tells them apart before you follow one:
+
+```python
+from tellurium.stealth import trap_link
+
+for link in await tab.select_all("a[href]"):
+    if await link.is_trap_link():
+        print(await link.attr("href"), await trap_link.reasons(link))  # e.g. ['off-page']
+        continue
+    ...  # a link a person could see and click
+```
+
+It is true when a person could not see or click the link **right now**, or when it
+wears a honeypot marker. The signals `trap_link.reasons(link)` names:
+
+| Signal | Fires on |
+|---|---|
+| `not-rendered` | `display: none` on it or an ancestor, a closed `<details>` |
+| `visibility-hidden` | `visibility: hidden` / `collapse` |
+| `transparent` | under 5% of it showing: `opacity` and `filter: opacity()` of it and its ancestors multiplied (`opacity: 0`, `0.01`, `0.2` inside `0.2`), or a `mask-image` of gradients that are transparent throughout |
+| `zero-size` | under 2 CSS px wide or tall (`width: 0`, `1px`, `scale(0)`), content that overflows visibly included |
+| `off-page` | wholly outside what scrolling can reach (`left: -9999px`), or outside the viewport when `position: fixed` or along an axis the page does not scroll (`overflow: hidden` on the root, as while a modal is open). The reach is that of every box that scrolls the link, inner to outer: an app scrolling in its own box under `html, body { overflow: hidden }` and a carousel with `overflow-x: auto` are reachable |
+| `clipped` | nothing left inside the ancestors that clip it (`overflow: hidden` or `contain: paint`/`strict` on a 0-height box, `clip`, a `clip-path` that leaves nothing: `inset(50%)`, `circle(0)`, `ellipse(0 0)`, a `polygon()` of no area) |
+| `covered` | in the viewport, but no point of it is hit (`elementFromPoint`, as a click would be) on it or its content: a box on top of it, or `z-index: -1` under a block's background |
+| `empty` | nothing to see in its box: no text (or text pushed out by `text-indent`), image, icon, pseudo-element, background, border |
+| `same-color` | all its text transparent or the color of the background behind it; not when that background cannot be told (an image, a gradient, an overlay or another element under the text, as in a hero banner) |
+| `aria-hidden` | `aria-hidden="true"` on it or an ancestor, though still clickable |
+| `inert` | inside an `inert` subtree |
+| `no-pointer` | `pointer-events: none` |
+| `honeypot-marker` | `honeypot` in its `id`, `class` or `name` |
+| `nofollow` | `rel="nofollow"`, reported only next to another signal |
+
+Not traps: a link below the fold (it is the document that counts, not the
+viewport), inside a scrollable box or a slide of a scrollable carousel, an image link with `alt`, an icon with
+`aria-label`, a link in a `<nav>` or an open menu, a visible `rel="nofollow"` link,
+and a "skip to content" link that its `:focus`, `:focus-visible` or `:focus-within`
+rules bring back once a person tabs to it. Those rules are read from the page's
+style sheets (`@import`, `@media`, `@supports`, `@layer` and nested rules followed),
+never applied: no image or font they name is fetched, no transition starts, the
+focus does not move. What counts is the value they declare against what hides the
+link: `left`/`top` that put it back on the page, `clip: auto`, `clip-path: none`, a
+size or `font-size` again, an `opacity` above zero. So `a:focus { transform:
+translateY(-1px) }` brings back no hidden link, and a link stays a trap when the only
+rule that would show it is in a cross-origin sheet (it cannot be read), is beaten by
+an inline style, sits on an ancestor's `:focus` (only the link takes the focus), or
+when the link is out of the tab order (`tabindex="-1"`).
+
+The check is conservative and has one threshold, the 5% of `transparent`: a link of a **closed**
+menu is a trap (a person does not click it without opening the menu), so open the
+menu first if you mean to follow it. A link inside a frame a person cannot see (a
+0x0 `<iframe>`, one off the page, one in a transparent box, at any depth) is a trap
+too: each `<iframe>` up to the tab gets the same check and its signals join the
+link's. It runs as one call in the isolated world of the link's frame, plus one per
+`<iframe>` above it (cross-site iframes included): the page can neither see it nor
+fake what it reads, and no global, node or attribute is left behind. When that
+frame has no isolated world it raises `trap_link.NoIsolatedWorldError` instead of
+running where the page could see it.
+
+What it can still miss, or get wrong:
+
+- **Not looked at without a scroll**: a link covered by another box below the fold, or
+  inside a box that has to scroll to show it, is not hit-tested (scrolling would show).
+  A box painting over the link with `pointer-events: none` lets the hit-test through.
+- **Masks and shapes it cannot read**: a `mask-image: url(...)`, a `clip-path` with
+  `path()`, `url()` or `calc()`, text over an image or a gradient (no `same-color`).
+- **Focus rules, read not applied**: specificity against the other rules is not
+  computed (a `:focus` rule a more specific selector beats still counts), and a reveal
+  that goes through `transform`, `:has()`, a sibling's focus, `@container` or a script
+  is not seen: those links stay traps (false positives). A skip link whose only focus
+  rule is in a cross-origin sheet stays a trap too.
+- **Known false positives**: a `position: fixed` link inside an ancestor with a
+  `transform` (taken as fixed to the viewport); a link of a closed menu (by design).
+
 #### Custom JS
 
 ```python

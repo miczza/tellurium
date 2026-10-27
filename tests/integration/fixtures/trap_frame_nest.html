@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>A frame in a frame</title><style>body { margin: 0; } iframe { border: 0; }</style></head>
+<body>
+  <iframe width="300" height="80"></iframe>
+  <script>
+    const name = new URLSearchParams(location.search).get('name');
+    document.querySelector('iframe').src = 'trap_frame_link.html?name=' + name;
+  </script>
+</body>
+</html>

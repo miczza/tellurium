@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Links in hidden frames</title>
+<style>
+  body { margin: 0; }
+  iframe { border: 0; display: block; }
+</style>
+</head>
+<body>
+  <h1>Host</h1>
+  <iframe data-name="Shown" width="300" height="80"></iframe>
+  <iframe data-name="Zero" width="0" height="0"></iframe>
+  <iframe data-name="Away" width="300" height="80" style="position: absolute; left: -9999px;"></iframe>
+  <iframe data-name="Ghost" width="300" height="80" style="opacity: 0;"></iframe>
+  <div style="opacity: 0;">
+    <iframe data-name="Deep" data-page="trap_frame_nest.html" width="300" height="120"></iframe>
+  </div>
+  <script>
+    // ?oopif: the frames come from localhost (another site), each in its own renderer.
+    const host = location.search.includes('oopif') ? 'localhost' : location.hostname;
+    for (const frame of document.querySelectorAll('iframe')) {
+      const page = frame.dataset.page || 'trap_frame_link.html';
+      frame.src = location.protocol + '//' + host + ':' + location.port + '/' + page
+        + '?name=' + frame.dataset.name;
+    }
+  </script>
+</body>
+</html>

@@ -25,6 +25,32 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   10 s: everything disallowed, asked again after 60 s. Clicks, redirects and navigations
   started by the page are not checked; `Crawl-delay` is ignored. Without the flag no
   navigation requests robots.txt.
+- `Element.is_trap_link()` and `tellurium.stealth.trap_link.reasons(element)`: whether a
+  person could not see or click a link right now, or it wears a honeypot marker, and which
+  signals fired (`not-rendered`, `visibility-hidden`, `transparent`, `zero-size`,
+  `off-page`, `clipped`, `covered`, `empty`, `same-color`, `aria-hidden`, `inert`,
+  `no-pointer`, `honeypot-marker`, `nofollow` next to another one); `transparent` is
+  under 5% shown through `opacity` and `filter: opacity()` multiplied up the ancestors,
+  or a fully transparent `mask-image`; `covered` hit-tests the link where it shows in the
+  viewport (a box on top, `z-index: -1` under a block); `clipped` reads `overflow`,
+  `contain: paint`, `clip`
+  and basic-shape `clip-path`s (`inset()`, `circle(0)`, `ellipse()`, a `polygon()` of no
+  area); `same-color` only where the background is known (not over a hero image, a
+  gradient or an overlay); `off-page` follows every box that scrolls the link, so a link
+  below the fold of an app scrolling in its own box, or a further slide of a carousel, is
+  reachable. Below the fold, image links with `alt`, icons with `aria-label`, open menus
+  and skip links brought back by their focus rules are not traps; a link of a closed menu
+  is. The `:focus`, `:focus-visible` and `:focus-within` rules are read from the readable
+  sheets (`@import`, `@media`, `@supports`, `@layer`, nesting), never applied (nothing
+  fetched, no transition, no focus moved): their declared `left`/`top`, `clip`,
+  `clip-path`, size, `font-size` or `opacity` must undo what hides the link, so
+  `a:focus { transform: ... }` reveals nothing; a cross-origin sheet, an inline style that
+  wins or `tabindex="-1"` leave it a trap. One `Runtime.callFunctionOn` in the
+  isolated world of the link's frame (OOPIFs included), and one more for each `<iframe>` up
+  to the tab, checked like the link (a 0x0, off-page or transparent frame makes its links
+  traps): no main-world call, global, node
+  or attribute; `trap_link.NoIsolatedWorldError` when the frame has no isolated world. The
+  check is `tellurium/stealth/scripts/trap_link.js`, loaded like the other stealth scripts.
 - `Session.start(..., on_login_failure="raise"|"manual")`. `"raise"` (default) keeps the
   errors as they were; `"manual"` hands the browser to a person when validation fails with
   no `@session.login`, or the login callback raises: a headless Chrome is closed (its cookie
@@ -381,6 +407,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Internal: `Tab.screenshot` and its full-page helpers moved to `tellurium/browser/screenshot.py`,
   the `Browser` cookie methods to the `CookieJar` mixin in `tellurium/browser/cookie_jar.py`.
   No behaviour change; `Tab.screenshot` and `Browser.get_cookies` & co. are where they were.
+- `Element.drag_to` moved into `tellurium/browser/drag.py`; the method delegates to it,
+  behaviour unchanged.
 - Internal moves, no change in behaviour: the window controls of `Tab` (`set_viewport`,
   `maximize`, `minimize`, `bring_to_front`) live in `tellurium/browser/window.py`, and
   `tellurium update-cdp` in `tellurium/cdp/update_command.py`.
