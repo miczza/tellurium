@@ -1122,7 +1122,8 @@ if await tab.is_allowed("https://example.com/search?q=x"):
   profile's); it sends no `Sec-CH-UA*` client hints, which Chrome adds to page requests
   only. Without stealth it is Chrome's own (`HeadlessChrome` when headless).
 - Without `respect_robots` no navigation ever requests robots.txt; `is_allowed` still
-  does, once per origin.
+  does, once per origin. `is_allowed(url, timeout=30.0)` raises `NavigationTimeoutError`
+  past its timeout; the download goes on and fills the cache.
 - `tellurium mcp --respect-robots` does the same for the agent: `navigate` and `tab-open`
   answer "robots.txt of <origin> disallows <path>" instead of opening the page.
 
