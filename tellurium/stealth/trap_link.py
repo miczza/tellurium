@@ -25,7 +25,8 @@ signals that fired:
     is not off-page;
 ``clipped``
     nothing of it left inside the boxes of the ancestors that clip it
-    (``overflow: hidden``, ``clip``, ``clip-path: inset()``);
+    (``overflow: hidden``, ``clip``, a ``clip-path`` basic shape: ``inset()``,
+    ``circle(0)``, ``ellipse()``, a ``polygon()`` of no area);
 ``empty``
     nothing a person could see in its box: no text, no image, icon, pseudo-element
     content, background image or color, border;
@@ -111,16 +112,68 @@ function () {
                 r: r.left + at(rr, r.width), b: r.top + at(b, r.height),
             });
         }
-        if (s.clipPath && s.clipPath.startsWith('inset(')) {
-            const v = s.clipPath.slice(6, -1).split(' round ')[0].trim().split(/\s+/);
-            const [t, rr = t, b = t, l = rr] = v;
-            vis = meet(vis, {
+        const cut = clipShape(s.clipPath || 'none', r);
+        return cut ? meet(vis, cut) : vis;
+    };
+    // The box a basic-shape clip-path leaves of r (viewport coordinates), or null when
+    // it cannot tell (url(), path(), a position with offsets): then it clips nothing.
+    function clipShape(value, r) {
+        const m = /^(inset|circle|ellipse|polygon)\((.*)\)/.exec(value);
+        if (!m) return null;
+        const [, kind, args] = m;
+        // Only plain px and % read: calc() and the like make the shape unknown.
+        const exact = (v, whole) => (/^-?[\d.]+(e-?\d+)?(px|%)?$/.test(v || '') ? length(v, whole) : NaN);
+        if (kind === 'inset') {
+            const [t, rr = t, b = t, l = rr] = args.split(' round ')[0].trim().split(/\s+/);
+            return {
                 l: r.left + length(l, r.width), t: r.top + length(t, r.height),
                 r: r.right - length(rr, r.width), b: r.bottom - length(b, r.height),
-            });
+            };
         }
-        return vis;
-    };
+        if (kind === 'polygon') {
+            const points = args.replace(/^\s*(nonzero|evenodd)\s*,/, '').split(',').map((p) => {
+                const [x, y] = p.trim().split(/\s+/);
+                return [r.left + exact(x, r.width), r.top + exact(y, r.height)];
+            });
+            if (points.some(([x, y]) => isNaN(x) || isNaN(y))) return null;
+            let twice = 0;
+            points.forEach(([x, y], i) => {
+                const [nx, ny] = points[(i + 1) % points.length];
+                twice += x * ny - nx * y;
+            });
+            if (Math.abs(twice) / 2 < MIN * MIN) return {l: r.left, t: r.top, r: r.left, b: r.top};
+            const xs = points.map((p) => p[0]), ys = points.map((p) => p[1]);
+            return {l: Math.min(...xs), t: Math.min(...ys), r: Math.max(...xs), b: Math.max(...ys)};
+        }
+        const [radii, at = '50% 50%'] = args.split(/(?:^|\s)at\s/);
+        const centre = place(at.trim().split(/\s+/), r, exact);
+        if (!centre) return null;
+        const [cx, cy] = centre;
+        const side = (v, near, far) => (
+            v === 'farthest-side' ? far : v === 'closest-side' || !v ? near : null
+        );
+        const nearX = Math.min(cx - r.left, r.right - cx), farX = Math.max(cx - r.left, r.right - cx);
+        const nearY = Math.min(cy - r.top, r.bottom - cy), farY = Math.max(cy - r.top, r.bottom - cy);
+        const [a, b] = radii.trim().split(/\s+/).filter(Boolean);
+        let rx, ry;
+        if (kind === 'circle') {
+            const keyed = side(a, Math.min(nearX, nearY), Math.max(farX, farY));
+            rx = ry = keyed ?? exact(a, Math.hypot(r.width, r.height) / Math.SQRT2);
+        } else {
+            rx = side(a, nearX, farX) ?? exact(a, r.width);
+            ry = side(b, nearY, farY) ?? exact(b, r.height);
+        }
+        if (isNaN(rx) || isNaN(ry) || isNaN(cx) || isNaN(cy)) return null;
+        return {l: cx - rx, t: cy - ry, r: cx + rx, b: cy + ry};
+    }
+    // A clip-path position (one or two keywords or lengths) in viewport coordinates.
+    function place(tokens, r, exact) {
+        const word = {left: '0%', top: '0%', center: '50%', right: '100%', bottom: '100%'};
+        if (tokens.length > 2) return null;
+        let [x, y = 'center'] = tokens;
+        if (['top', 'bottom'].includes(x) || ['left', 'right'].includes(y)) [x, y] = [y, x];
+        return [r.left + exact(word[x] || x, r.width), r.top + exact(word[y] || y, r.height)];
+    }
     let vis = shape(el, own, {...area});
     let abs = own.position === 'absolute', fixed = own.position === 'fixed';
     for (let n = up(el); n && !fixed; n = up(n)) {

@@ -11,7 +11,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   person could not see or click a link right now, or it wears a honeypot marker, and which
   signals fired (`not-rendered`, `visibility-hidden`, `transparent`, `zero-size`,
   `off-page`, `clipped`, `empty`, `same-color`, `aria-hidden`, `inert`, `no-pointer`,
-  `honeypot-marker`, `nofollow` next to another one). Below the fold, image links with
+  `honeypot-marker`, `nofollow` next to another one); `clipped` reads `overflow`, `clip`
+  and basic-shape `clip-path`s (`inset()`, `circle(0)`, `ellipse()`, a `polygon()` of no
+  area). Below the fold, image links with
   `alt`, icons with `aria-label`, open menus and skip links brought back by a `:focus`
   rule are not traps; a link of a closed menu is. One `Runtime.callFunctionOn` in the
   isolated world of the link's frame (OOPIFs included): no main-world call, global, node
