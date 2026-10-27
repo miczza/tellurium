@@ -46,8 +46,9 @@ async def test_the_full_version_is_the_same_everywhere(headless):
             await tab.get(site.url + "/page", timeout=15)
             await tab.get(site.url + "/page2", timeout=15)  # Accept-CH now remembered
             page = json.loads(
-                await tab.eval(f"navigator.userAgentData.getHighEntropyValues({HIGH})"
-                               ".then(JSON.stringify)")
+                await tab.eval(
+                    f"navigator.userAgentData.getHighEntropyValues({HIGH}).then(JSON.stringify)"
+                )
             )
             worker = json.loads(await tab.eval(_IN_WORKER))
             product = (await browser._router.root.send("Browser.getVersion", {}, timeout=10))[
