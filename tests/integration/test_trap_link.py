@@ -262,3 +262,30 @@ async def test_focus_rules_are_read_never_applied(browser, counting_server):
     assert await tab.eval("window.__events") == []
     assert got == expected
     assert await tab.eval("document.activeElement === document.body") is True
+
+
+CSS_TRAPS = {
+    "trap-filter": ["transparent"],
+    "trap-faint": ["transparent"],
+    "trap-almost": ["transparent"],
+    "trap-mask": ["transparent"],
+    "trap-webkit-mask": ["transparent"],
+    "trap-contain": ["clipped"],
+    "trap-strict": ["clipped"],
+    "trap-contain-abs": ["clipped"],
+    "trap-covered": ["covered"],
+    "trap-under": ["covered"],
+}
+# ok-covered-below: hit-testing it would take a scroll, so it is not looked at (README).
+CSS_NORMAL = ["ok-half", "ok-filter", "ok-mask", "ok-contain", "ok-glass", "ok-badge"]
+CSS_NORMAL += ["ok-wrapped", "ok-covered-below"]
+
+
+async def test_paint_effects_that_hide_a_link(browser, local_server):
+    """``filter: opacity(0)``, an opacity under 0.05 all told, a transparent mask,
+    ``contain: paint`` cutting like ``overflow: hidden``, a link under another box (the
+    hit-test, from the isolated world, lands on neither it nor its content)."""
+    tab = await browser.new_tab(f"{local_server}/trap_css.html")
+    expected = CSS_TRAPS | {link: [] for link in CSS_NORMAL}
+    assert await _reasons(tab, expected) == expected
+    assert await tab.eval("window.__touched") == 0

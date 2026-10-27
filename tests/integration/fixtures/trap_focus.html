@@ -16,7 +16,8 @@
   count(Element.prototype, "matches");
   for (const type of ["focus", "blur", "focusin", "focusout", "scroll", "transitionrun",
                       "transitionstart", "transitioncancel", "animationstart"]) {
-    window.addEventListener(type, (e) => window.__events.push(type), true);
+    // The window itself gaining focus (the tab coming to the front) is not the check.
+    window.addEventListener(type, (e) => e.target !== window && window.__events.push(type), true);
   }
 </script>
 <style>

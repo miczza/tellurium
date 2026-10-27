@@ -10,8 +10,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `Element.is_trap_link()` and `tellurium.stealth.trap_link.reasons(element)`: whether a
   person could not see or click a link right now, or it wears a honeypot marker, and which
   signals fired (`not-rendered`, `visibility-hidden`, `transparent`, `zero-size`,
-  `off-page`, `clipped`, `empty`, `same-color`, `aria-hidden`, `inert`, `no-pointer`,
-  `honeypot-marker`, `nofollow` next to another one); `clipped` reads `overflow`, `clip`
+  `off-page`, `clipped`, `covered`, `empty`, `same-color`, `aria-hidden`, `inert`,
+  `no-pointer`, `honeypot-marker`, `nofollow` next to another one); `transparent` is
+  under 5% shown through `opacity` and `filter: opacity()` multiplied up the ancestors,
+  or a fully transparent `mask-image`; `covered` hit-tests the link where it shows in the
+  viewport (a box on top, `z-index: -1` under a block); `clipped` reads `overflow`,
+  `contain: paint`, `clip`
   and basic-shape `clip-path`s (`inset()`, `circle(0)`, `ellipse()`, a `polygon()` of no
   area); `same-color` only where the background is known (not over a hero image, a
   gradient or an overlay); `off-page` follows every box that scrolls the link, so a link

@@ -2,7 +2,7 @@
 // person could see and reach what it shows is checked. `framed`: in a frame itself.
 function (frame) {
     const el = this, doc = el.ownerDocument, win = doc.defaultView;
-    const MIN = 2, SAME = 3, CAP = 200;
+    const MIN = 2, SAME = 3, CAP = 200, FAINT = 0.05;
     const css = (n, pseudo) => win.getComputedStyle(n, pseudo);
     const up = (n) => n.assignedSlot || n.parentElement || n.getRootNode().host || null;
     const chain = [];
@@ -27,9 +27,23 @@ function (frame) {
     if (own.visibility !== 'visible') out.push('visibility-hidden');
     // How much of the link shows through its own and its ancestors' opacity.
     const computed = (n, prop) => css(n).getPropertyValue(prop);
-    const fade = (n, value) => parseFloat(value(n, 'opacity'));
+    const rgba = (c) => {
+        const p = ((/^rgba?\(([^)]*)\)$/.exec(c || '') || [])[1] || '').split(/[\s,\/]+/).filter(Boolean).map(Number);
+        return p.length < 3 || p.some(isNaN) ? null : [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
+    };
+    // A mask of gradients only, every color of them transparent: nothing of the box shows.
+    const clear = (mask) => !/url\(|^none$/.test(mask || 'none') && /gradient\(/.test(mask)
+        && (mask.match(/rgba?\([^)]*\)|transparent/g) || ['?']).every((c) => (
+            c === 'transparent' || (rgba(c) || [0, 0, 0, 1])[3] === 0));
+    const fade = (n, value) => {
+        let shows = parseFloat(value(n, 'opacity'));
+        for (const [, x, pct] of (value(n, 'filter') || '').matchAll(/opacity\(\s*([\d.]+)(%?)\s*\)/g)) {
+            shows *= Math.min(pct ? x / 100 : +x, 1);
+        }
+        return clear(value(n, 'mask-image')) || clear(value(n, '-webkit-mask-image')) ? 0 : shows;
+    };
     const seenThrough = (value) => chain.reduce((p, n) => p * fade(n, value), 1);
-    if (seenThrough(computed) <= 0) out.push('transparent');
+    if (seenThrough(computed) < FAINT) out.push('transparent');  // under 5% all told
     if (own.pointerEvents === 'none') out.push('no-pointer');
 
     const rect = (r) => ({l: r.left, t: r.top, r: r.right, b: r.bottom});
@@ -38,6 +52,7 @@ function (frame) {
         l: Math.max(a.l, b.l), t: Math.max(a.t, b.t), r: Math.min(a.r, b.r), b: Math.min(a.b, b.b),
     });
     const clips = (v) => v === 'hidden' || v === 'clip';
+    const paints = (s) => /\b(paint|strict|content)\b/.test(s.contain || '');  // cuts like overflow: clip
     const box = el.getBoundingClientRect();
     const area = rect(box);
     const range = doc.createRange();
@@ -144,19 +159,20 @@ function (frame) {
         const span = {l: x, t: t - n.scrollTop, r: x + n.scrollWidth, b: t - n.scrollTop + n.scrollHeight};
         for (const [axis, lo, hi] of axes) {
             const scrolled = scrolls(s[axis]);
-            if (!scrolled && !clips(s[axis])) continue;
+            if (!scrolled && !clips(s[axis]) && !paints(s)) continue;
+            const how = clips(s[axis]) || scrolled ? 'overflow' : 'contain';
             const room = scrolled ? span : pad;
             if (vis[hi] <= room[lo] || vis[lo] >= room[hi]) {
                 if (scrolled || n === body) {  // the page itself does not scroll there
                     off = true;
                     offAxes.add(lo);
-                } else cuts.push([n, 'overflow']);
+                } else cuts.push([n, how]);
                 vis[hi] = vis[lo];
                 continue;
             }
             const inside = Math.min(vis[hi], pad[hi]) - Math.max(vis[lo], pad[lo]);
             if (!scrolled || inside >= MIN) {
-                if (!scrolled && (vis[lo] < pad[lo] || vis[hi] > pad[hi])) cuts.push([n, 'overflow']);
+                if (!scrolled && (vis[lo] < pad[lo] || vis[hi] > pad[hi])) cuts.push([n, how]);
                 vis[lo] = Math.max(vis[lo], pad[lo]);
                 vis[hi] = Math.min(vis[hi], pad[hi]);
             } else {  // scrolled into view: as much of it as the box can show
@@ -168,11 +184,12 @@ function (frame) {
         }
     };
     let abs = own.position === 'absolute', fixed = own.position === 'fixed';
-    for (let n = up(el); n && !fixed && !off && !small(vis); n = up(n)) {
+    for (let n = up(el); n && !off && !small(vis); n = up(n)) {
         const s = css(n);
         if (s.display === 'contents') continue;
-        const positioned = s.position !== 'static';
-        if (abs && !positioned) continue;
+        // a positioned box, or one that contains paint, holds an absolute link; only the
+        // latter holds a fixed one
+        if ((abs && s.position === 'static' && !paints(s)) || (fixed && !paints(s))) continue;
         if (n !== html && n !== owner) hold(n, s);
         vis = shape(n, s, vis);
         abs = s.position === 'absolute';
@@ -203,12 +220,12 @@ function (frame) {
     if (geometry || out.includes('visibility-hidden') || out.includes('transparent')) {
         return finish();  // nothing of it to see: what it holds does not matter
     }
+    if (!out.includes('no-pointer') && covered()) {
+        out.push('covered');
+        return finish();
+    }
     if (frame) return finish();  // what the frame shows is the link's own check
 
-    const rgba = (c) => {
-        const p = ((/^rgba?\(([^)]*)\)$/.exec(c || '') || [])[1] || '').split(/[\s,\/]+/).filter(Boolean).map(Number);
-        return p.length < 3 || p.some(isNaN) ? null : [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
-    };
     const moved = (r) => ({l: r.l + shift.l, t: r.t + shift.t, r: r.r + shift.l, b: r.b + shift.t});
     const sees = (r) => r.width > 0 && r.height > 0 && !small(meet(moved(rect(r)), vis));
     const runs = [], glyphs = [];
@@ -287,6 +304,26 @@ function (frame) {
     if (runs.length && !marks && runs.every(unseen) && !overlaid()) out.push('same-color');
     return finish();
 
+    // Hit-tested where it shows in the viewport, as a click would be: covered when no
+    // point lands on it or inside it. Not where it would take a scroll to be seen.
+    function covered() {
+        if (shift.l || shift.t) return false;
+        const at = el.getRootNode().elementFromPoint ? el.getRootNode() : doc;
+        const view = meet(vis, {l: 0, t: 0, r: win.innerWidth, b: win.innerHeight});
+        range.selectNodeContents(el);
+        const points = [];
+        for (const r of [...el.getClientRects(), ...range.getClientRects()].slice(0, 20)) {
+            const b = meet(rect(r), view);
+            if (small(b)) continue;
+            for (const [x, y] of [[0.5, 0.5], [0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]]) {
+                points.push([b.l + x * (b.r - b.l), b.t + y * (b.b - b.t)]);
+            }
+        }
+        return points.length > 0 && !points.some(([x, y]) => {
+            const hit = at.elementFromPoint(x, y);
+            return hit && (hit === el || el.contains(hit));
+        });
+    }
     // Whether the values the :focus, :focus-visible and :focus-within rules declare
     // undo what hides the link, once a person tabs to it. They are read, never applied:
     // nothing is fetched, no transition starts, the focus does not move.

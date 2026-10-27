@@ -787,10 +787,11 @@ wears a honeypot marker. The signals `trap_link.reasons(link)` names:
 |---|---|
 | `not-rendered` | `display: none` on it or an ancestor, a closed `<details>` |
 | `visibility-hidden` | `visibility: hidden` / `collapse` |
-| `transparent` | `opacity: 0` on it or an ancestor |
+| `transparent` | under 5% of it showing: `opacity` and `filter: opacity()` of it and its ancestors multiplied (`opacity: 0`, `0.01`, `0.2` inside `0.2`), or a `mask-image` of gradients that are transparent throughout |
 | `zero-size` | under 2 CSS px wide or tall (`width: 0`, `1px`, `scale(0)`), content that overflows visibly included |
 | `off-page` | wholly outside what scrolling can reach (`left: -9999px`), or outside the viewport when `position: fixed` or along an axis the page does not scroll (`overflow: hidden` on the root, as while a modal is open). The reach is that of every box that scrolls the link, inner to outer: an app scrolling in its own box under `html, body { overflow: hidden }` and a carousel with `overflow-x: auto` are reachable |
-| `clipped` | nothing left inside the ancestors that clip it (`overflow: hidden` on a 0-height box, `clip`, a `clip-path` that leaves nothing: `inset(50%)`, `circle(0)`, `ellipse(0 0)`, a `polygon()` of no area) |
+| `clipped` | nothing left inside the ancestors that clip it (`overflow: hidden` or `contain: paint`/`strict` on a 0-height box, `clip`, a `clip-path` that leaves nothing: `inset(50%)`, `circle(0)`, `ellipse(0 0)`, a `polygon()` of no area) |
+| `covered` | in the viewport, but no point of it is hit (`elementFromPoint`, as a click would be) on it or its content: a box on top of it, or `z-index: -1` under a block's background |
 | `empty` | nothing to see in its box: no text (or text pushed out by `text-indent`), image, icon, pseudo-element, background, border |
 | `same-color` | all its text transparent or the color of the background behind it; not when that background cannot be told (an image, a gradient, an overlay or another element under the text, as in a hero banner) |
 | `aria-hidden` | `aria-hidden="true"` on it or an ancestor, though still clickable |
@@ -814,7 +815,7 @@ rule that would show it is in a cross-origin sheet (it cannot be read), is beate
 an inline style, sits on an ancestor's `:focus` (only the link takes the focus), or
 when the link is out of the tab order (`tabindex="-1"`).
 
-The check is conservative and has no thresholds to tune: a link of a **closed**
+The check is conservative and has one threshold, the 5% of `transparent`: a link of a **closed**
 menu is a trap (a person does not click it without opening the menu), so open the
 menu first if you mean to follow it. A link inside a frame a person cannot see (a
 0x0 `<iframe>`, one off the page, one in a transparent box, at any depth) is a trap

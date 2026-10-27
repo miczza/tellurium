@@ -10,7 +10,9 @@ style, boxes, ancestors and attributes, and names the signals that fired:
     ``<details>`` (a link of a closed menu is a trap too: a person does not click it
     without opening the menu first);
 ``visibility-hidden``, ``transparent``
-    ``visibility`` other than ``visible``; ``opacity: 0`` on it or an ancestor;
+    ``visibility`` other than ``visible``; less than 5% of it showing through the
+    ``opacity`` and ``filter: opacity()`` of it and its ancestors multiplied, or a
+    ``mask-image`` of gradients with no color that is not transparent;
 ``no-pointer``, ``inert``, ``aria-hidden``
     ``pointer-events: none``; inside an ``inert`` subtree; ``aria-hidden="true"``
     on it or an ancestor while it can still be clicked;
@@ -25,8 +27,13 @@ style, boxes, ancestors and attributes, and names the signals that fired:
     scroll box, a slide further along a carousel: not off-page;
 ``clipped``
     nothing of it left inside the boxes of the ancestors that clip it
-    (``overflow: hidden``, ``clip``, a ``clip-path`` basic shape: ``inset()``,
-    ``circle(0)``, ``ellipse()``, a ``polygon()`` of no area);
+    (``overflow: hidden``, ``contain: paint``/``strict``/``content``, ``clip``, a
+    ``clip-path`` basic shape: ``inset()``, ``circle(0)``, ``ellipse()``, a
+    ``polygon()`` of no area);
+``covered``
+    in the viewport, yet no point of it hit-tests (``elementFromPoint``, as a click
+    would) to it or its content: a box on top, or under a block's background with
+    ``z-index: -1``. Not looked at where it would take a scroll to be seen;
 ``empty``
     nothing a person could see in its box: no text, no image, icon, pseudo-element
     content, background image or color, border;
