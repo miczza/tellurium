@@ -398,7 +398,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - With `stealth=True` on the stock backend Chrome is launched with
   `--user-agent=<profile User-Agent>` (the profile aligned first with the binary's
-  `--version`), so what the browser process loads
+  `--version`; no flag when that cannot be read, so flag and override never name two
+  versions), so what the browser process loads
   itself, such as robots.txt, carries the same User-Agent as the pages instead of
   `HeadlessChrome/…`. A `--user-agent` in `args` wins. The full version stays the
   profile's everywhere (`getHighEntropyValues` `uaFullVersion` in pages and workers,

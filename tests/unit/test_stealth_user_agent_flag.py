@@ -38,9 +38,12 @@ def test_stealth_launches_chrome_with_the_profile_user_agent_of_the_binary(monke
     assert flags.count(f"--user-agent={expected}") == 1
 
 
-def test_an_undetected_version_keeps_the_profile_one(monkeypatch):
+def test_an_undetected_version_gives_no_flag(monkeypatch):
+    """Without ``--version`` the profile's default version would go on the
+    command line while ``Browser.getVersion`` later moves the override to the
+    real one: flag and override would disagree."""
     flags = _launch_flags(monkeypatch, None, stealth=True)
-    assert f"--user-agent={StealthProfile.from_seed(1).user_agent}" in flags
+    assert not any(f.startswith("--user-agent=") for f in flags)
 
 
 def test_a_user_agent_of_the_caller_wins(monkeypatch):

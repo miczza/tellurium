@@ -369,7 +369,9 @@ class Browser(CookieJar):
                 stealth_flags.append(f"--window-size={int(viewport[0])},{int(viewport[1])}")
 
             if stealth and stealth_engine is not None:
-                ua_flag = stealth_engine.user_agent_flag()
+                # Only with the version read from the binary (step 5): flag and
+                # override then name the same one.
+                ua_flag = stealth_engine.user_agent_flag() if found else None
                 if ua_flag and not any(a.startswith("--user-agent=") for a in args or []):
                     stealth_flags.append(ua_flag)
                 ext_path = stealth_engine.build_extension()
