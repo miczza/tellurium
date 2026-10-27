@@ -301,7 +301,11 @@ def frames(monkeypatch):
         made.append(robots.Frame(session=None, target_id=f"{context_id}#{len(made)}"))
         return made[-1]
 
+    async def canonical(frame, url):  # Chrome's parser, as far as these URLs go
+        return url
+
     monkeypatch.setattr(robots, "open_frame", open_frame)
+    monkeypatch.setattr(robots, "canonical", canonical)
     return made
 
 
@@ -467,7 +471,7 @@ async def test_a_hidden_target_that_cannot_open_is_a_navigation_error(monkeypatc
 
     monkeypatch.setattr(robots, "open_frame", open_frame)
     r = robots.Robots(respect=True)
-    with pytest.raises(NavigationError, match="robots.txt of http://a.test") as caught:
+    with pytest.raises(NavigationError, match="robots.txt for http://a.test/page") as caught:
         await r.check(_tab(), "http://a.test/page")
     assert caught.value.url == "http://a.test/page"
     assert caught.value.__cause__ is error
@@ -506,3 +510,46 @@ async def test_the_body_is_parsed_off_the_loop(monkeypatch):
     rules, _ = await robots.download(None, "http://a.test", "*")
     assert rules is robots.ALLOW_ALL
     assert threads and threads[0] is not threading.main_thread()
+
+
+@pytest.mark.parametrize(
+    "url, web",
+    [
+        ("http:host/p", True),
+        (" HTTPS://h/", True),
+        ("ht\ttp://h/", True),
+        ("\x00http://h/", True),
+        ("about:blank", False),
+        ("data:text/html,x", False),
+        ("javascript:alert(1)", False),
+        ("host/p", False),
+    ],
+)
+def test_is_web_reads_the_scheme_as_chrome(url, web):
+    assert robots.is_web(url) is web
+
+
+async def test_a_url_chrome_cannot_parse_is_refused(frames, monkeypatch):
+    async def canonical(frame, url):
+        return None
+
+    monkeypatch.setattr(robots, "canonical", canonical)
+    monkeypatch.setattr(robots, "download", _Fetcher())
+    r = robots.Robots(respect=True)
+    assert not await r.allowed(_tab(), "http://[x/p")
+    with pytest.raises(robots.RobotsDisallowedError, match="not a URL Chrome can parse"):
+        await r.check(_tab(), "http://[x/p")
+
+
+async def test_rules_are_those_of_the_url_chrome_reads(frames, monkeypatch):
+    async def canonical(frame, url):
+        return "http://deny.test/@allow.test/p"
+
+    fetcher = _Fetcher(parse("User-agent: *\nDisallow: /\n"))
+    fetcher.release.set()
+    monkeypatch.setattr(robots, "canonical", canonical)
+    monkeypatch.setattr(robots, "download", fetcher)
+    with pytest.raises(robots.RobotsDisallowedError) as caught:
+        await robots.Robots(respect=True).check(_tab(), "http://deny.test\\@allow.test/p")
+    assert (caught.value.origin, caught.value.path) == ("http://deny.test", "/@allow.test/p")
+    assert fetcher.calls == ["http://deny.test"]

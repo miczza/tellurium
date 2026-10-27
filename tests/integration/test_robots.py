@@ -293,7 +293,7 @@ async def test_a_hidden_target_that_cannot_open_fails_the_get(site, monkeypatch)
     proxy, browser = site
     tab = await browser.new_tab()
     monkeypatch.setattr(robots, "_OPEN_TIMEOUT", 1e-6)
-    with pytest.raises(NavigationError, match="robots.txt of http://site.test") as caught:
+    with pytest.raises(NavigationError, match="robots.txt for http://site.test/page") as caught:
         await tab.get("http://site.test/page", timeout=15)
     assert isinstance(caught.value.__cause__, TimeoutError)
     assert not isinstance(caught.value, RobotsDisallowedError)

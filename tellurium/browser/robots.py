@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import re
 import time
@@ -42,16 +43,18 @@ _UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012
 _ESCAPE = re.compile(r"%([0-9A-Fa-f]{2})")
 _STARS = re.compile(r"\*{2,}")
 _DEFAULT_PORTS = {"http": 80, "https": 443}
+_TRIMMED = "".join(map(chr, range(0x21)))  # C0 controls and space, cut off the ends
+_DROPPED = str.maketrans("", "", "\t\n\r")  # removed anywhere by the URL parser
 
 
 class RobotsDisallowedError(NavigationError):
     """``robots.txt`` of *origin* disallows *path*: the navigation was not started."""
 
-    def __init__(self, url: str, origin: str, path: str):
+    def __init__(self, url: str, origin: str, path: str, reason: str | None = None):
         self.url = url
         self.origin = origin
         self.path = path
-        self.error_text = f"robots.txt of {origin} disallows {path}"
+        self.error_text = reason or f"robots.txt of {origin} disallows {path}"
         RuntimeError.__init__(self, self.error_text)
 
 
@@ -170,6 +173,11 @@ def split_url(url: str) -> tuple[str, str] | None:
     return f"{scheme}://{host}", path
 
 
+def is_web(url: str) -> bool:
+    """Whether Chrome would read *url* as ``http(s)``: only those are checked."""
+    return url.strip(_TRIMMED).translate(_DROPPED)[:6].lower().startswith(("http:", "https:"))
+
+
 def _product_token(value: str) -> str:
     match = _AGENT.match(value)
     return match.group(0).lower() if match else ""
@@ -233,6 +241,17 @@ def _close_target(root: Any, target_id: str) -> None:
     close = root.send("Target.closeTarget", {"targetId": target_id}, timeout=_CLOSE_TIMEOUT)
     task = asyncio.ensure_future(close)
     task.add_done_callback(lambda t: t.cancelled() or t.exception())
+
+
+async def canonical(frame: Frame, url: str) -> str | None:
+    """*url* as the navigation reads it: ``new URL(url).href`` in *frame*, Chrome's
+    own parser (``\\`` as ``/``, missing slashes, tabs, dot segments, userinfo up
+    to the last ``@``); ``None`` when it does not parse."""
+    u = json.dumps(url)
+    params = {"expression": f"URL.canParse({u}) ? new URL({u}).href : null", "returnByValue": True}
+    res = await frame.session.send("Runtime.evaluate", params, timeout=_OPEN_TIMEOUT)
+    value = res.get("result", {}).get("value")
+    return value if isinstance(value, str) and "exceptionDetails" not in res else None
 
 
 async def download(frame: Frame, origin: str, agent: str) -> tuple[RobotsRules, float]:
@@ -314,41 +333,57 @@ class Robots:
 
     async def check(self, tab: Tab, url: str, timeout: float | None = None) -> None:
         """With *respect*, ``RobotsDisallowedError`` if robots.txt forbids *url*."""
-        if not self.respect or (split := split_url(url)) is None:
-            return
-        origin, path = split
-        if not (await self._rules_for(tab, url, origin, timeout)).allows(path):
-            raise RobotsDisallowedError(url, origin, path)
+        if self.respect and (refusal := await self._refusal(tab, url, timeout)):
+            raise refusal
 
     async def allowed(self, tab: Tab, url: str, timeout: float | None = None) -> bool:
         """Whether robots.txt lets *url* be crawled, with or without *respect*;
         ``NavigationTimeoutError`` if it is not known within *timeout*."""
-        if (split := split_url(url)) is None:
-            return True
-        origin, path = split
-        return (await self._rules_for(tab, url, origin, timeout)).allows(path)
+        return await self._refusal(tab, url, timeout) is None
 
-    async def _rules_for(
-        self, tab: Tab, url: str, origin: str, timeout: float | None
-    ) -> RobotsRules:
-        """:meth:`rules`, with a hidden target that could not be opened (the only
-        CDP failure :func:`download` does not turn into rules) reported as a
-        ``NavigationError`` of *url*."""
+    async def _refusal(
+        self, tab: Tab, url: str, timeout: float | None
+    ) -> RobotsDisallowedError | None:
+        """Why *url*, read as Chrome reads it (:func:`canonical`), may not be
+        crawled; ``None`` if it may or is not ``http(s)``; one Chrome cannot parse
+        may not. A hidden target that could not be opened (the only CDP failure
+        :func:`download` does not turn into rules) is a ``NavigationError``."""
+        if not is_web(url):
+            return None
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + timeout
         try:
-            return await self.rules(tab, origin, timeout)
+            href = await self._canonical(tab, url, timeout)
+            if href is None or (split := split_url(href)) is None:
+                reason = f"{url!r} is not a URL Chrome can parse: robots.txt cannot allow it"
+                return RobotsDisallowedError(url, "", "", reason)
+            left = None if deadline is None else max(deadline - loop.time(), 0.01)
+            rules = await self.rules(tab, split[0], left)
         except NavigationTimeoutError:
             raise
         except (CDPError, TimeoutError, asyncio.TimeoutError) as exc:
-            error = f"robots.txt of {origin} could not be loaded ({exc})"
+            error = f"robots.txt for {url} could not be checked ({exc})"
             raise NavigationError(url, error) from exc
+        return None if rules.allows(split[1]) else RobotsDisallowedError(url, *split)
+
+    async def _canonical(self, tab: Tab, url: str, timeout: float | None) -> str | None:
+        """:func:`canonical` in the hidden target of *tab*'s context, within *timeout*."""
+        use = lambda frame: canonical(frame, url)  # noqa: E731
+        work = asyncio.ensure_future(self._with_frame(tab._browser, _context_of(tab), use))
+        try:
+            done, _ = await asyncio.wait([work], timeout=timeout)
+        finally:
+            work.cancel()  # a no-op once done
+        if not done:
+            raise NavigationTimeoutError(url, "robots.txt", timeout or 0)
+        return work.result()
 
     async def rules(self, tab: Tab, origin: str, timeout: float | None = None) -> RobotsRules:
         """*origin*'s rules for *tab*'s context: from the cache, from the download
         in flight, or from a new one. The download belongs to this object: a
         caller that gives up (cancelled, *timeout*) leaves it to the others."""
         browser = tab._browser
-        context = next((cid for cid, c in browser._contexts.items() if tab in c._tabs), "")
-        key = (context, origin)
+        key = (_context_of(tab), origin)
         if (cached := self._cached(key)) is not None:
             return cached
         flight = self._flights.get(key) or self._start(browser, key)
@@ -389,12 +424,16 @@ class Robots:
         return flight
 
     async def _fetch(self, browser: Any, context: str, origin: str) -> tuple[RobotsRules, float]:
-        """:func:`download` from the context's hidden target, opened again once
+        """:func:`download` from the context's hidden target."""
+        return await self._with_frame(browser, context, lambda f: download(f, origin, self.agent))
+
+    async def _with_frame(self, browser: Any, context: str, use: Any) -> Any:
+        """``await use(frame)`` on the context's hidden target, opened again once
         if it went (closed by someone, crashed)."""
         for attempt in (1, 2):
             frame = await self._frame(browser, context)
             try:
-                return await download(frame, origin, self.agent)
+                return await use(frame)
             except ConnectionError:
                 if self._frames.get(context) is frame:
                     del self._frames[context]
@@ -418,6 +457,12 @@ class Robots:
         self._cache.move_to_end(key)
         while len(self._cache) > CACHE_SIZE:
             self._cache.popitem(last=False)
+
+
+def _context_of(tab: Tab) -> str:
+    """The id of *tab*'s browser context, ``""`` for the default one."""
+    contexts = tab._browser._contexts.items()
+    return next((cid for cid, c in contexts if tab in c._tabs), "")
 
 
 def of(browser: Any) -> Robots:

@@ -25,7 +25,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and context for 24 h (LRU of 256), one download at a time even for a hundred concurrent
   calls. 2xx: its rules; 4xx: everything allowed; 5xx, network error or no answer within
   10 s: everything disallowed, asked again after 60 s. Clicks, redirects and navigations
-  started by the page are not checked; `Crawl-delay` is ignored. Without the flag no
+  started by the page are not checked; `Crawl-delay` is ignored. The URL is checked as
+  Chrome reads it (`new URL(url).href` in the hidden target: `http:site/p`,
+  `http://site\@other/p`, dot segments, tabs), and one Chrome cannot parse is refused
+  ("not a URL Chrome can parse"); a hidden target that cannot be opened fails with
+  "robots.txt for <url> could not be checked". Without the flag no
   navigation requests robots.txt.
 - `Element.is_trap_link()` and `tellurium.stealth.trap_link.reasons(element)`: whether a
   person could not see or click a link right now, or it wears a honeypot marker, and which

@@ -1180,7 +1180,11 @@ if await tab.is_allowed("https://example.com/search?q=x"):
 - With `respect_robots=True`, `tab.get`, `browser.get`, `browser.new_tab(url)` and
   `context.new_tab(url)` check the site's robots.txt first and raise
   `RobotsDisallowedError` (a `NavigationError`) **before any request** to a disallowed URL;
-  `new_tab` closes the blank tab it had opened. Only `http(s)` URLs are checked.
+  `new_tab` closes the blank tab it had opened. Only `http(s)` URLs are checked, read
+  the way Chrome reads them (`new URL(url).href` in the hidden target below): `http:site/p`,
+  `http://site\@other/p` or `/a/../private` are checked against the site and path Chrome
+  will ask; a URL Chrome cannot parse is refused (`RobotsDisallowedError`, "not a URL
+  Chrome can parse").
 - **Clicks, redirects and navigations started by the page are not checked**: blocking
   every document would mean intercepting them all, which costs and shows. Use
   `await tab.is_allowed(url)` before following a link.
@@ -1194,9 +1198,11 @@ if await tab.is_allowed("https://example.com/search?q=x"):
   concurrent `get` to one site make a single request. 2xx: its rules; 4xx: everything is
   allowed; 5xx, a network error or no answer within 10 s: everything is disallowed, and
   robots.txt is asked again after a minute.
-- With `stealth=True` it carries the pages' `User-Agent` (Chrome is launched with the
-  profile's); it sends no `Sec-CH-UA*` client hints, which Chrome adds to page requests
-  only. Without stealth it is Chrome's own (`HeadlessChrome` when headless).
+- With `stealth=True` it carries the pages' `User-Agent`: on the stock backend Chrome is
+  launched with the profile's (`args` may not hold a `--user-agent` then: `ValueError`),
+  on the patched one both are the binary's own. It sends no `Sec-CH-UA*` client hints,
+  which Chrome adds to page requests only. Without stealth it is Chrome's own
+  (`HeadlessChrome` when headless).
 - Without `respect_robots` no navigation ever requests robots.txt; `is_allowed` still
   does, once per origin. `is_allowed(url, timeout=30.0)` raises `NavigationTimeoutError`
   past its timeout; the download goes on and fills the cache.
