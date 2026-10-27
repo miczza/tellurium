@@ -89,7 +89,7 @@ def parse(text: str, agent: str = "*") -> RobotsRules:
     groups: dict[str, list[tuple[str, bool]]] = {}
     current: list[list[tuple[str, bool]]] = []
     in_rules = False
-    for line in text.lstrip("﻿").splitlines():
+    for line in text.lstrip("\ufeff").splitlines():
         key, sep, value = line.split("#", 1)[0].partition(":")
         if not sep:
             continue

@@ -157,7 +157,7 @@ def test_rules_before_any_user_agent_are_ignored():
 
 
 def test_comments_blank_lines_case_and_line_endings():
-    text = "﻿# comment\r\nUSER-AGENT : *  # trailing\r\n\r\nDISALLOW:/x # no\rallow: /x/y\n"
+    text = "\ufeff# comment\r\nUSER-AGENT : *  # trailing\r\n\r\nDISALLOW:/x # no\rallow: /x/y\n"
     rules = parse(text)
     assert not rules.allows("/x")
     assert rules.allows("/x/y")
