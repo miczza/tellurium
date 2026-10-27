@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from tellurium.browser.context import BrowserContext, tab_context
-from tellurium.browser.cookie import Cookie, clear_jar, read_jar
+from tellurium.browser.cookie_jar import CookieJar
 from tellurium.browser.dialog import check_policy
 from tellurium.browser.download import Downloads
 from tellurium.browser.engine import PatchedEngine, StockEngine
@@ -35,7 +35,7 @@ from tellurium.stealth._webrtc import resolve_webrtc_ip
 logger = logging.getLogger("tellurium")
 
 
-class Browser:
+class Browser(CookieJar):
     """High-level browser controller.
 
     Use :meth:`launch` (or ``async with Browser.launch(...) as browser:``) to
@@ -726,36 +726,6 @@ class Browser:
         tab = self._main_tab
         await tab.get(url, **kwargs)
         return tab
-
-    # ------------------------------------------------------------------
-    # Cookies
-    # ------------------------------------------------------------------
-
-    async def get_cookies(self, domain: str | None = None) -> list[Cookie]:
-        """Browser cookies; with *domain*, its own, its subdomains' and the
-        parent-domain cookies it receives (``.example.com`` for ``sub.example.com``)."""
-        return await read_jar(self._router.root, domain)
-
-    async def set_cookies(self, cookies: list[Cookie]) -> None:
-        """Set cookies in the browser."""
-        await self._router.root.send(
-            "Storage.setCookies", {"cookies": [c.to_json() for c in cookies]}
-        )
-
-    async def clear_cookies(self, domain: str | None = None) -> None:
-        """Delete every cookie, or only *domain*'s (and its subdomains')."""
-        await clear_jar(self._router.root, domain)
-
-    async def save_cookies(
-        self, path: str, format: str = "json", domain: str | None = None
-    ) -> None:
-        """Save cookies to *path* in the given format."""
-        cookies = await self.get_cookies(domain)
-        await asyncio.to_thread(Cookie.save_list, cookies, path, format=format)
-
-    async def load_cookies(self, path: str, format: str | None = None) -> None:
-        """Load cookies from *path* and set them in the browser."""
-        await self.set_cookies(await asyncio.to_thread(Cookie.load_list, path, format=format))
 
     # ------------------------------------------------------------------
     # Contexts

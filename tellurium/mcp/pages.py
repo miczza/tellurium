@@ -10,7 +10,8 @@ import re
 from typing import Any
 
 from tellurium.browser.element import Element
-from tellurium.browser.tab import Tab, capture_beyond, full_page_clip
+from tellurium.browser.screenshot import capture_beyond, full_page_clip
+from tellurium.browser.tab import Tab
 from tellurium.mcp import page_state, screenshots, urls
 from tellurium.mcp.results import Reply, ToolError
 from tellurium.mcp.tool import Tool, param

@@ -406,7 +406,7 @@ def test_expect_download_goes_through_the_browser_accessor():
 
 
 def test_page_values_are_checked_before_use():
-    from tellurium.browser.tab import _numbers
+    from tellurium.browser.screenshot import _numbers
 
     assert _numbers([800, 600, 2], (1e6, 1e6, 20)) == [800.0, 600.0, 2.0]
     for bad in (None, "x", [800, 600], [800, 600, 1e9], [-1, 600, 1], [True, 1, 1]):
@@ -416,7 +416,7 @@ def test_page_values_are_checked_before_use():
 
 
 async def test_isolated_value_never_runs_in_the_page_world():
-    from tellurium.browser.tab import _isolated_value
+    from tellurium.browser.screenshot import _isolated_value
     from tellurium.cdp.types import CDPError
 
     worlds = iter([11, 12])

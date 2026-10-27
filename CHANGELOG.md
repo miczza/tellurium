@@ -352,6 +352,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Internal: `Tab.screenshot` and its full-page helpers moved to `tellurium/browser/screenshot.py`,
+  the `Browser` cookie methods to the `CookieJar` mixin in `tellurium/browser/cookie_jar.py`.
+  No behaviour change; `Tab.screenshot` and `Browser.get_cookies` & co. are where they were.
 - Internal moves, no change in behaviour: the window controls of `Tab` (`set_viewport`,
   `maximize`, `minimize`, `bring_to_front`) live in `tellurium/browser/window.py`, and
   `tellurium update-cdp` in `tellurium/cdp/update_command.py`.
