@@ -10,6 +10,7 @@ from tellurium.browser.geometry import ElementNotHittableError
 from tellurium.browser.handles import StaleElementError
 from tellurium.browser.launcher import LaunchError
 from tellurium.browser.navigation import NavigationError, NavigationTimeoutError
+from tellurium.browser.robots import RobotsDisallowedError
 from tellurium.browser.snapshot import SnapshotNode, SnapshotTooLargeError
 from tellurium.browser.tab import Tab
 from tellurium.capture.intercept import InterceptedRequest
@@ -38,6 +39,7 @@ __all__ = [
     "LaunchError",
     "NavigationError",
     "NavigationTimeoutError",
+    "RobotsDisallowedError",
     "SnapshotNode",
     "SnapshotTooLargeError",
     "StaleElementError",
