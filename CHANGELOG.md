@@ -352,6 +352,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `Element.drag_to` moved into `tellurium/browser/drag.py`; the method delegates to it,
+  behaviour unchanged.
 - Internal moves, no change in behaviour: the window controls of `Tab` (`set_viewport`,
   `maximize`, `minimize`, `bring_to_front`) live in `tellurium/browser/window.py`, and
   `tellurium update-cdp` in `tellurium/cdp/update_command.py`.

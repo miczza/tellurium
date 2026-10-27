@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any
 
-from tellurium.browser import geometry
+from tellurium.browser import drag, geometry
 from tellurium.browser.handles import elements_from_array, handles_of, resolve_node, send_on_handle
 
 if TYPE_CHECKING:
@@ -396,37 +395,7 @@ class Element:
 
     async def drag_to(self, target: Element, steps: int = 10) -> None:
         """Drag this element to *target* with intermediate mouse-move steps."""
-        await self.scroll_into_view()
-        sx, sy = await self._center()
-        await target.scroll_into_view()
-        tx, ty = await target._center()
-        await geometry.ensure_hit(target, tx, ty)  # both ends hittable before the press
-        await geometry.ensure_hit(self, sx, sy)
-        await self._tab.mouse_move(sx, sy)
-        await self._tab._dispatch_mouse(
-            {
-                "type": "mousePressed",
-                "x": sx,
-                "y": sy,
-                "button": "left",
-                "clickCount": 1,
-            }
-        )
-        for i in range(1, steps + 1):
-            frac = i / steps
-            mx = sx + (tx - sx) * frac
-            my = sy + (ty - sy) * frac
-            await self._tab.mouse_move(mx, my)
-            await asyncio.sleep(0.01)
-        await self._tab._dispatch_mouse(
-            {
-                "type": "mouseReleased",
-                "x": tx,
-                "y": ty,
-                "button": "left",
-                "clickCount": 1,
-            }
-        )
+        await drag.drag(self, target, steps)
 
     # ------------------------------------------------------------------
     # Relative selection
