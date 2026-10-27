@@ -1084,6 +1084,47 @@ asyncio.run(advanced_cdp())
 
 ---
 
+## robots.txt (polite crawling)
+
+```python
+from tellurium import Browser, RobotsDisallowedError
+
+browser = await Browser.launch(respect_robots=True)  # robots_agent="*" by default
+tab = await browser.get("https://example.com/")
+try:
+    await tab.get("https://example.com/private/page")
+except RobotsDisallowedError as exc:
+    print(exc)  # robots.txt of https://example.com disallows /private/page
+
+# With or without respect_robots: ask before following a link or clicking it
+if await tab.is_allowed("https://example.com/search?q=x"):
+    await tab.get("https://example.com/search?q=x")
+```
+
+- With `respect_robots=True`, `tab.get`, `browser.get`, `browser.new_tab(url)` and
+  `context.new_tab(url)` check the site's robots.txt first and raise
+  `RobotsDisallowedError` (a `NavigationError`) **before any request** to a disallowed URL;
+  `new_tab` closes the blank tab it had opened. Only `http(s)` URLs are checked.
+- **Clicks, redirects and navigations started by the page are not checked**: blocking
+  every document would mean intercepting them all, which costs and shows. Use
+  `await tab.is_allowed(url)` before following a link.
+- Rules as [RFC 9309](https://www.rfc-editor.org/rfc/rfc9309): the groups of
+  `robots_agent` (a product token, e.g. `"mybot"`) or else `*`; the longest matching rule
+  wins, `Allow` on a tie; `*` and `$` wildcards; only the first 500 KiB are read.
+  `Crawl-delay` is not part of RFC 9309 and is ignored: pace yourself.
+- robots.txt is downloaded **by Chrome**, not by Python (`Network.loadNetworkResource`
+  from a hidden blank target of the tab's browser context): same proxy, IP and TLS as the
+  pages, no cookies. It is cached for 24 h per origin (and browser context), and a hundred
+  concurrent `get` to one site make a single request. 2xx: its rules; 4xx: everything is
+  allowed; 5xx, a network error or no answer within 10 s: everything is disallowed, and
+  robots.txt is asked again after a minute.
+- Its `User-Agent` is Chrome's own, not a `stealth=True` override (that one only applies
+  to the page's requests): headless, it says `HeadlessChrome`.
+- Without `respect_robots` no navigation ever requests robots.txt; `is_allowed` still
+  does, once per origin.
+- `tellurium mcp --respect-robots` does the same for the agent: `navigate` and `tab-open`
+  answer "robots.txt of <origin> disallows <path>" instead of opening the page.
+
 ## Proxy and GeoIP
 
 Tellurium supports HTTP, HTTPS, and SOCKS5 proxies with optional authentication.
