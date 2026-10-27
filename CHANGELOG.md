@@ -17,7 +17,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   <path>`) for a URL the site's robots.txt disallows, before any request; the blank tab
   `new_tab` made for it is closed. `await tab.is_allowed(url, timeout=30.0)` answers with or
   without the flag (`NavigationTimeoutError`, phase `"robots.txt"`, past *timeout*). robots.txt is parsed per RFC 9309 (groups by product token, longest match wins,
-  `allow` wins a tie, `*` and `$`, percent-encoding normalised, first 500 KiB) and loaded by
+  `allow` wins a tie, `*` and `$`, percent-encoding normalised, first 500 KiB; parsed off
+  the event loop, each rule matched run by run between its `*`, so even `Disallow: /`
+  and 499 000 `*` answers in well under a millisecond) and loaded by
   Chrome with `Network.loadNetworkResource` from a hidden `about:blank` target of the tab's
   browser context (same proxy, IP and TLS as the navigation; no cookies), once per origin
   and context for 24 h (LRU of 256), one download at a time even for a hundred concurrent

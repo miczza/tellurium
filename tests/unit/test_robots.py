@@ -192,6 +192,32 @@ def test_a_pathological_pattern_is_matched_in_linear_time():
     assert rules.allows("/" + "a" * 5000)
 
 
+def test_a_hostile_file_of_stars_is_matched_fast():
+    """``Disallow: /`` and 499 000 ``*`` (under 500 KiB): ``allows`` runs at every
+    navigation, on the loop."""
+    import time
+
+    rules = parse("User-agent: *\nDisallow: /" + "*" * 499_000 + "\n")
+    start = time.perf_counter()
+    assert not rules.allows("/" + "a" * 999)
+    assert time.perf_counter() - start < 0.05
+
+
+def test_stars_and_segments_still_match_as_before():
+    rules = parse("User-agent: *\nDisallow: /a***b**c$\nAllow: /a*b*c*d\n")
+    assert not rules.allows("/a-b-c")
+    assert not rules.allows("/abbc")
+    assert rules.allows("/a-b-cd")  # the longer allow wins
+    assert rules.allows("/a-b-c-x")  # anchored: the end is not c
+    assert rules.allows("/a-c-b")
+
+
+def test_the_pattern_length_as_written_decides_the_longest_match():
+    """Stars are compressed for matching only: ``/p****`` (6 octets) beats ``/p*x`` (4)."""
+    rules = parse("User-agent: *\nAllow: /p*x\nDisallow: /p****\n")
+    assert not rules.allows("/p-x")
+
+
 def test_allow_all_and_disallow_all():
     assert RobotsRules(()).allows("/x")
     assert robots.ALLOW_ALL.allows("/x")
@@ -460,3 +486,23 @@ async def test_allowed_gives_up_after_the_callers_timeout(frames, monkeypatch):
     fetcher.release.set()
     assert not await r.allowed(_tab(), "http://a.test/no", timeout=1)
     assert fetcher.calls == ["http://a.test"]
+
+
+async def test_the_body_is_parsed_off_the_loop(monkeypatch):
+    """Parsing 500 KiB takes tens of milliseconds: not on the event loop."""
+    import threading
+
+    threads = []
+
+    async def load(frame, url):
+        return 200, b"User-agent: *\nDisallow: /x\n"
+
+    def outcome(status, body, agent):
+        threads.append(threading.current_thread())
+        return robots.ALLOW_ALL
+
+    monkeypatch.setattr(robots, "_load", load)
+    monkeypatch.setattr(robots, "outcome", outcome)
+    rules, _ = await robots.download(None, "http://a.test", "*")
+    assert rules is robots.ALLOW_ALL
+    assert threads and threads[0] is not threading.main_thread()

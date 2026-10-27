@@ -16,7 +16,7 @@ import re
 import time
 import urllib.parse
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from tellurium.browser.navigation import NavigationError, NavigationTimeoutError
@@ -40,6 +40,7 @@ _LATE_REPLY_TIMEOUT = 30.0  # how long a timed-out createTarget is still watched
 _AGENT = re.compile(r"[A-Za-z_-]+")
 _UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 _ESCAPE = re.compile(r"%([0-9A-Fa-f]{2})")
+_STARS = re.compile(r"\*{2,}")
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
@@ -54,11 +55,45 @@ class RobotsDisallowedError(NavigationError):
         RuntimeError.__init__(self, self.error_text)
 
 
+_Pattern = tuple[tuple[str, ...], bool]  # the literal runs between ``*``, anchored
+
+
+def _compile(pattern: str) -> _Pattern:
+    """*pattern* (``*`` any run, ``$`` at the end the end) cut at its ``*``,
+    a run of them counted once."""
+    anchored = pattern.endswith("$")
+    return tuple(_STARS.sub("*", pattern[:-1] if anchored else pattern).split("*")), anchored
+
+
+def _matches(pattern: _Pattern, path: str) -> bool:
+    """Whether *pattern* matches the start of *path*: each run found forward
+    from where the previous one ended, the leftmost (no backtracking)."""
+    runs, anchored = pattern
+    if not path.startswith(runs[0]):
+        return False
+    if len(runs) == 1:
+        return not anchored or len(path) == len(runs[0])
+    pos = len(runs[0])
+    for run in runs[1:-1]:
+        if (found := path.find(run, pos)) < 0:
+            return False
+        pos = found + len(run)
+    if anchored:
+        return path.endswith(runs[-1]) and len(path) - len(runs[-1]) >= pos
+    return path.find(runs[-1], pos) >= 0
+
+
 @dataclass(frozen=True)
 class RobotsRules:
     """The rules of one group: ``(pattern, allow)`` pairs, patterns normalised."""
 
     rules: tuple[tuple[str, bool], ...]
+    # Longest pattern (as written) first, allow first on a tie: the first match decides.
+    _order: tuple[tuple[bool, _Pattern], ...] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        ranked = sorted(self.rules, key=lambda rule: (-len(rule[0]), not rule[1]))
+        object.__setattr__(self, "_order", tuple((a, _compile(p)) for p, a in ranked))
 
     def allows(self, target: str) -> bool:
         """Whether *target* (path and query) may be crawled: the longest matching
@@ -66,13 +101,7 @@ class RobotsRules:
         path = _normalise(target or "/")
         if path == "/robots.txt":
             return True
-        best, allowed = -1, True
-        for pattern, allow in self.rules:
-            if (len(pattern) > best or (len(pattern) == best and allow)) and _matches(
-                pattern, path
-            ):
-                best, allowed = len(pattern), allow
-        return allowed
+        return next((allow for allow, pattern in self._order if _matches(pattern, path)), True)
 
 
 ALLOW_ALL = RobotsRules(())
@@ -158,23 +187,6 @@ def _normalise(path: str) -> str:
     return _ESCAPE.sub(unescape, encoded)
 
 
-def _matches(pattern: str, path: str) -> bool:
-    """Whether *pattern* (``*`` any run, ``$`` at the end the end) matches the
-    start of *path*. Kept to positions, linear in each: no regex backtracking."""
-    anchored = pattern.endswith("$")
-    if anchored:
-        pattern = pattern[:-1]
-    positions = [0]
-    for char in pattern:
-        if char == "*":
-            positions = list(range(positions[0], len(path) + 1))
-        else:
-            positions = [p + 1 for p in positions if p < len(path) and path[p] == char]
-        if not positions:
-            return False
-    return len(path) in positions if anchored else True
-
-
 def _now() -> float:
     return time.monotonic()
 
@@ -234,7 +246,7 @@ async def download(frame: Frame, origin: str, agent: str) -> tuple[RobotsRules, 
         return DISALLOW_ALL, ERROR_TTL
     if status is None:
         return DISALLOW_ALL, ERROR_TTL
-    rules = outcome(status, body, agent)
+    rules = await asyncio.to_thread(outcome, status, body, agent)  # 500 KiB: tens of ms
     return rules, (CACHE_TTL if status < 500 else ERROR_TTL)
 
 
