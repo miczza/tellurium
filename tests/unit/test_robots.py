@@ -448,3 +448,15 @@ async def test_a_hidden_target_that_cannot_open_is_a_navigation_error(monkeypatc
     assert not isinstance(caught.value, robots.RobotsDisallowedError)
     with pytest.raises(NavigationError):  # is_allowed too; nothing was cached
         await r.allowed(_tab(), "http://a.test/page")
+
+
+async def test_allowed_gives_up_after_the_callers_timeout(frames, monkeypatch):
+    fetcher = _Fetcher(parse("User-agent: *\nDisallow: /no\n"))
+    monkeypatch.setattr(robots, "download", fetcher)
+    r = robots.Robots()
+    with pytest.raises(robots.NavigationTimeoutError) as caught:
+        await r.allowed(_tab(), "http://a.test/no", timeout=0.01)
+    assert caught.value.phase == "robots.txt"
+    fetcher.release.set()
+    assert not await r.allowed(_tab(), "http://a.test/no", timeout=1)
+    assert fetcher.calls == ["http://a.test"]

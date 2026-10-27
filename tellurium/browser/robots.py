@@ -289,12 +289,13 @@ class Robots:
         if not (await self._rules_for(tab, url, origin, timeout)).allows(path):
             raise RobotsDisallowedError(url, origin, path)
 
-    async def allowed(self, tab: Tab, url: str) -> bool:
-        """Whether robots.txt lets *url* be crawled, with or without *respect*."""
+    async def allowed(self, tab: Tab, url: str, timeout: float | None = None) -> bool:
+        """Whether robots.txt lets *url* be crawled, with or without *respect*;
+        ``NavigationTimeoutError`` if it is not known within *timeout*."""
         if (split := split_url(url)) is None:
             return True
         origin, path = split
-        return (await self._rules_for(tab, url, origin, None)).allows(path)
+        return (await self._rules_for(tab, url, origin, timeout)).allows(path)
 
     async def _rules_for(
         self, tab: Tab, url: str, origin: str, timeout: float | None

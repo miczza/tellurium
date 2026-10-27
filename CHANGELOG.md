@@ -15,8 +15,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `Browser.new_tab(url)` and `BrowserContext.new_tab(url)` raise `RobotsDisallowedError` (a
   `NavigationError`, exported from `tellurium`; message `robots.txt of <origin> disallows
   <path>`) for a URL the site's robots.txt disallows, before any request; the blank tab
-  `new_tab` made for it is closed. `await tab.is_allowed(url)` answers with or without the
-  flag. robots.txt is parsed per RFC 9309 (groups by product token, longest match wins,
+  `new_tab` made for it is closed. `await tab.is_allowed(url, timeout=30.0)` answers with or
+  without the flag (`NavigationTimeoutError`, phase `"robots.txt"`, past *timeout*). robots.txt is parsed per RFC 9309 (groups by product token, longest match wins,
   `allow` wins a tie, `*` and `$`, percent-encoding normalised, first 500 KiB) and loaded by
   Chrome with `Network.loadNetworkResource` from a hidden `about:blank` target of the tab's
   browser context (same proxy, IP and TLS as the navigation; no cookies), once per origin

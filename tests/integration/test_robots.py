@@ -321,6 +321,22 @@ async def test_a_navigation_timeout_bounds_the_robots_wait(site, monkeypatch):
     assert proxy.hits("late.test/page") == 0
 
 
+async def test_is_allowed_takes_a_timeout(site):
+    """The caller bounds the wait; the download goes on and fills the cache."""
+    proxy, browser = site
+    proxy.delays["/robots.txt"] = 1.5
+    proxy.routes["wait.test/robots.txt"] = (200, TEXT, b"User-agent: *\nDisallow: /no\n")
+    tab = await browser.new_tab()
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    with pytest.raises(TimeoutError) as caught:
+        await tab.is_allowed("http://wait.test/yes", timeout=0.3)
+    assert loop.time() - start < 1
+    assert caught.value.phase == "robots.txt"
+    assert not await tab.is_allowed("http://wait.test/no", timeout=10)
+    assert proxy.hits("wait.test/robots.txt") == 1
+
+
 async def test_redirects_of_robots_txt_are_followed(site):
     proxy, browser = site
     proxy.routes["moved.test/robots.txt"] = (301, {"Location": "http://moved.test/r2"}, b"")

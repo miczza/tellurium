@@ -190,11 +190,12 @@ class Tab:
             # own (longer) transition delays.
             self._action_timer.mark("navigate")
 
-    async def is_allowed(self, url: str) -> bool:
+    async def is_allowed(self, url: str, *, timeout: float = 30.0) -> bool:
         """Whether the site's robots.txt lets *url* be crawled, with or without
         ``respect_robots``: robots.txt is loaded through this tab (once per
-        origin per day). Use it before following a link or clicking."""
-        return await robots.of(self._browser).allowed(self, url)
+        origin per day). Use it before following a link or clicking. Not known
+        within *timeout*: :class:`NavigationTimeoutError` (phase ``"robots.txt"``)."""
+        return await robots.of(self._browser).allowed(self, url, timeout)
 
     async def _enable_lifecycle_events(self) -> None:
         if self._lifecycle_enabled:
