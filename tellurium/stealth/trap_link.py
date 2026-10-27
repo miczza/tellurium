@@ -266,15 +266,22 @@ function () {
 """
 
 
+class NoIsolatedWorldError(RuntimeError):
+    """The link's frame has no isolated world, so the check would be visible to the page."""
+
+
 async def reasons(element: Element) -> list[str]:
     """The trap signals of *element* (an ``<a>``) that fired; empty for a normal link.
 
-    One ``Runtime.callFunctionOn`` in the isolated world of the element's frame; in
-    the element's own world only when that frame has no isolated world.
+    One ``Runtime.callFunctionOn`` in the isolated world of the element's frame.
+    :class:`NoIsolatedWorldError` when that frame has none: the check never runs where
+    the page could see it.
     """
     session, tab = element._session, element._tab
     object_id = await element._resolve()
-    target = await _isolated(element, object_id) or object_id
+    target = await _isolated(element, object_id)
+    if target is None:
+        raise NoIsolatedWorldError("no isolated world in the link's frame: trap check not run")
     call = {
         "objectId": target,
         "functionDeclaration": _REASONS_JS,
@@ -283,7 +290,7 @@ async def reasons(element: Element) -> list[str]:
     try:
         answer = await send_on_handle(session, "Runtime.callFunctionOn", call)
     finally:
-        if target != object_id and (handles := handles_of(tab)) is not None:
+        if (handles := handles_of(tab)) is not None:
             handles.discard(target, session)
     remote = answer.get("result", {})
     if remote.get("subtype") == "error" or "exceptionDetails" in answer:

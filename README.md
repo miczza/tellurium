@@ -808,8 +808,9 @@ The check is conservative and has no thresholds to tune: a link of a **closed**
 menu is a trap (a person does not click it without opening the menu), so open the
 menu first if you mean to follow it. It runs as one call in the isolated world of
 the link's frame (cross-site iframes included): the page can neither see it nor
-fake what it reads, and no global, node or attribute is left behind. Only when
-that frame has no isolated world does it run in the page's own world.
+fake what it reads, and no global, node or attribute is left behind. When that
+frame has no isolated world it raises `trap_link.NoIsolatedWorldError` instead of
+running where the page could see it.
 
 #### Custom JS
 

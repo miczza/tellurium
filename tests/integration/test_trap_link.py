@@ -130,3 +130,15 @@ async def test_a_link_inside_a_frame_is_checked_in_that_frame(browser, local_ser
     assert await trap_link.reasons(visible) == []
     assert await trap_link.reasons(away) == ["off-page"]
     assert await visible.apply("function () { return window.__touched; }") == 0
+
+
+async def test_without_an_isolated_world_the_check_refuses_to_run(page, monkeypatch):
+    import tellurium.browser.refs as refs
+
+    async def no_world(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(refs, "frame_world", no_world)
+    with pytest.raises(trap_link.NoIsolatedWorldError):
+        await trap_link.reasons(await page.select("#trap-left"))
+    assert await page.eval("window.__touched") == 0
