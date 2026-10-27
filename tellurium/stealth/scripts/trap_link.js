@@ -1,4 +1,6 @@
-function () {
+// `this` is a link, or with `frame` the <iframe> that holds one: then only whether a
+// person could see and reach what it shows is checked. `framed`: in a frame itself.
+function (frame) {
     const el = this, doc = el.ownerDocument, win = doc.defaultView;
     const MIN = 2, SAME = 3, CAP = 200;
     const css = (n, pseudo) => win.getComputedStyle(n, pseudo);
@@ -9,15 +11,13 @@ function () {
     if (chain.some((n) => n.getAttribute('aria-hidden') === 'true')) out.push('aria-hidden');
     if (chain.some((n) => n.hasAttribute('inert'))) out.push('inert');
     const marker = /honey[-_]?pot/i;
-    if (['id', 'class', 'name'].some((a) => marker.test(el.getAttribute(a) || ''))) {
+    if (!frame && ['id', 'class', 'name'].some((a) => marker.test(el.getAttribute(a) || ''))) {
         out.push('honeypot-marker');
     }
-    const finish = (list = out) => {
-        if (list.length && /(^|\s)nofollow(\s|$)/i.test(el.getAttribute('rel') || '')) {
-            list.push('nofollow');
-        }
-        return list;
-    };
+    const nofollow = !frame && /(^|\s)nofollow(\s|$)/i.test(el.getAttribute('rel') || '');
+    const finish = (list = out) => ({
+        reasons: list.length && nofollow ? [...list, 'nofollow'] : list, nofollow, framed: win.parent !== win,
+    });
     const shown = el.checkVisibility ? el.checkVisibility() : true;
     if (!shown || el.getClientRects().length === 0) {
         out.push('not-rendered');
@@ -198,11 +198,12 @@ function () {
 
     // Hidden until a person tabs to it, as a "skip to content" link: not a trap.
     const hidden = geometry || out.includes('transparent');
-    if (hidden && reveals(geometry)) return finish(out.filter((signal) => signal !== 'transparent'));
+    if (hidden && !frame && reveals(geometry)) return finish(out.filter((signal) => signal !== 'transparent'));
     if (geometry) out.push(geometry);
     if (geometry || out.includes('visibility-hidden') || out.includes('transparent')) {
         return finish();  // nothing of it to see: what it holds does not matter
     }
+    if (frame) return finish();  // what the frame shows is the link's own check
 
     const rgba = (c) => {
         const p = ((/^rgba?\(([^)]*)\)$/.exec(c || '') || [])[1] || '').split(/[\s,\/]+/).filter(Boolean).map(Number);

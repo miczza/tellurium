@@ -32,7 +32,8 @@ class _Session:
                 raise CDPError("Cannot find context with specified id", -32000)
             return {"object": {"objectId": f"iso-{params['executionContextId']}"}}
         if method == "Runtime.callFunctionOn":
-            return {"result": {"type": "object", "value": ["empty"]}}
+            found = {"reasons": ["empty"], "nofollow": False, "framed": False}
+            return {"result": {"type": "object", "value": found}}
         raise AssertionError(method)
 
     def target(self) -> str:

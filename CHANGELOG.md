@@ -24,7 +24,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `clip-path`, size, `font-size` or `opacity` must undo what hides the link, so
   `a:focus { transform: ... }` reveals nothing; a cross-origin sheet, an inline style that
   wins or `tabindex="-1"` leave it a trap. One `Runtime.callFunctionOn` in the
-  isolated world of the link's frame (OOPIFs included): no main-world call, global, node
+  isolated world of the link's frame (OOPIFs included), and one more for each `<iframe>` up
+  to the tab, checked like the link (a 0x0, off-page or transparent frame makes its links
+  traps): no main-world call, global, node
   or attribute; `trap_link.NoIsolatedWorldError` when the frame has no isolated world. The
   check is `tellurium/stealth/scripts/trap_link.js`, loaded like the other stealth scripts.
 - `Session.start(..., on_login_failure="raise"|"manual")`. `"raise"` (default) keeps the

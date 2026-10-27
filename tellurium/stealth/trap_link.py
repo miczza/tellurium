@@ -64,8 +64,11 @@ from tellurium.stealth.extension import load_script
 if TYPE_CHECKING:
     from tellurium.browser.element import Element
 
-# Run with ``this`` bound to the link, in the isolated world; returns the signals.
+# Run with ``this`` bound to the link (or, with ``frame``, an ``<iframe>`` holding it), in
+# the isolated world; returns ``{reasons, nofollow, framed}``.
 _REASONS_JS = load_script("trap_link.js")
+_OWNER_DOCUMENT_JS = "function () { return this.ownerDocument; }"
+_MAX_FRAMES = 16
 
 
 class NoIsolatedWorldError(RuntimeError):
@@ -75,25 +78,87 @@ class NoIsolatedWorldError(RuntimeError):
 async def reasons(element: Element) -> list[str]:
     """The trap signals of *element* (an ``<a>``) that fired; empty for a normal link.
 
-    One ``Runtime.callFunctionOn`` in the isolated world of the element's frame.
-    :class:`NoIsolatedWorldError` when that frame has no isolated world: the check never
-    runs where the page could see it.
+    One ``Runtime.callFunctionOn`` in the isolated world of the element's frame; inside a
+    frame, one more for each ``<iframe>`` up to the tab (an OOPIF's in its parent's
+    session): a frame a person cannot see hides the links in it. Its signals follow the
+    link's own. :class:`NoIsolatedWorldError` when a frame on the way has no isolated
+    world: the check never runs where the page could see it.
     """
     session, tab = element._session, element._tab
     object_id = await element._resolve()
-    target = await _isolated(element, object_id)
+    described = await send_on_handle(session, "DOM.describeNode", {"objectId": object_id})
+    frame_id = element._frame_id or await _root_frame(tab, session)
+    found, document = await _check(tab, session, frame_id, described["node"]["backendNodeId"])
+    signals = [signal for signal in found["reasons"] if signal != "nofollow"]
+    for _hop in range(_MAX_FRAMES):
+        if document is None or (owner := await _owner(session, document)) is None:
+            break
+        session, backend = owner
+        frame_id = await _root_frame(tab, session)
+        held, document = await _check(tab, session, frame_id, backend, frame=True)
+        signals += [signal for signal in held["reasons"] if signal not in signals]
+    return signals + ["nofollow"] if signals and found["nofollow"] else signals
+
+
+async def is_trap_link(element: Element) -> bool:
+    """Whether a person could not see or click *element* now, or it wears a honeypot marker."""
+    return bool(await reasons(element))
+
+
+async def _check(
+    tab: Any, session: Any, frame_id: str, backend: int, *, frame: bool = False
+) -> tuple[dict, int | None]:
+    """The check of node *backend* in *frame_id*'s isolated world, and, when that node is
+    itself inside a frame, the backend id of its document (``None`` at the top)."""
+    target = await _isolated(tab, session, frame_id, backend)
     if target is None:
         raise NoIsolatedWorldError("no isolated world in the link's frame: trap check not run")
+    handles = handles_of(tab)
     try:
-        found = _value(await send_on_handle(session, "Runtime.callFunctionOn", _call(target)))
+        call = {"objectId": target, "functionDeclaration": _REASONS_JS, "returnByValue": True}
+        call["arguments"] = [{"value": frame}]
+        found = _value(await send_on_handle(session, "Runtime.callFunctionOn", call))
+        if not found.get("framed"):
+            return found, None
+        own = {"objectId": target, "functionDeclaration": _OWNER_DOCUMENT_JS}
+        document = (await send_on_handle(session, "Runtime.callFunctionOn", own))["result"]
+        try:
+            where = {"objectId": document["objectId"]}
+            node = (await send_on_handle(session, "DOM.describeNode", where))["node"]
+        finally:
+            if handles is not None:
+                handles.discard(document["objectId"], session)
+        return found, node["backendNodeId"]
     finally:
-        if (handles := handles_of(tab)) is not None:
+        if handles is not None:
             handles.discard(target, session)
-    return list(found or [])
 
 
-def _call(target: str) -> dict:
-    return {"objectId": target, "functionDeclaration": _REASONS_JS, "returnByValue": True}
+async def _owner(session: Any, document: int) -> tuple[Any, int] | None:
+    """The ``<iframe>`` holding *document* of *session*: the session it lives in and its
+    backend id; ``None`` for the tab's own document."""
+    from tellurium.browser.geometry import _chain
+
+    tree = (await send_on_handle(session, "Page.getFrameTree", {}))["frameTree"]
+    frames, children = [], list(tree.get("childFrames", []))
+    while children:
+        child = children.pop()
+        frames.append(child["frame"]["id"])
+        children += child.get("childFrames", [])
+    for frame_id in frames:
+        try:
+            owner = await send_on_handle(session, "DOM.getFrameOwner", {"frameId": frame_id})
+            where = {"backendNodeId": owner["backendNodeId"]}
+            node = (await send_on_handle(session, "DOM.describeNode", where))["node"]
+        except CDPError:  # a frame that went meanwhile
+            continue
+        if node.get("contentDocument", {}).get("backendNodeId") == document:
+            return session, owner["backendNodeId"]
+    if not (hops := _chain(session)):
+        return None
+    _, parent, frame_id = hops[0]  # an OOPIF's root document: its <iframe> is in the parent's
+    owner = await send_on_handle(parent, "DOM.getFrameOwner", {"frameId": frame_id})
+    return parent, owner["backendNodeId"]
 
 
 def _value(answer: dict) -> Any:
@@ -103,23 +168,15 @@ def _value(answer: dict) -> Any:
     return remote.get("value")
 
 
-async def is_trap_link(element: Element) -> bool:
-    """Whether a person could not see or click *element* now, or it wears a honeypot marker."""
-    return bool(await reasons(element))
-
-
-async def _isolated(element: Element, object_id: str) -> str | None:
-    """*element*'s node resolved in its frame's isolated world, or ``None``."""
+async def _isolated(tab: Any, session: Any, frame_id: str, backend: int) -> str | None:
+    """Node *backend* resolved in *frame_id*'s isolated world, or ``None``."""
     from tellurium.browser.refs import frame_world
 
-    session, tab = element._session, element._tab
     if not hasattr(tab, "_hsim_worlds"):
         return None
-    described = await send_on_handle(session, "DOM.describeNode", {"objectId": object_id})
-    params = {"backendNodeId": described["node"]["backendNodeId"]}
+    params: dict[str, Any] = {"backendNodeId": backend}
     if (handles := handles_of(tab)) is not None:
         params["objectGroup"] = handles.name
-    frame_id = await _frame_of(element)
     for _attempt in range(2):  # a world cached for a document that has gone: make a new one
         context = await frame_world(tab, session, frame_id)
         if context is None:
@@ -134,11 +191,8 @@ async def _isolated(element: Element, object_id: str) -> str | None:
     return None
 
 
-async def _frame_of(element: Element) -> str:
-    """The frame the element's session addresses: the tab's, or an OOPIF's own root."""
-    session, tab = element._session, element._tab
-    if element._frame_id:
-        return element._frame_id
+async def _root_frame(tab: Any, session: Any) -> str:
+    """The frame *session* addresses: the tab's, or an OOPIF's own root."""
     if session is tab._session:
         return tab._frame_id
     tree = await send_on_handle(session, "Page.getFrameTree", {})

@@ -816,8 +816,11 @@ when the link is out of the tab order (`tabindex="-1"`).
 
 The check is conservative and has no thresholds to tune: a link of a **closed**
 menu is a trap (a person does not click it without opening the menu), so open the
-menu first if you mean to follow it. It runs as one call in the isolated world of
-the link's frame (cross-site iframes included): the page can neither see it nor
+menu first if you mean to follow it. A link inside a frame a person cannot see (a
+0x0 `<iframe>`, one off the page, one in a transparent box, at any depth) is a trap
+too: each `<iframe>` up to the tab gets the same check and its signals join the
+link's. It runs as one call in the isolated world of the link's frame, plus one per
+`<iframe>` above it (cross-site iframes included): the page can neither see it nor
 fake what it reads, and no global, node or attribute is left behind. When that
 frame has no isolated world it raises `trap_link.NoIsolatedWorldError` instead of
 running where the page could see it.

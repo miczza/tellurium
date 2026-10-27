@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>A link</title></head>
+<body>
+  <a id="link" href="/framed/link">link</a>
+  <script>
+    const query = new URLSearchParams(location.search), link = document.getElementById('link');
+    link.textContent = query.get('name') + ' link';
+    if (query.get('name') === 'Zero') link.rel = 'nofollow';
+  </script>
+</body>
+</html>

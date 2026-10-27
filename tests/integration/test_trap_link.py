@@ -146,6 +146,23 @@ async def test_a_link_inside_a_frame_is_checked_in_that_frame(browser, local_ser
     assert await visible.apply("function () { return window.__touched; }") == 0
 
 
+@pytest.mark.parametrize("query", ["", "?oopif"], ids=["same-site", "oopif"])
+async def test_a_link_in_a_hidden_frame_is_a_trap(browser, local_server, query):
+    """The ``<iframe>`` that holds the link is checked like the link, up to the tab: a
+    0x0 frame, one far off the page, one inside a transparent box two frames up."""
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/trap_frame_hidden.html{query}")
+    expected = {
+        "Shown": [],
+        "Zero": ["zero-size", "nofollow"],  # its nofollow counts next to the frame's
+        "Away": ["off-page"],
+        "Ghost": ["transparent"],
+        "Deep": ["transparent"],
+    }
+    found = {name: await trap_link.reasons(await _framed(tab, f"{name} link")) for name in expected}
+    assert found == expected
+
+
 async def test_without_an_isolated_world_the_check_refuses_to_run(page, monkeypatch):
     import tellurium.browser.refs as refs
 
