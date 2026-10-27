@@ -35,6 +35,7 @@ CACHE_SIZE = 256  # origins kept per browser, least recently used out first
 _READ_CHUNK = 64 * 1024
 _CLOSE_TIMEOUT = 2.0
 _OPEN_TIMEOUT = 5.0  # creating and attaching the hidden target
+_LATE_REPLY_TIMEOUT = 30.0  # how long a timed-out createTarget is still watched
 
 _AGENT = re.compile(r"[A-Za-z_-]+")
 _UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
@@ -193,15 +194,33 @@ async def open_frame(browser: Any, context_id: str) -> Frame:
     params: dict[str, Any] = {"url": "about:blank", "hidden": True}
     if context_id:
         params["browserContextId"] = context_id
-    target_id = (await root.send("Target.createTarget", params, timeout=_OPEN_TIMEOUT))["targetId"]
+    create = asyncio.ensure_future(
+        root.send("Target.createTarget", params, timeout=_LATE_REPLY_TIMEOUT)
+    )
+    try:
+        target_id = (await asyncio.wait_for(asyncio.shield(create), _OPEN_TIMEOUT))["targetId"]
+    except BaseException:
+        # Chrome may still create it: whoever gave up on it closes it on arrival.
+        create.add_done_callback(lambda t: _close_created(root, t))
+        raise
     try:
         session = await browser._router.attach(target_id, timeout=_OPEN_TIMEOUT)
     except BaseException:
-        close = root.send("Target.closeTarget", {"targetId": target_id}, timeout=_CLOSE_TIMEOUT)
-        task = asyncio.ensure_future(close)  # even when cancelled: never leave it open
-        task.add_done_callback(lambda t: t.cancelled() or t.exception())
+        _close_target(root, target_id)
         raise
     return Frame(session, target_id)
+
+
+def _close_created(root: Any, create: asyncio.Future) -> None:
+    if not create.cancelled() and create.exception() is None:
+        _close_target(root, create.result()["targetId"])
+
+
+def _close_target(root: Any, target_id: str) -> None:
+    """Close *target_id* in the background, even when the caller is cancelled."""
+    close = root.send("Target.closeTarget", {"targetId": target_id}, timeout=_CLOSE_TIMEOUT)
+    task = asyncio.ensure_future(close)
+    task.add_done_callback(lambda t: t.cancelled() or t.exception())
 
 
 async def download(frame: Frame, origin: str, agent: str) -> tuple[RobotsRules, float]:

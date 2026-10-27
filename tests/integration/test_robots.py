@@ -276,6 +276,15 @@ async def test_an_unreachable_robots_txt_disallows_everything():
         await browser.close()
 
 
+async def _hidden_targets_after_a_while(browser) -> list[str]:
+    for _ in range(30):
+        await asyncio.sleep(0.1)
+        infos = (await browser._router.root.send("Target.getTargets", {}, timeout=5))["targetInfos"]
+        if not (hidden := [i["targetId"] for i in infos if i["type"] == "other"]):
+            break
+    return hidden
+
+
 async def test_a_hidden_target_that_cannot_open_fails_the_get(site, monkeypatch):
     """Creating the hidden target (here: given no time) is part of the
     navigation: its failure is a NavigationError with the cause chained."""
@@ -289,6 +298,7 @@ async def test_a_hidden_target_that_cannot_open_fails_the_get(site, monkeypatch)
     assert isinstance(caught.value.__cause__, TimeoutError)
     assert not isinstance(caught.value, RobotsDisallowedError)
     assert proxy.hits("/page") == 0
+    assert await _hidden_targets_after_a_while(browser) == []  # created late: closed
     monkeypatch.undo()
     await tab.get("http://site.test/page", timeout=15)  # not cached: opened again
     assert proxy.hits("/page") == 1

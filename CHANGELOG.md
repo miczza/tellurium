@@ -420,6 +420,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the hidden target it is loaded from cannot be opened (`Target.createTarget` or the
   attach failing or timing out) raises `NavigationError` with the cause chained, instead
   of a bare `TimeoutError` or `CDPError`.
+  When `Target.createTarget` timed out but Chrome creates the target later (within 30 s),
+  that hidden target is closed as soon as it arrives instead of staying open unowned.
 
 - A new `Session` no longer draws its fingerprint seed from the global `random`: a script
   that called `random.seed()` gave every new identity the same seed.
