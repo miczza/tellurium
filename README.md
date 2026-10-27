@@ -792,7 +792,7 @@ wears a honeypot marker. The signals `trap_link.reasons(link)` names:
 | `off-page` | wholly outside the scrollable document (`left: -9999px`), or outside the viewport when `position: fixed` or along an axis the page does not scroll (`overflow: hidden` on the root, as while a modal is open) |
 | `clipped` | nothing left inside the ancestors that clip it (`overflow: hidden` on a 0-height box, `clip`, a `clip-path` that leaves nothing: `inset(50%)`, `circle(0)`, `ellipse(0 0)`, a `polygon()` of no area) |
 | `empty` | nothing to see in its box: no text (or text pushed out by `text-indent`), image, icon, pseudo-element, background, border |
-| `same-color` | all its text transparent or the color of the background behind it |
+| `same-color` | all its text transparent or the color of the background behind it; not when that background cannot be told (an image, a gradient, an overlay or another element under the text, as in a hero banner) |
 | `aria-hidden` | `aria-hidden="true"` on it or an ancestor, though still clickable |
 | `inert` | inside an `inert` subtree |
 | `no-pointer` | `pointer-events: none` |

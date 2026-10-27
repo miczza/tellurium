@@ -59,6 +59,8 @@ NORMAL = [
     "ok-overflow",
     "ok-logo",
     "ok-round",
+    "ok-hero",
+    "ok-hero-shade",
     "ok-triangle",
     "ok-scroller",
     "ok-menu-open",

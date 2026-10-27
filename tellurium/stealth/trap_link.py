@@ -31,7 +31,9 @@ signals that fired:
     nothing a person could see in its box: no text, no image, icon, pseudo-element
     content, background image or color, border;
 ``same-color``
-    all its visible text is transparent or the color of the background behind it;
+    all its visible text is transparent or the color of the background behind it,
+    when that background is known: never over an image, a gradient, a positioned
+    ``::before``/``::after`` overlay or another element painting under the text;
 ``honeypot-marker``
     ``honeypot`` (also ``honey-pot``, ``honey_pot``) in its ``id``, ``class`` or ``name``;
 ``nofollow``
@@ -228,14 +230,16 @@ function () {
         return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
     };
     const sees = (r) => r.width > 0 && r.height > 0 && !small(meet(rect(r), vis));
-    const runs = [];
+    const runs = [], glyphs = [];
     const walker = doc.createTreeWalker(el, NodeFilter.SHOW_TEXT);
     for (let i = 0; i < CAP && walker.nextNode(); i++) {
         const node = walker.currentNode, parent = node.parentElement;
         if (!node.data.trim() || !parent) continue;
         if (css(parent).visibility !== 'visible' || (parent.checkVisibility && !parent.checkVisibility())) continue;
         range.selectNodeContents(node);
-        if ([...range.getClientRects()].some(sees)) runs.push(parent);
+        const seen = [...range.getClientRects()].filter(sees);
+        if (seen.length) runs.push(parent);
+        glyphs.push(...seen.map(rect));
     }
     const nodes = [el, ...[...el.querySelectorAll('*')].slice(0, CAP)];
     const graphic = /^(img|svg|picture|video|canvas|object|embed|iframe|input|select|textarea|button)$/;
@@ -257,10 +261,16 @@ function () {
         out.push('empty');
         return finish();
     }
+    // A positioned ::before / ::after with a background: an overlay a hero paints.
+    const shade = (n) => ['::before', '::after'].some((p) => {
+        const s = css(n, p);
+        return !['none', 'normal'].includes(s.content) && ['absolute', 'fixed'].includes(s.position)
+            && (s.backgroundImage !== 'none' || (rgba(s.backgroundColor) || [0, 0, 0, 1])[3] > 0);
+    });
     const backdrop = (n) => {
         for (; n; n = up(n)) {
             const s = css(n);
-            if (s.backgroundImage !== 'none') return null;
+            if (s.backgroundImage !== 'none' || (n !== el && shade(n))) return null;
             const c = rgba(s.backgroundColor);
             if (!c) return null;
             if (c[3] === 0) continue;
@@ -276,7 +286,24 @@ function () {
         const b = backdrop(n);
         return !!b && [0, 1, 2].every((i) => Math.abs(c[i] - b[i]) <= SAME);
     };
-    if (runs.length && !marks && runs.every(unseen)) out.push('same-color');
+    // Something that is not an ancestor painting where the text is (a hero <img>
+    // behind it, a panel): the background is not known, so the colors cannot be compared.
+    const overlaid = () => {
+        const mine = new Set(chain), under = backdrop(el);
+        const tree = doc.createTreeWalker(doc.documentElement, NodeFilter.SHOW_ELEMENT);
+        for (let n = tree.currentNode, left = 20000; n; n = tree.nextNode()) {
+            if (--left < 0) return true;  // too much to look through: not known either
+            if (mine.has(n) || el.contains(n)) continue;
+            const b = rect(n.getBoundingClientRect());
+            if (!glyphs.some((g) => !small(meet(g, b)))) continue;
+            if (n.checkVisibility && !n.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) continue;
+            const s = css(n), c = rgba(s.backgroundColor) || [0, 0, 0, 1];
+            const same = under && c[3] === 1 && [0, 1, 2].every((i) => Math.abs(c[i] - under[i]) <= SAME);
+            if (graphic.test(n.localName) || s.backgroundImage !== 'none' || (c[3] > 0 && !same)) return true;
+        }
+        return false;
+    };
+    if (runs.length && !marks && runs.every(unseen) && !overlaid()) out.push('same-color');
     return finish();
 
     function revealedOnFocus() {
