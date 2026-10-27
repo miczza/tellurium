@@ -17,10 +17,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   gradient or an overlay); `off-page` follows every box that scrolls the link, so a link
   below the fold of an app scrolling in its own box, or a further slide of a carousel, is
   reachable. Below the fold, image links with `alt`, icons with `aria-label`, open menus
-  and skip links in sight once focused are not traps; a link of a closed menu is. "In sight once focused" is measured again under
-  `CSS.forcePseudoState` (`:focus`, `:focus-visible`: no focus moves, no event fires, no
-  scroll), not read from the rules; a transition on the way back, or `tabindex="-1"`,
-  leaves the link a trap. One `Runtime.callFunctionOn` (two around a forced focus) in the
+  and skip links brought back by their focus rules are not traps; a link of a closed menu
+  is. The `:focus`, `:focus-visible` and `:focus-within` rules are read from the readable
+  sheets (`@import`, `@media`, `@supports`, `@layer`, nesting), never applied (nothing
+  fetched, no transition, no focus moved): their declared `left`/`top`, `clip`,
+  `clip-path`, size, `font-size` or `opacity` must undo what hides the link, so
+  `a:focus { transform: ... }` reveals nothing; a cross-origin sheet, an inline style that
+  wins or `tabindex="-1"` leave it a trap. One `Runtime.callFunctionOn` in the
   isolated world of the link's frame (OOPIFs included): no main-world call, global, node
   or attribute; `trap_link.NoIsolatedWorldError` when the frame has no isolated world. The
   check is `tellurium/stealth/scripts/trap_link.js`, loaded like the other stealth scripts.

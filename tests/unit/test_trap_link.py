@@ -1,5 +1,5 @@
 """Where ``trap_link.reasons`` runs its check: the isolated world, retried once, never
-the page's; and the second look under a forced ``:focus``."""
+the page's; one call, with nothing forced on the page."""
 
 from __future__ import annotations
 
@@ -13,10 +13,9 @@ from tellurium.stealth import trap_link
 
 
 class _Session:
-    def __init__(self, *, stale_worlds=0, worlds=True, focus=None):
+    def __init__(self, *, stale_worlds=0, worlds=True):
         self.calls: list[tuple[str, dict]] = []
         self._stale, self._worlds, self._next = stale_worlds, worlds, 100
-        self._focus = focus  # None: no focus rule; else whether the focused link is seen
 
     async def send(self, method, params, timeout=None):
         self.calls.append((method, params))
@@ -33,16 +32,7 @@ class _Session:
                 raise CDPError("Cannot find context with specified id", -32000)
             return {"object": {"objectId": f"iso-{params['executionContextId']}"}}
         if method == "Runtime.callFunctionOn":
-            if self._focus is None:
-                return {"result": {"type": "object", "value": ["empty"]}}
-            if params["arguments"] == [{"value": True}]:
-                return {"result": {"type": "object", "value": {"seen": self._focus}}}
-            found = {"reasons": ["off-page"], "revealed": []}
-            return {"result": {"type": "object", "value": found}}
-        if method == "DOM.requestNode":
-            return {"nodeId": 5}
-        if method in ("CSS.enable", "CSS.forcePseudoState", "CSS.disable"):
-            return {}
+            return {"result": {"type": "object", "value": ["empty"]}}
         raise AssertionError(method)
 
     def target(self) -> str:
@@ -76,17 +66,13 @@ async def test_without_an_isolated_world_the_check_does_not_run():
     assert not [m for m, _ in session.calls if m == "Runtime.callFunctionOn"]
 
 
-@pytest.mark.parametrize("seen", [True, False])
-async def test_a_focus_rule_counts_only_if_the_forced_focus_shows_the_link(seen):
-    session = _Session(focus=seen)
-    assert await trap_link.reasons(_element(session)) == ([] if seen else ["off-page"])
-    css = [(m, p.get("forcedPseudoClasses")) for m, p in session.calls if m.startswith("CSS.")]
-    assert css == [
-        ("CSS.enable", None),
-        ("CSS.forcePseudoState", ["focus", "focus-visible"]),
-        ("CSS.forcePseudoState", []),
-        ("CSS.disable", None),
-    ]
+async def test_the_check_is_one_call_that_forces_nothing():
+    """Focus rules are read in the isolated world, not applied: no ``CSS`` domain."""
+    session = _Session()
+    await trap_link.reasons(_element(session))
+    methods = [m for m, _ in session.calls]
+    assert methods.count("Runtime.callFunctionOn") == 1
+    assert not [m for m in methods if m.startswith("CSS.")]
 
 
 def test_the_check_is_the_script_shipped_with_the_stealth_scripts():

@@ -8,11 +8,14 @@ page counts every main-world call the check could make: it must make none.
 from __future__ import annotations
 
 import asyncio
+import http.server
 import re
+import threading
 
 import pytest
 
 from tellurium.stealth import trap_link
+from tests.integration.conftest import _FixtureHandler
 
 TRAPS = {
     "trap-display": ["not-rendered"],
@@ -170,15 +173,15 @@ FOCUS_TRAPS = {
     "trap-opacity": ["transparent"],
     "trap-font": ["zero-size"],
     "trap-unfocusable": ["off-page"],
-    "trap-animated": ["off-page"],
 }
-FOCUS_NORMAL = ["ok-skip", "ok-sr-skip", "ok-within", "ok-fade"]
+FOCUS_NORMAL = ["ok-skip", "ok-sr-skip", "ok-within", "ok-fade", "ok-animated"]
 
 
 async def test_only_a_focus_rule_that_brings_the_link_back_reveals_it(browser, local_server):
     """``a:focus { transform: translateY(-1px) }`` touches a property on every link but
-    brings none back: the focused state is looked at, not the rule. A transition on the
-    way back (or a link out of the tab order) leaves it a trap: no event is fired."""
+    brings none back: what a rule declares has to undo what hides the link. A link out of
+    the tab order stays a trap; one with a transition on the way back does not, and no
+    event is fired: nothing is applied."""
     tab = await browser.new_tab(f"{local_server}/trap_focus.html")
     await tab.eval("window.scrollTo(0, 120)")
     frames = "new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))"
@@ -193,3 +196,52 @@ async def test_only_a_focus_rule_that_brings_the_link_back_reveals_it(browser, l
     assert await tab.eval("window.__events") == []
     assert await tab.eval("window.__touched") == 0
     assert await tab.eval("getComputedStyle(document.getElementById('ok-skip')).left") == "-9999px"
+
+
+class _Counting(_FixtureHandler):
+    seen: list[str] = []
+
+    def do_GET(self):
+        type(self).seen.append(self.path)
+        super().do_GET()
+
+
+@pytest.fixture
+def counting_server():
+    """The fixtures, served by a server that records every path asked for."""
+    handler = type("Handler", (_Counting,), {"seen": []})
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}", handler.seen
+    server.shutdown()
+
+
+STATIC_TRAPS = {
+    "trap-no-media": ["off-page"],
+    "trap-cross": ["off-page"],
+    "trap-inline": ["off-page"],
+    "trap-ancestor": ["off-page"],
+    "trap-shy": ["off-page"],
+    "trap-faint": ["transparent"],
+}
+STATIC_NORMAL = ["ok-loud", "ok-imported", "ok-media", "ok-nested", "ok-panel", "ok-layered"]
+
+
+async def test_focus_rules_are_read_never_applied(browser, counting_server):
+    """A skip link is told apart by reading its ``:focus`` rules (``@import``, ``@media``,
+    nesting; a cross-origin sheet reveals nothing): nothing of those rules is applied, so
+    the server gets no image or font they name and the page sees no focus or transition."""
+    base, seen = counting_server
+    tab = await browser.new_tab(f"{base}/trap_focus_static.html")
+    loaded = "new Promise((r) => document.fonts.ready.then(() => setTimeout(r, 200)))"
+    await tab.eval(loaded)
+    assert await tab.eval("document.styleSheets.length") == 2  # the cross-origin one too
+    asked = len(seen)
+    expected = STATIC_TRAPS | {link: [] for link in STATIC_NORMAL}
+    got = await _reasons(tab, expected)
+    await tab.eval(loaded)
+    assert seen[asked:] == []
+    assert not [path for path in seen if path.startswith("/probe/")]
+    assert await tab.eval("window.__events") == []
+    assert got == expected
+    assert await tab.eval("document.activeElement === document.body") is True

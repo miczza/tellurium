@@ -40,18 +40,21 @@ style, boxes, ancestors and attributes, and names the signals that fired:
     ``rel="nofollow"``, reported only next to another signal: alone it is a
     normal link.
 
-A hidden link (off the page, clipped away, transparent) in sight while Chrome
-forces ``:focus`` on it, as a "skip to content" link, is not a trap: the focused
-state is measured, not the rules. With a transition or an animation on the way, or
-out of the tab order, it stays one. Conservative, with no thresholds to tune: better
-to skip a closed menu's link than to click a trap.
+A hidden link (off the page, clipped away, too small, transparent) that its
+``:focus``, ``:focus-visible`` or ``:focus-within`` rules bring back, as a "skip to
+content" link, is not a trap. The rules are read from the sheets the page can read
+(``@import``, ``@media``, ``@supports``, ``@layer`` and nesting followed), never
+applied: nothing is fetched, no transition starts, the focus does not move. Only the
+values they declare count, and only for what hides the link: ``left``/``top`` that
+bring it back on the page, ``clip: auto``, ``clip-path: none``, a size or a
+``font-size`` again, an ``opacity`` above zero; ``a:focus { transform: ... }``
+brings nothing back. A cross-origin sheet, a rule an inline style beats, a link out
+of the tab order: it stays a trap. Conservative: better to skip a closed menu's link
+than to click a trap.
 """
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
-import weakref
 from typing import TYPE_CHECKING, Any
 
 from tellurium.browser.handles import handles_of, send_on_handle
@@ -60,10 +63,6 @@ from tellurium.stealth.extension import load_script
 
 if TYPE_CHECKING:
     from tellurium.browser.element import Element
-    from tellurium.cdp.transport._session import Session
-
-# One forced-focus check at a time per CDP session (CSS.disable ends them all).
-_FOCUS_LOCKS: weakref.WeakKeyDictionary[Session, asyncio.Lock] = weakref.WeakKeyDictionary()
 
 # Run with ``this`` bound to the link, in the isolated world; returns the signals.
 _REASONS_JS = load_script("trap_link.js")
@@ -76,8 +75,7 @@ class NoIsolatedWorldError(RuntimeError):
 async def reasons(element: Element) -> list[str]:
     """The trap signals of *element* (an ``<a>``) that fired; empty for a normal link.
 
-    One ``Runtime.callFunctionOn`` in the isolated world of the element's frame, and a
-    second one under a forced ``:focus`` when a focus rule might bring a hidden link back.
+    One ``Runtime.callFunctionOn`` in the isolated world of the element's frame.
     :class:`NoIsolatedWorldError` when that frame has no isolated world: the check never
     runs where the page could see it.
     """
@@ -88,17 +86,14 @@ async def reasons(element: Element) -> list[str]:
         raise NoIsolatedWorldError("no isolated world in the link's frame: trap check not run")
     try:
         found = _value(await send_on_handle(session, "Runtime.callFunctionOn", _call(target)))
-        if isinstance(found, dict):
-            found = found["revealed"] if await _seen_focused(session, target) else found["reasons"]
     finally:
         if (handles := handles_of(tab)) is not None:
             handles.discard(target, session)
     return list(found or [])
 
 
-def _call(target: str, *, focused: bool = False) -> dict:
-    args = {"arguments": [{"value": focused}], "returnByValue": True}
-    return {"objectId": target, "functionDeclaration": _REASONS_JS} | args
+def _call(target: str) -> dict:
+    return {"objectId": target, "functionDeclaration": _REASONS_JS, "returnByValue": True}
 
 
 def _value(answer: dict) -> Any:
@@ -106,35 +101,6 @@ def _value(answer: dict) -> Any:
     if remote.get("subtype") == "error" or "exceptionDetails" in answer:
         raise RuntimeError(remote.get("description", "trap-link check failed"))
     return remote.get("value")
-
-
-async def _seen_focused(session: Session, target: str) -> bool:
-    """Whether the link is in sight while Chrome forces ``:focus`` and ``:focus-visible`` on it.
-
-    ``CSS.forcePseudoState`` only changes which rules match: focus does not move, no focus or
-    blur event fires, nothing scrolls. Force, measure and release go out back to back, so the
-    state lasts one round trip; ``CSS.disable`` drops what is left. One at a time per session.
-    """
-    async with _FOCUS_LOCKS.setdefault(session, asyncio.Lock()):
-        node = (await send_on_handle(session, "DOM.requestNode", {"objectId": target}))["nodeId"]
-        await send_on_handle(session, "CSS.enable", {})
-        try:
-            force = {"nodeId": node, "forcedPseudoClasses": ["focus", "focus-visible"]}
-            steps = [
-                ("CSS.forcePseudoState", force),
-                ("Runtime.callFunctionOn", _call(target, focused=True)),
-                ("CSS.forcePseudoState", force | {"forcedPseudoClasses": []}),
-            ]
-            forced, answer, _ = await asyncio.gather(
-                *(send_on_handle(session, method, params) for method, params in steps),
-                return_exceptions=True,
-            )
-        finally:
-            with contextlib.suppress(CDPError, TimeoutError, ConnectionError):
-                await send_on_handle(session, "CSS.disable", {})
-    if isinstance(answer, BaseException):
-        raise answer
-    return not isinstance(forced, BaseException) and bool(_value(answer).get("seen"))
 
 
 async def is_trap_link(element: Element) -> bool:

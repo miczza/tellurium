@@ -1,4 +1,4 @@
-function (focused) {
+function () {
     const el = this, doc = el.ownerDocument, win = doc.defaultView;
     const MIN = 2, SAME = 3, CAP = 200;
     const css = (n, pseudo) => win.getComputedStyle(n, pseudo);
@@ -20,13 +20,16 @@ function (focused) {
     };
     const shown = el.checkVisibility ? el.checkVisibility() : true;
     if (!shown || el.getClientRects().length === 0) {
-        if (focused) return {seen: false};
         out.push('not-rendered');
         return finish();
     }
     const own = css(el);
     if (own.visibility !== 'visible') out.push('visibility-hidden');
-    if (chain.some((n) => parseFloat(css(n).opacity) === 0)) out.push('transparent');
+    // How much of the link shows through its own and its ancestors' opacity.
+    const computed = (n, prop) => css(n).getPropertyValue(prop);
+    const fade = (n, value) => parseFloat(value(n, 'opacity'));
+    const seenThrough = (value) => chain.reduce((p, n) => p * fade(n, value), 1);
+    if (seenThrough(computed) <= 0) out.push('transparent');
     if (own.pointerEvents === 'none') out.push('no-pointer');
 
     const rect = (r) => ({l: r.left, t: r.top, r: r.right, b: r.bottom});
@@ -45,18 +48,23 @@ function (focused) {
         if (!clips(own.overflowY)) { area.t = Math.min(area.t, r.top); area.b = Math.max(area.b, r.bottom); }
     }
     const length = (v, whole) => (v.endsWith('%') ? (parseFloat(v) / 100) * whole : parseFloat(v) || 0);
+    const cuts = [];  // [box, how] of each box that cut part of the link away
+    const cutBy = (n, how, before, after) => {
+        if (['l', 't', 'r', 'b'].some((k) => after[k] !== before[k])) cuts.push([n, how]);
+        return after;
+    };
     const shape = (n, s, vis) => {
         const r = n.getBoundingClientRect();
         if (s.clip && s.clip.startsWith('rect(') && (s.position === 'absolute' || s.position === 'fixed')) {
             const [t, rr, b, l] = s.clip.slice(5, -1).split(/[\s,]+/);
             const at = (v, auto) => (v === 'auto' ? auto : parseFloat(v));
-            vis = meet(vis, {
+            vis = cutBy(n, 'clip', vis, meet(vis, {
                 l: r.left + at(l, 0), t: r.top + at(t, 0),
                 r: r.left + at(rr, r.width), b: r.top + at(b, r.height),
-            });
+            }));
         }
         const cut = clipShape(s.clipPath || 'none', r);
-        return cut ? meet(vis, cut) : vis;
+        return cut ? cutBy(n, 'clip-path', vis, meet(vis, cut)) : vis;
     };
     // The box a basic-shape clip-path leaves of r (viewport coordinates), or null when
     // it cannot tell (url(), path(), a position with offsets): then it clips nothing.
@@ -127,6 +135,7 @@ function (focused) {
     const axes = [['overflowX', 'l', 'r'], ['overflowY', 't', 'b']];
     // shift: how far scrolling the boxes would move the link, to place its text in vis.
     let vis = shape(el, own, {...area}), off = false;
+    const offAxes = new Set();  // 'l' (across) and 't' (down): along which it is off the page
     const shift = {l: 0, t: 0};
     const hold = (n, s) => {
         const r = n.getBoundingClientRect(), l = r.left + n.clientLeft, t = r.top + n.clientTop;
@@ -138,12 +147,16 @@ function (focused) {
             if (!scrolled && !clips(s[axis])) continue;
             const room = scrolled ? span : pad;
             if (vis[hi] <= room[lo] || vis[lo] >= room[hi]) {
-                if (scrolled || n === body) off = true;  // the page itself does not scroll there
+                if (scrolled || n === body) {  // the page itself does not scroll there
+                    off = true;
+                    offAxes.add(lo);
+                } else cuts.push([n, 'overflow']);
                 vis[hi] = vis[lo];
                 continue;
             }
             const inside = Math.min(vis[hi], pad[hi]) - Math.max(vis[lo], pad[lo]);
             if (!scrolled || inside >= MIN) {
+                if (!scrolled && (vis[lo] < pad[lo] || vis[hi] > pad[hi])) cuts.push([n, 'overflow']);
                 vis[lo] = Math.max(vis[lo], pad[lo]);
                 vis[hi] = Math.min(vis[hi], pad[hi]);
             } else {  // scrolled into view: as much of it as the box can show
@@ -173,20 +186,19 @@ function (focused) {
     );
     const [x0, x1] = reach('overflowX', win.scrollX, win.innerWidth, page.scrollWidth);
     const [y0, y1] = reach('overflowY', win.scrollY, win.innerHeight, page.scrollHeight);
-    if (!off && !small(vis) && (vis.r <= x0 || vis.b <= y0 || vis.l >= x1 || vis.t >= y1)) off = true;
+    if (!off && !small(vis)) {
+        if (vis.r <= x0 || vis.l >= x1) offAxes.add('l');
+        if (vis.b <= y0 || vis.t >= y1) offAxes.add('t');
+        off = offAxes.size > 0;
+    }
     let geometry = null;
     if (small(area)) geometry = 'zero-size';
     else if (off) geometry = 'off-page';
     else if (small(vis)) geometry = 'clipped';
 
-    // Called again while Chrome forces :focus on the link: is it in sight then?
-    if (focused) return {seen: !geometry && !out.includes('transparent')};
+    // Hidden until a person tabs to it, as a "skip to content" link: not a trap.
     const hidden = geometry || out.includes('transparent');
-    if (hidden && mayReveal()) {  // Python looks at the focused state, then picks one
-        const revealed = finish(out.filter((signal) => signal !== 'transparent'));
-        if (geometry) out.push(geometry);
-        return {reasons: finish(), revealed};
-    }
+    if (hidden && reveals(geometry)) return finish(out.filter((signal) => signal !== 'transparent'));
     if (geometry) out.push(geometry);
     if (geometry || out.includes('visibility-hidden') || out.includes('transparent')) {
         return finish();  // nothing of it to see: what it holds does not matter
@@ -274,46 +286,162 @@ function (focused) {
     if (runs.length && !marks && runs.every(unseen) && !overlaid()) out.push('same-color');
     return finish();
 
-    // Whether a :focus rule might bring the link back once a person tabs to it. Only a
-    // hint: the focused state itself decides. Not with a transition or an animation on
-    // the way (its events would reach the page), nor out of the tab order.
-    function mayReveal() {
-        const focus = /:focus(-visible|-within)?/g, animates = /^(transition|animation)/;
-        if (el.tabIndex < 0) return false;
-        let budget = 10000, found = false, moving = false;
-        const hit = new Set([el]);
-        const scan = (rules) => {
-            for (const rule of rules) {
-                if (--budget < 0 || moving) return;
-                if (!rule.selectorText) {
-                    if (rule.cssRules) scan(rule.cssRules);
-                    continue;
+    // Whether the values the :focus, :focus-visible and :focus-within rules declare
+    // undo what hides the link, once a person tabs to it. They are read, never applied:
+    // nothing is fetched, no transition starts, the focus does not move.
+    function reveals(geometry) {
+        if (el.tabIndex < 0) return false;  // out of the tab order: never focused
+        const rules = focusRules();
+        if (!rules.size) return false;
+        const declared = (n, prop) => {
+            const mine = rules.get(n);
+            return mine && mine.has(prop) ? mine.get(prop).value : null;
+        };
+        const value = (n, prop) => declared(n, prop) ?? computed(n, prop);
+        if (seenThrough(value) <= 0) return false;
+        const lifted = (n, how) => {
+            const s = css(n);
+            if (how === 'clip') {
+                const applies = s.clip.startsWith('rect(') && ['absolute', 'fixed'].includes(s.position);
+                return !applies || declared(n, 'clip') === 'auto'
+                    || ['static', 'relative', 'sticky'].includes(declared(n, 'position'));
+            }
+            if (how === 'clip-path') return s.clipPath === 'none' || declared(n, 'clip-path') === 'none';
+            if (how === 'contain') return declared(n, 'contain') === 'none';
+            return ['overflow-x', 'overflow-y'].every((prop) => declared(n, prop) === 'visible');
+        };
+        if (geometry === 'clipped') return cuts.every(([n, how]) => lifted(n, how));
+        if (geometry === 'zero-size') {
+            if (!lifted(el, 'clip') || !lifted(el, 'clip-path')) return false;
+            if (parseFloat(own.fontSize) < 1) return size(el, declared(el, 'font-size'), 16) >= 1;
+            const fits = (props, whole) => props.some((prop) => {
+                const v = declared(el, prop);
+                return v === 'auto' || size(el, v, whole) >= MIN;
+            });
+            const parent = el.offsetParent || html;
+            return (area.r - area.l >= MIN || fits(['width', 'min-width'], parent.clientWidth))
+                && (area.b - area.t >= MIN || fits(['height', 'min-height'], parent.clientHeight));
+        }
+        if (geometry !== 'off-page') return true;
+        // Off the page: where the declared offsets move it to, along each axis it is off.
+        const sides = {l: [['left', 1], ['right', -1]], t: [['top', 1], ['bottom', -1]]};
+        const moved = {...area};
+        for (const axis of offAxes) {
+            let back = false;
+            for (const n of chain) {
+                const s = css(n), position = declared(n, 'position') ?? s.position;
+                if (position === 'static') {
+                    if (s.position === 'static') continue;
+                    back = 'flow';  // back to its place in the flow
+                    break;
                 }
-                if (!rule.selectorText.includes(':focus')) continue;
-                const parts = rule.selectorText.split(',').filter((part) => part.includes(':focus'));
-                const hits = chain.filter((n) => parts.some((part) => {
-                    try {
-                        return n.matches(part.replace(focus, '') || '*');
-                    } catch (e) { return false; }  // a selector matches() cannot take
-                }));
-                if (!hits.length) continue;
-                hits.forEach((n) => hit.add(n));
-                found = true;
-                moving = [...rule.style].some((name) => animates.test(name));
+                const whole = axis === 'l' ? (n.offsetParent || html).clientWidth : (n.offsetParent || html).clientHeight;
+                const [prop, sign] = sides[axis].find(([side]) => declared(n, side) !== null) || [];
+                const to = prop ? size(n, declared(n, prop), whole) : NaN, from = prop ? parseFloat(s[prop]) : NaN;
+                if (isNaN(to) || isNaN(from)) continue;
+                const far = axis === 'l' ? 'r' : 'b';
+                moved[axis] += sign * (to - from);
+                moved[far] += sign * (to - from);
+                back = true;
+            }
+            if (!back) return false;
+            if (back === 'flow') continue;
+            const [lo, hi] = axis === 'l' ? [x0, x1] : [y0, y1];
+            if (moved[axis === 'l' ? 'r' : 'b'] <= lo || moved[axis] >= hi) return false;
+        }
+        return true;
+    }
+    // A declared length in CSS px (NaN when it cannot be told: calc(), auto, ...).
+    function size(n, v, whole) {
+        const m = /^(-?[\d.]+(?:e-?\d+)?)(px|%|em|rem|vw|vh)?$/.exec((v || '').trim());
+        if (!m) return NaN;
+        const x = parseFloat(m[1]), unit = m[2];
+        if (unit === '%') return (x / 100) * whole;
+        if (unit === 'em') return x * parseFloat(css(n.parentElement || n).fontSize);
+        if (unit === 'rem') return x * parseFloat(css(html).fontSize);
+        if (unit === 'vw' || unit === 'vh') return (x / 100) * (unit === 'vw' ? win.innerWidth : win.innerHeight);
+        return unit === 'px' || x === 0 ? x : NaN;
+    }
+    // node -> (property -> value) the focus rules of the readable sheets would set on the
+    // link and its ancestors, once it has the focus (@import, @media, @supports, @layer and
+    // nesting followed). An inline style beats a rule that is not !important; a sheet that
+    // cannot be read (cross-origin) brings nothing back.
+    function focusRules() {
+        const found = new Map();
+        let budget = 10000;
+        const kind = (rule) => Object.prototype.toString.call(rule).slice(8, -1);
+        const parts = (list) => {  // a selector list split at its top-level commas
+            const out = [];
+            let depth = 0, from = 0;
+            for (let i = 0; i < list.length; i++) {
+                const c = list[i];
+                if (c === '(' || c === '[') depth++;
+                else if (c === ')' || c === ']') depth--;
+                else if (c === ',' && !depth) { out.push(list.slice(from, i)); from = i + 1; }
+            }
+            return [...out, list.slice(from)].map((part) => part.trim()).filter(Boolean);
+        };
+        const compose = (outer, inner) => parts(inner).map((part) => (
+            part.includes('&') ? part.replace(/&/g, `:is(${outer})`) : `:is(${outer}) ${part}`
+        )).join(', ');
+        const put = (n, style) => {
+            const mine = found.get(n) || new Map();
+            for (const prop of style) {
+                const strong = style.getPropertyPriority(prop) === 'important';
+                if (n.style && n.style.getPropertyValue(prop)
+                    && (!strong || n.style.getPropertyPriority(prop) === 'important')) continue;
+                if (mine.has(prop) && mine.get(prop).strong && !strong) continue;
+                mine.set(prop, {value: style.getPropertyValue(prop).trim(), strong});
+            }
+            if (mine.size) found.set(n, mine);
+        };
+        const apply = (selector, style) => {
+            for (const part of parts(selector)) {
+                if (!part.includes(':focus')) continue;
+                for (const n of chain) {
+                    let sel = part.replace(/:focus-within(?![\w-])/g, '');
+                    if (/:focus(-visible)?(?![\w-])/.test(sel)) {
+                        if (n !== el) continue;  // only the link itself takes the focus
+                        sel = sel.replace(/:focus(-visible)?(?![\w-])/g, ':scope');
+                    }
+                    let hit = false;
+                    try { hit = n.matches(sel.trim() || '*'); } catch (e) { /* matches() cannot take it */ }
+                    if (hit) put(n, style);
+                }
+            }
+        };
+        const fits = (media) => !media || !media.mediaText || win.matchMedia(media.mediaText).matches;
+        const read = (sheet, outer) => {
+            if (!sheet || sheet.disabled || !fits(sheet.media)) return;
+            let list;
+            try { list = sheet.cssRules; } catch (e) { return; }  // cross-origin: nothing presumed
+            if (list) scan(list, outer);
+        };
+        const scan = (list, outer) => {
+            for (const rule of list) {
+                if (--budget < 0) return;
+                const type = kind(rule);
+                if (type === 'CSSStyleRule') {
+                    const selector = outer ? compose(outer, rule.selectorText) : rule.selectorText;
+                    apply(selector, rule.style);
+                    if (rule.cssRules && rule.cssRules.length) scan(rule.cssRules, selector);
+                } else if (type === 'CSSNestedDeclarations') {
+                    if (outer) apply(outer, rule.style);
+                } else if (type === 'CSSImportRule') {
+                    if (fits(rule.media)) read(rule.styleSheet, outer);
+                } else if (type === 'CSSMediaRule') {
+                    if (fits(rule.media)) scan(rule.cssRules, outer);
+                } else if (type === 'CSSSupportsRule') {
+                    if (win.CSS.supports(rule.conditionText)) scan(rule.cssRules, outer);
+                } else if (type === 'CSSLayerBlockRule') {
+                    scan(rule.cssRules, outer);
+                }  // @container, @scope and the like: what they hold is not presumed to apply
             }
         };
         const root = el.getRootNode();
         const sheets = [...doc.styleSheets, ...(doc.adoptedStyleSheets || [])];
         if (root !== doc) sheets.push(...(root.styleSheets || []), ...(root.adoptedStyleSheets || []));
-        for (const sheet of sheets) {
-            let rules;
-            try { rules = sheet.cssRules; } catch (e) { continue; }  // cross-origin sheet
-            if (rules) scan(rules);
-        }
-        // Too many rules to read through: the focused state alone decides.
-        return (found || budget < 0) && !moving && ![...hit].some((n) => {
-            const s = css(n);
-            return s.animationName !== 'none' || s.transitionDuration.split(',').some(parseFloat);
-        });
+        for (const sheet of sheets) read(sheet, '');
+        return budget < 0 ? new Map() : found;  // too many rules to read through: nothing presumed
     }
 }
