@@ -403,6 +403,10 @@ class StealthEngine:
                         {"brand": "Google Chrome", "version": major},
                         {"brand": grease_brand, "version": grease_version},
                     ],
+                    # Chrome fills the full version itself only without
+                    # --user-agent, which stealth launches with (robots.txt
+                    # must leave with the page's UA): give it explicitly.
+                    "fullVersion": p.browser_version,
                     "fullVersionList": [
                         {"brand": "Chromium", "version": p.browser_version},
                         {"brand": "Google Chrome", "version": p.browser_version},
