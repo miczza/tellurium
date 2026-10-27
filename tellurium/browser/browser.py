@@ -32,6 +32,7 @@ from tellurium.cdp.transport._session import SessionRouter
 from tellurium.cdp.types import TargetCrashedError
 from tellurium.stealth._grease import parse_grease_brands, parse_product_version
 from tellurium.stealth._webrtc import resolve_webrtc_ip
+from tellurium.stealth.engine import refuse_user_agent_arg
 
 logger = logging.getLogger("tellurium")
 
@@ -114,7 +115,8 @@ class Browser(CookieJar):
         user_data_dir:
             Chrome profile directory.  A temporary one is created if omitted.
         args:
-            Extra CLI flags passed to Chrome.
+            Extra CLI flags passed to Chrome (with *stealth*, no ``--user-agent``:
+            ``ValueError``, the profile's is the only User-Agent).
         proxy:
             Proxy URL: ``http``, ``https``, ``socks4`` or ``socks5`` (scheme
             kept for Chrome). With credentials (HTTP/HTTPS only) a local
@@ -205,6 +207,8 @@ class Browser(CookieJar):
 
         # 0. Validate extension paths up-front (before any async work)
         validate_extension_paths(extensions or [])
+        if stealth:
+            refuse_user_agent_arg(args)
 
         # 0b. Resolve webrtc_ip up-front: the native patch only understands an
         # IP literal (or its own 'disable', which drops every candidate), so
@@ -372,7 +376,7 @@ class Browser(CookieJar):
                 # Only with the version read from the binary (step 5): flag and
                 # override then name the same one.
                 ua_flag = stealth_engine.user_agent_flag() if found else None
-                if ua_flag and not any(a.startswith("--user-agent=") for a in args or []):
+                if ua_flag:
                     stealth_flags.append(ua_flag)
                 ext_path = stealth_engine.build_extension()
                 if ext_path or user_exts:

@@ -401,7 +401,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `--version`; no flag when that cannot be read, so flag and override never name two
   versions), so what the browser process loads
   itself, such as robots.txt, carries the same User-Agent as the pages instead of
-  `HeadlessChrome/…`. A `--user-agent` in `args` wins. The full version stays the
+  `HeadlessChrome/…`. A `--user-agent` in `args` with `stealth=True` raises `ValueError` at
+  launch, before anything starts (it would reach robots.txt while the pages kept the
+  profile's, or empty the patched backend's client hints); without stealth it is kept. The full version stays the
   profile's everywhere (`getHighEntropyValues` `uaFullVersion` in pages and workers,
   `Sec-CH-UA-Full-Version`), as `fullVersionList` and `Sec-CH-UA-Full-Version-List`, instead
   of the empty string Chrome leaves under `--user-agent`. The patched backend gets no such

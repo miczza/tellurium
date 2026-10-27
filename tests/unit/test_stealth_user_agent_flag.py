@@ -46,8 +46,25 @@ def test_an_undetected_version_gives_no_flag(monkeypatch):
     assert not any(f.startswith("--user-agent=") for f in flags)
 
 
-def test_a_user_agent_of_the_caller_wins(monkeypatch):
-    flags = _launch_flags(monkeypatch, None, stealth=True, args=["--user-agent=Mine/1.0"])
+@pytest.mark.parametrize("flag", ["--user-agent=Mine/1.0", "-user-agent=Mine/1.0"])
+@pytest.mark.parametrize("backend", ["stock", "patched"])
+def test_a_user_agent_of_the_caller_is_refused_with_stealth(monkeypatch, flag, backend):
+    """One source for the User-Agent: with stealth the profile's. The caller's
+    flag would reach robots.txt while the pages kept the profile's (stock), or
+    empty the native client hints (patched)."""
+
+    async def no_exec(self):
+        raise AssertionError("refused before anything is resolved or launched")
+
+    monkeypatch.setattr(browser_mod.StockEngine, "get_executable", no_exec)
+    monkeypatch.setattr(browser_mod.PatchedEngine, "get_executable", no_exec)
+    launch = browser_mod.Browser.launch(stealth=True, browser=backend, args=[flag])
+    with pytest.raises(ValueError, match="user-agent in args"):
+        asyncio.run(launch)
+
+
+def test_a_user_agent_of_the_caller_without_stealth_is_kept(monkeypatch):
+    flags = _launch_flags(monkeypatch, None, stealth=False, args=["--user-agent=Mine/1.0"])
     assert [f for f in flags if f.startswith("--user-agent=")] == ["--user-agent=Mine/1.0"]
 
 

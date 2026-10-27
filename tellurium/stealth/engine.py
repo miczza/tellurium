@@ -28,6 +28,19 @@ _STEALTH_TARGET_FILTER: list[dict] = [
 ]
 
 
+def refuse_user_agent_arg(args: list[str] | None) -> None:
+    """``ValueError`` for a ``--user-agent`` among the caller's *args*: with
+    stealth the User-Agent has one source, the profile. The caller's flag would
+    reach what the browser process loads itself (robots.txt) while the pages
+    keep the profile's (stock), or empty the native client hints (patched)."""
+    for arg in args or []:
+        if arg.startswith("-") and arg.lstrip("-").partition("=")[0].lower() == "user-agent":
+            raise ValueError(
+                f"{arg.partition('=')[0]} in args: with stealth=True the User-Agent is the "
+                "stealth profile's; launch with stealth=False to set your own"
+            )
+
+
 class StealthEngine:
     def __init__(
         self, engine: BrowserEngine, profile: StealthProfile, headless: bool, has_proxy: bool
