@@ -413,6 +413,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A `Tab.get` (or `new_tab(url)`, `is_allowed`) whose robots.txt cannot be loaded because
+  the hidden target it is loaded from cannot be opened (`Target.createTarget` or the
+  attach failing or timing out) raises `NavigationError` with the cause chained, instead
+  of a bare `TimeoutError` or `CDPError`.
+
 - A new `Session` no longer draws its fingerprint seed from the global `random`: a script
   that called `random.seed()` gave every new identity the same seed.
 - A session start waits again for a live Chrome still holding the session profile: on

@@ -286,7 +286,7 @@ class Robots:
         if not self.respect or (split := split_url(url)) is None:
             return
         origin, path = split
-        if not (await self.rules(tab, origin, timeout)).allows(path):
+        if not (await self._rules_for(tab, url, origin, timeout)).allows(path):
             raise RobotsDisallowedError(url, origin, path)
 
     async def allowed(self, tab: Tab, url: str) -> bool:
@@ -294,7 +294,21 @@ class Robots:
         if (split := split_url(url)) is None:
             return True
         origin, path = split
-        return (await self.rules(tab, origin)).allows(path)
+        return (await self._rules_for(tab, url, origin, None)).allows(path)
+
+    async def _rules_for(
+        self, tab: Tab, url: str, origin: str, timeout: float | None
+    ) -> RobotsRules:
+        """:meth:`rules`, with a hidden target that could not be opened (the only
+        CDP failure :func:`download` does not turn into rules) reported as a
+        ``NavigationError`` of *url*."""
+        try:
+            return await self.rules(tab, origin, timeout)
+        except NavigationTimeoutError:
+            raise
+        except (CDPError, TimeoutError, asyncio.TimeoutError) as exc:
+            error = f"robots.txt of {origin} could not be loaded ({exc})"
+            raise NavigationError(url, error) from exc
 
     async def rules(self, tab: Tab, origin: str, timeout: float | None = None) -> RobotsRules:
         """*origin*'s rules for *tab*'s context: from the cache, from the download

@@ -9,7 +9,9 @@ from types import SimpleNamespace
 import pytest
 
 from tellurium.browser import robots
+from tellurium.browser.navigation import NavigationError
 from tellurium.browser.robots import RobotsRules, parse
+from tellurium.cdp.types import CDPError
 
 # RFC 9309 §5.1
 SIMPLE = """\
@@ -428,3 +430,21 @@ async def test_check_raises_for_a_disallowed_path(frames, monkeypatch):
         await r.check(_tab(), "http://a.test/private/x")
     await r.check(_tab(), "about:blank")
     assert fetcher.calls == ["http://a.test"]
+
+
+@pytest.mark.parametrize(
+    "error", [CDPError("No browser context with given id", -32602), asyncio.TimeoutError("late")]
+)
+async def test_a_hidden_target_that_cannot_open_is_a_navigation_error(monkeypatch, error):
+    async def open_frame(browser, context_id):
+        raise error
+
+    monkeypatch.setattr(robots, "open_frame", open_frame)
+    r = robots.Robots(respect=True)
+    with pytest.raises(NavigationError, match="robots.txt of http://a.test") as caught:
+        await r.check(_tab(), "http://a.test/page")
+    assert caught.value.url == "http://a.test/page"
+    assert caught.value.__cause__ is error
+    assert not isinstance(caught.value, robots.RobotsDisallowedError)
+    with pytest.raises(NavigationError):  # is_allowed too; nothing was cached
+        await r.allowed(_tab(), "http://a.test/page")

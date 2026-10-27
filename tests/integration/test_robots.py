@@ -276,6 +276,24 @@ async def test_an_unreachable_robots_txt_disallows_everything():
         await browser.close()
 
 
+async def test_a_hidden_target_that_cannot_open_fails_the_get(site, monkeypatch):
+    """Creating the hidden target (here: given no time) is part of the
+    navigation: its failure is a NavigationError with the cause chained."""
+    from tellurium.browser import robots
+
+    proxy, browser = site
+    tab = await browser.new_tab()
+    monkeypatch.setattr(robots, "_OPEN_TIMEOUT", 1e-6)
+    with pytest.raises(NavigationError, match="robots.txt of http://site.test") as caught:
+        await tab.get("http://site.test/page", timeout=15)
+    assert isinstance(caught.value.__cause__, TimeoutError)
+    assert not isinstance(caught.value, RobotsDisallowedError)
+    assert proxy.hits("/page") == 0
+    monkeypatch.undo()
+    await tab.get("http://site.test/page", timeout=15)  # not cached: opened again
+    assert proxy.hits("/page") == 1
+
+
 async def test_a_robots_txt_that_never_answers_times_out(site, monkeypatch):
     from tellurium.browser import robots
 
