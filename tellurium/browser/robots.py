@@ -1,10 +1,9 @@
 """robots.txt: parsed as RFC 9309 says, downloaded through Chrome, cached per browser.
 
-The file is fetched with ``Network.loadNetworkResource``, never from Python,
-so it leaves through Chrome's network stack (proxy, IP, TLS) of the tab's browser
-context. The load runs in a hidden ``about:blank`` target of that context: from
-the tab itself it would be subject to the page's Content-Security-Policy. One
-download per origin at a time, kept 24 hours.
+The file is fetched with ``Network.loadNetworkResource``, never from Python, so it
+leaves through Chrome's network stack (proxy, IP, TLS) of the tab's browser context, from
+a hidden ``about:blank`` target of that context (from the tab itself it would be subject
+to the page's Content-Security-Policy). One download per origin at a time, kept 24 hours.
 """
 
 from __future__ import annotations
@@ -173,9 +172,11 @@ def split_url(url: str) -> tuple[str, str] | None:
     return f"{scheme}://{host}", path
 
 
-def is_web(url: str) -> bool:
-    """Whether Chrome would read *url* as ``http(s)``: only those are checked."""
-    return url.strip(_TRIMMED).translate(_DROPPED)[:6].lower().startswith(("http:", "https:"))
+def web_url(url: str) -> str | None:
+    """The ``http(s)`` URL Chrome loads for *url* (inside any ``view-source:``) or ``None``."""
+    while (bare := url.strip(_TRIMMED).translate(_DROPPED))[:12].lower() == "view-source:":
+        url = bare[12:]
+    return url if bare[:6].lower().startswith(("http:", "https:")) else None
 
 
 def _product_token(value: str) -> str:
@@ -344,11 +345,10 @@ class Robots:
     async def _refusal(
         self, tab: Tab, url: str, timeout: float | None
     ) -> RobotsDisallowedError | None:
-        """Why *url*, read as Chrome reads it (:func:`canonical`), may not be
-        crawled; ``None`` if it may or is not ``http(s)``; one Chrome cannot parse
-        may not. A hidden target that could not be opened (the only CDP failure
-        :func:`download` does not turn into rules) is a ``NavigationError``."""
-        if not is_web(url):
+        """Why *url* (as Chrome reads it, :func:`canonical`) may not be crawled; ``None``
+        if it may or is not ``http(s)``. A hidden target that cannot open (the only CDP
+        failure :func:`download` does not turn into rules) is a ``NavigationError``."""
+        if (url := web_url(url)) is None:
             return None
         loop = asyncio.get_running_loop()
         deadline = None if timeout is None else loop.time() + timeout
@@ -364,7 +364,8 @@ class Robots:
         except (CDPError, TimeoutError, asyncio.TimeoutError) as exc:
             error = f"robots.txt for {url} could not be checked ({exc})"
             raise NavigationError(url, error) from exc
-        return None if rules.allows(split[1]) else RobotsDisallowedError(url, *split)
+        allows = await asyncio.to_thread(rules.allows, split[1])  # hostile files: costly
+        return None if allows else RobotsDisallowedError(url, *split)
 
     async def _canonical(self, tab: Tab, url: str, timeout: float | None) -> str | None:
         """:func:`canonical` in the hidden target of *tab*'s context, within *timeout*."""

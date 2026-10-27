@@ -388,6 +388,15 @@ async def test_without_the_flag_no_robots_txt_is_requested():
             await browser.close()
 
 
+async def test_view_source_is_checked_as_the_page_it_shows(site):
+    proxy, browser = site
+    tab = await browser.new_tab()
+    with pytest.raises(RobotsDisallowedError):
+        await tab.get("VIEW-SOURCE:http://site.test/private", timeout=15)
+    assert proxy.hits("/private") == 0
+    assert await tab.is_allowed("view-source:http://site.test/public")
+
+
 async def test_non_web_urls_are_never_checked(site):
     proxy, browser = site
     tab = await browser.new_tab()

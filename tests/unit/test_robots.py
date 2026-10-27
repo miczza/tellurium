@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -523,10 +524,41 @@ async def test_the_body_is_parsed_off_the_loop(monkeypatch):
         ("data:text/html,x", False),
         ("javascript:alert(1)", False),
         ("host/p", False),
+        ("view-source:http://h/p", True),
+        (" VIEW-SOURCE:view-source:https://h/", True),
+        ("view-source:about:blank", False),
     ],
 )
-def test_is_web_reads_the_scheme_as_chrome(url, web):
-    assert robots.is_web(url) is web
+def test_web_url_reads_the_scheme_as_chrome(url, web):
+    assert (robots.web_url(url) is not None) is web
+
+
+async def test_view_source_is_checked_as_the_page_it_shows(frames, monkeypatch):
+    fetcher = _Fetcher(parse("User-agent: *\nDisallow: /private\n"))
+    fetcher.release.set()
+    monkeypatch.setattr(robots, "download", fetcher)
+    r = robots.Robots(respect=True)
+    with pytest.raises(robots.RobotsDisallowedError) as caught:
+        await r.check(_tab(), "VIEW-SOURCE:http://deny.test/private")
+    assert (caught.value.origin, caught.value.path) == ("http://deny.test", "/private")
+    assert await r.allowed(_tab(), "view-source:http://deny.test/public")
+
+
+async def test_rules_are_matched_off_the_event_loop(frames, monkeypatch):
+    # A hostile robots.txt can make one match cost a lot: never on the loop's thread.
+    threads = []
+    rules = parse("User-agent: *\nDisallow: /x\n")
+    fetcher = _Fetcher(rules)
+    fetcher.release.set()
+    monkeypatch.setattr(robots, "download", fetcher)
+    real = RobotsRules.allows
+    monkeypatch.setattr(
+        RobotsRules,
+        "allows",
+        lambda self, t: threads.append(threading.current_thread()) or real(self, t),
+    )
+    assert await robots.Robots(respect=True).allowed(_tab(), "http://a.test/p")
+    assert threads and threads[0] is not threading.main_thread()
 
 
 async def test_a_url_chrome_cannot_parse_is_refused(frames, monkeypatch):

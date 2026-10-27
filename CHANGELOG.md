@@ -18,8 +18,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `new_tab` made for it is closed. `await tab.is_allowed(url, timeout=30.0)` answers with or
   without the flag (`NavigationTimeoutError`, phase `"robots.txt"`, past *timeout*). robots.txt is parsed per RFC 9309 (groups by product token, longest match wins,
   `allow` wins a tie, `*` and `$`, percent-encoding normalised, first 500 KiB; parsed off
-  the event loop, each rule matched run by run between its `*`, so even `Disallow: /`
-  and 499 000 `*` answers in well under a millisecond) and loaded by
+  the event loop and matched off it too, each rule run by run between its `*`, so even
+  `Disallow: /` and 499 000 `*` answers in well under a millisecond) and loaded by
   Chrome with `Network.loadNetworkResource` from a hidden `about:blank` target of the tab's
   browser context (same proxy, IP and TLS as the navigation; no cookies), once per origin
   and context for 24 h (LRU of 256), one download at a time even for a hundred concurrent
@@ -27,7 +27,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   10 s: everything disallowed, asked again after 60 s. Clicks, redirects and navigations
   started by the page are not checked; `Crawl-delay` is ignored. The URL is checked as
   Chrome reads it (`new URL(url).href` in the hidden target: `http:site/p`,
-  `http://site\@other/p`, dot segments, tabs), and one Chrome cannot parse is refused
+  `http://site\@other/p`, dot segments, tabs; `view-source:` as the page it shows), and
+  one Chrome cannot parse is refused
   ("not a URL Chrome can parse"); a hidden target that cannot be opened fails with
   "robots.txt for <url> could not be checked". Without the flag no
   navigation requests robots.txt.
