@@ -305,7 +305,16 @@ function (frame) {
     return finish();
 
     // Hit-tested where it shows in the viewport, as a click would be: covered when no
-    // point lands on it or inside it. Not where it would take a scroll to be seen.
+    // point lands on it or inside it. Not where it would take a scroll to be seen, so a
+    // fixed or sticky box (a header, a cookie banner) over a link that is not pinned
+    // itself does not count: scrolling takes the link out from under it.
+    function pinned(n) {
+        for (; n && n.nodeType === 1; n = n.parentElement || n.getRootNode().host) {
+            const p = win.getComputedStyle(n).position;
+            if (p === 'fixed' || p === 'sticky') return true;
+        }
+        return false;
+    }
     function covered() {
         if (shift.l || shift.t) return false;
         const at = el.getRootNode().elementFromPoint ? el.getRootNode() : doc;
@@ -319,10 +328,14 @@ function (frame) {
                 points.push([b.l + x * (b.r - b.l), b.t + y * (b.b - b.t)]);
             }
         }
-        return points.length > 0 && !points.some(([x, y]) => {
+        const scrolls = !pinned(el);
+        let blocked = 0;
+        for (const [x, y] of points) {
             const hit = at.elementFromPoint(x, y);
-            return hit && (hit === el || el.contains(hit));
-        });
+            if (hit && (hit === el || el.contains(hit))) return false;
+            if (!(hit && scrolls && pinned(hit))) blocked++;
+        }
+        return blocked > 0;
     }
     // Whether the values the :focus, :focus-visible and :focus-within rules declare
     // undo what hides the link, once a person tabs to it. They are read, never applied:

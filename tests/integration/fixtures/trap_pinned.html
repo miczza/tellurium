@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>trap pinned</title>
+<style>
+  body { margin: 0; font: 16px sans-serif; }
+  header { position: fixed; top: 0; left: 0; right: 0; height: 60px; background: #333; }
+  .banner { position: fixed; bottom: 0; left: 0; right: 0; height: 120px; background: #eee; }
+  .bar { position: sticky; top: 0; height: 40px; background: #036; }
+</style>
+</head>
+<body>
+<header></header>
+<a id="ok-under-header" href="/header" style="position: absolute; top: 10px; left: 20px;">under the header</a>
+<a id="ok-under-banner" href="/banner"
+  style="position: absolute; top: calc(100vh - 40px); left: 20px;">under the cookie banner</a>
+<div style="height: 200px;"></div>
+<div class="bar"></div>
+<a id="ok-scrolled" href="/scrolled" style="display: block; margin: 0 20px;">scrolled under the header</a>
+<div style="height: 3000px;"></div>
+<div class="banner"></div>
+</body>
+</html>

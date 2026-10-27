@@ -289,3 +289,13 @@ async def test_paint_effects_that_hide_a_link(browser, local_server):
     expected = CSS_TRAPS | {link: [] for link in CSS_NORMAL}
     assert await _reasons(tab, expected) == expected
     assert await tab.eval("window.__touched") == 0
+
+
+async def test_a_fixed_or_sticky_box_over_a_link_does_not_make_it_a_trap(browser, local_server):
+    """A fixed header or a cookie banner covers links only until the page scrolls: a
+    person scrolls them out from under it, so the hit-test does not count those boxes."""
+    tab = await browser.new_tab(f"{local_server}/trap_pinned.html")
+    expected = {"ok-under-header": [], "ok-under-banner": [], "ok-scrolled": []}
+    assert await _reasons(tab, expected) == expected
+    await tab.eval("window.scrollTo(0, 200)")
+    assert await _reasons(tab, expected) == expected
