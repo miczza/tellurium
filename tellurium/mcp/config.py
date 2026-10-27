@@ -43,12 +43,14 @@ class ServerConfig:
     """*home* holds ``sessions/<name>`` (named sessions) and ``downloads/``.
     *allow_eval* lists the ``eval`` tool; *headed* shows the browser windows;
     *allow_local_urls* lets navigate/tab-open open ``file:``, ``chrome:`` & co.;
+    *respect_robots* makes navigate/tab-open refuse what robots.txt disallows;
     *http* configures the HTTP transport."""
 
     home: Path
     headed: bool = False
     allow_eval: bool = True
     allow_local_urls: bool = False
+    respect_robots: bool = False
     http: HttpConfig | None = None
 
     @property

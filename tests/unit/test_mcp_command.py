@@ -97,3 +97,24 @@ def test_idle_timeout_defaults_to_five_minutes(run):
     (and named profiles) until then."""
     config, _ = run("--http", "127.0.0.1:0")
     assert config.http.idle_timeout == 300
+
+
+def test_respect_robots_is_off_by_default(run):
+    config, _ = run()
+    assert config.respect_robots is False
+
+
+@pytest.mark.parametrize("extra", [(), ("--http", "127.0.0.1:0")], ids=["stdio", "http"])
+def test_respect_robots_flag(run, extra):
+    config, _ = run("--respect-robots", *extra)
+    assert config.respect_robots is True
+
+
+def test_respect_robots_reaches_browser_launch(tmp_path):
+    from tellurium.mcp.config import ServerConfig
+    from tellurium.mcp.sessions import SessionPool
+
+    plain = SessionPool(ServerConfig(home=tmp_path))
+    polite = SessionPool(ServerConfig(home=tmp_path, respect_robots=True))
+    assert "respect_robots" not in plain._launch_options()
+    assert polite._launch_options()["respect_robots"] is True

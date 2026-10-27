@@ -23,6 +23,11 @@ def register(subparsers: Any) -> None:
         action="store_true",
         help="Let the agent open file:, chrome: and other non-web URLs",
     )
+    parser.add_argument(
+        "--respect-robots",
+        action="store_true",
+        help="Refuse navigate and tab-open to a URL the site's robots.txt disallows",
+    )
     http = parser.add_argument_group("HTTP (Streamable HTTP, Bearer token required)")
     http.add_argument(
         "--http",
@@ -79,6 +84,7 @@ def main(args: argparse.Namespace) -> None:
         headed=args.headed,
         allow_eval=True if http is None else args.allow_eval,
         allow_local_urls=args.allow_local_urls,
+        respect_robots=args.respect_robots,
         http=http,
     )
     server.run(config, "stdio" if http is None else "http")

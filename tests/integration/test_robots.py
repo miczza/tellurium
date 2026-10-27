@@ -369,3 +369,30 @@ async def test_the_hidden_target_is_not_a_tab(site):
     assert await tab.is_allowed("http://site.test/public")
     await asyncio.sleep(0.3)
     assert [t._target_id for t in browser.tabs] == [*before, tab._target_id]
+
+
+async def test_mcp_respect_robots_refuses_navigate_and_tab_open(tmp_path):
+    """E5: ``tellurium mcp --respect-robots`` answers with the reason instead."""
+    pytest.importorskip("mcp")
+    from tests.integration.test_mcp_stdio import _call, _error, _server, _text
+
+    async with SiteProxy({"/robots.txt": (200, TEXT, ROBOTS)}) as site:
+        async with _server(tmp_path, "--respect-robots") as client:
+            opened = (await _call(client, "session-open")).structured_content
+            sid, tid = opened["sessionId"], opened["targetId"]
+            message = await _error(client, "navigate", targetId=tid, url=f"{site.url}/private/x")
+            assert f"robots.txt of {site.url} disallows /private/x" in message
+            message = await _error(client, "tab-open", sessionId=sid, url=f"{site.url}/private")
+            assert f"robots.txt of {site.url} disallows /private" in message
+            await _call(client, "navigate", targetId=tid, url=f"{site.url}/public")
+            assert "page" in await _text(client, tid)
+            listed = (await _call(client, "tab-list", sessionId=sid)).structured_content
+        assert site.hits("/private") == 0
+        assert site.hits("/robots.txt") == 1
+        assert len(listed["tabs"]) == 1  # neither the refused tab nor the hidden target
+
+        async with _server(tmp_path) as client:  # without the flag: opened
+            tid = (await _call(client, "session-open")).structured_content["targetId"]
+            await _call(client, "navigate", targetId=tid, url=f"{site.url}/private/x")
+        assert site.hits("/private") == 1
+        assert site.hits("/robots.txt") == 1

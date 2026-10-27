@@ -128,7 +128,10 @@ class SessionPool:
         return opened
 
     def _launch_options(self) -> dict[str, Any]:
-        return {"headless": not self.config.headed, "stealth": True}
+        options: dict[str, Any] = {"headless": not self.config.headed, "stealth": True}
+        if self.config.respect_robots:
+            options["respect_robots"] = True
+        return options
 
     async def _launch_temp(self) -> BrowserSession:
         stack = AsyncExitStack()

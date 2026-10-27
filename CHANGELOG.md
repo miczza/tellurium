@@ -7,6 +7,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `tellurium mcp --respect-robots`: `navigate` and `tab-open` to a URL the site's
+  robots.txt disallows fail with "Navigation failed: robots.txt of <origin> disallows
+  <path>" instead of opening it (stdio and HTTP; the sessions launch with
+  `respect_robots=True`).
 - `Browser.launch(respect_robots=True, robots_agent="*")`: `Tab.get`, `Browser.get`,
   `Browser.new_tab(url)` and `BrowserContext.new_tab(url)` raise `RobotsDisallowedError` (a
   `NavigationError`, exported from `tellurium`; message `robots.txt of <origin> disallows
