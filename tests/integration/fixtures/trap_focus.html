@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>trap links and focus rules</title>
+<script>
+  // What the page could notice of a check that peeks at the focused state: none of it.
+  window.__touched = 0;
+  window.__events = [];
+  const count = (proto, name) => {
+    const real = proto[name];
+    proto[name] = function (...args) { window.__touched++; return real.apply(this, args); };
+  };
+  count(window, "getComputedStyle");
+  count(Element.prototype, "getBoundingClientRect");
+  count(Element.prototype, "matches");
+  for (const type of ["focus", "blur", "focusin", "focusout", "scroll", "transitionrun",
+                      "transitionstart", "transitioncancel", "animationstart"]) {
+    window.addEventListener(type, (e) => window.__events.push(type), true);
+  }
+</script>
+<style>
+  body { margin: 0; font: 16px sans-serif; }
+  /* A generic focus rule that touches a property but brings nothing back. */
+  a:focus { transform: translateY(-1px); }
+  .skip { position: absolute; left: -9999px; top: 0; }
+  .skip:focus { left: 0; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap;
+  }
+  .sr-only:focus-visible { position: static; width: auto; height: auto; clip: auto; }
+  .menu .item { position: absolute; left: -9999px; }
+  .menu:focus-within .item { left: 0; top: 40px; }
+  .fade { opacity: 0; }
+  .fade:focus { opacity: 1; }
+  .animated { position: absolute; left: -9999px; top: 0; transition: left 0.2s; }
+  .animated:focus { left: 0; }
+</style>
+</head>
+<body>
+<a id="ok-skip" class="skip" href="#main">Skip to content</a>
+<a id="ok-sr-skip" class="sr-only" href="#main">Skip to main</a>
+<div class="menu"><a id="ok-within" class="item" href="/menu">Menu item</a></div>
+<p><a id="ok-fade" class="fade" href="/fade">Fades in on focus</a></p>
+<main id="main">
+  <a id="trap-left" href="/t/left" style="position: absolute; left: -9999px;">left</a>
+  <div style="opacity: 0;"><a id="trap-opacity" href="/t/opacity">opacity</a></div>
+  <p><a id="trap-font" href="/t/font" style="font-size: 0;">font size zero</a></p>
+  <a id="trap-unfocusable" class="skip" tabindex="-1" href="/t/tab">not in the tab order</a>
+  <a id="trap-animated" class="animated" href="/t/animated">animated</a>
+</main>
+<div style="height: 3000px;"></div>
+</body>
+</html>

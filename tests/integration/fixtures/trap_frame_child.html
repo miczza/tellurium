@@ -11,8 +11,13 @@
     proto[name] = function (...args) { window.__touched++; return real.apply(this, args); };
   }
 </script>
+<style>
+  .skip { position: absolute; left: -9999px; top: 0; }
+  .skip:focus { left: 0; }
+</style>
 </head>
 <body>
+  <a class="skip" href="#main">Skip in the frame</a>
   <a href="/framed/visible">Visible link</a>
   <a href="/framed/away" style="position: absolute; left: -9999px;">Hidden away</a>
 </body>

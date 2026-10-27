@@ -16,9 +16,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   area); `same-color` only where the background is known (not over a hero image, a
   gradient or an overlay); `off-page` follows every box that scrolls the link, so a link
   below the fold of an app scrolling in its own box, or a further slide of a carousel, is
-  reachable. Below the fold, image links with
-  `alt`, icons with `aria-label`, open menus and skip links brought back by a `:focus`
-  rule are not traps; a link of a closed menu is. One `Runtime.callFunctionOn` in the
+  reachable. Below the fold, image links with `alt`, icons with `aria-label`, open menus
+  and skip links in sight once focused are not traps; a link of a closed menu is. "In sight once focused" is measured again under
+  `CSS.forcePseudoState` (`:focus`, `:focus-visible`: no focus moves, no event fires, no
+  scroll), not read from the rules; a transition on the way back, or `tabindex="-1"`,
+  leaves the link a trap. One `Runtime.callFunctionOn` (two around a forced focus) in the
   isolated world of the link's frame (OOPIFs included): no main-world call, global, node
   or attribute; `trap_link.NoIsolatedWorldError` when the frame has no isolated world.
 - `Session.start(..., on_login_failure="raise"|"manual")`. `"raise"` (default) keeps the

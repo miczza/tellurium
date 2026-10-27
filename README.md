@@ -802,12 +802,19 @@ wears a honeypot marker. The signals `trap_link.reasons(link)` names:
 Not traps: a link below the fold (it is the document that counts, not the
 viewport), inside a scrollable box or a slide of a scrollable carousel, an image link with `alt`, an icon with
 `aria-label`, a link in a `<nav>` or an open menu, a visible `rel="nofollow"` link,
-and a "skip to content" link that a `:focus` rule brings back on screen.
+and a "skip to content" link that is on screen once a person tabs to it. That is
+measured, not guessed from the CSS: while Chrome forces `:focus` and `:focus-visible`
+on the link (`CSS.forcePseudoState`: focus does not move, no `focus`/`blur` event
+fires, nothing scrolls) the same check runs again, so `a:focus { transform:
+translateY(-1px) }` brings back no hidden link. A link out of the tab order
+(`tabindex="-1"`), or one whose way back is animated (a `transition` or `animation`
+on it, which would fire events in the page), stays a trap.
 
 The check is conservative and has no thresholds to tune: a link of a **closed**
 menu is a trap (a person does not click it without opening the menu), so open the
 menu first if you mean to follow it. It runs as one call in the isolated world of
-the link's frame (cross-site iframes included): the page can neither see it nor
+the link's frame (two, around the forced focus, when a focus rule might bring a hidden
+link back) (cross-site iframes included): the page can neither see it nor
 fake what it reads, and no global, node or attribute is left behind. When that
 frame has no isolated world it raises `trap_link.NoIsolatedWorldError` instead of
 running where the page could see it.

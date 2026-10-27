@@ -139,6 +139,7 @@ async def test_a_link_inside_a_frame_is_checked_in_that_frame(browser, local_ser
     visible, away = await _framed(tab, "Visible link"), await _framed(tab, "Hidden away")
     assert await trap_link.reasons(visible) == []
     assert await trap_link.reasons(away) == ["off-page"]
+    assert await trap_link.reasons(await _framed(tab, "Skip in the frame")) == []
     assert await visible.apply("function () { return window.__touched; }") == 0
 
 
@@ -162,3 +163,33 @@ async def test_reach_is_that_of_the_box_that_scrolls(browser, local_server):
     links += ["trap-spa-before", "trap-spa-outside"]
     expected = {link: ["off-page"] if link.startswith("trap") else [] for link in links}
     assert await _reasons(tab, links) == expected
+
+
+FOCUS_TRAPS = {
+    "trap-left": ["off-page"],
+    "trap-opacity": ["transparent"],
+    "trap-font": ["zero-size"],
+    "trap-unfocusable": ["off-page"],
+    "trap-animated": ["off-page"],
+}
+FOCUS_NORMAL = ["ok-skip", "ok-sr-skip", "ok-within", "ok-fade"]
+
+
+async def test_only_a_focus_rule_that_brings_the_link_back_reveals_it(browser, local_server):
+    """``a:focus { transform: translateY(-1px) }`` touches a property on every link but
+    brings none back: the focused state is looked at, not the rule. A transition on the
+    way back (or a link out of the tab order) leaves it a trap: no event is fired."""
+    tab = await browser.new_tab(f"{local_server}/trap_focus.html")
+    await tab.eval("window.scrollTo(0, 120)")
+    frames = "new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))"
+    await tab.eval(frames)  # the scroll event of scrollTo itself
+    await tab.eval("window.__events.length = 0")
+    page = "[document.activeElement.tagName, scrollX, scrollY]"
+    before = await tab.eval(page)
+    expected = FOCUS_TRAPS | {link: [] for link in FOCUS_NORMAL}
+    assert await _reasons(tab, expected) == expected
+    assert await tab.eval(page) == before
+    await tab.eval(frames)
+    assert await tab.eval("window.__events") == []
+    assert await tab.eval("window.__touched") == 0
+    assert await tab.eval("getComputedStyle(document.getElementById('ok-skip')).left") == "-9999px"

@@ -1,10 +1,9 @@
 """Trap links: links a person could not see or click right now, or that wear a honeypot marker.
 
 A crawler that follows every ``<a href>`` of a page also follows the ones a site
-hides from people to catch bots. :func:`reasons` reads, in one call in the tab's
-isolated world (page JS can neither patch what it reads nor see the call), the
-link's computed style, its boxes, its ancestors and its attributes, and names the
-signals that fired:
+hides from people to catch bots. :func:`reasons` reads, in the tab's isolated world
+(page JS can neither patch what it reads nor see the call), the link's computed
+style, boxes, ancestors and attributes, and names the signals that fired:
 
 ``not-rendered``
     no box: ``display: none`` on it or an ancestor, or inside a closed
@@ -19,13 +18,11 @@ signals that fired:
     less than 2 CSS px wide or tall, its overflowing content included unless it
     clips it;
 ``off-page``
-    wholly outside what scrolling can reach: before the scroll origin of the page or
-    of the box that scrolls it (``left: -9999px``), outside the viewport when
-    ``position: fixed`` or along an axis the page does not scroll (``overflow:
-    hidden`` on the root, as while a modal is open). The reach is that of each box
-    that scrolls, inner to outer: below the fold of the page, of an app that
-    scrolls in a box of its own under a root that does not, or a slide further
-    along a carousel is not off-page;
+    wholly outside what scrolling can reach, through every box that scrolls it,
+    inner to outer (``left: -9999px``); outside the viewport when ``position:
+    fixed`` or along an axis the page does not scroll (``overflow: hidden`` on the
+    root, as while a modal is open). Below the fold of the page or of an app's own
+    scroll box, a slide further along a carousel: not off-page;
 ``clipped``
     nothing of it left inside the boxes of the ancestors that clip it
     (``overflow: hidden``, ``clip``, a ``clip-path`` basic shape: ``inset()``,
@@ -43,24 +40,33 @@ signals that fired:
     ``rel="nofollow"``, reported only next to another signal: alone it is a
     normal link.
 
-A link moved off the page or clipped away that a ``:focus`` rule brings back
-(a "skip to content" link) is not a trap. The check is conservative and has no
-thresholds to tune: better to skip a closed menu's link than to click a trap.
+A hidden link (off the page, clipped away, transparent) in sight while Chrome
+forces ``:focus`` on it, as a "skip to content" link, is not a trap: the focused
+state is measured, not the rules. With a transition or an animation on the way, or
+out of the tab order, it stays one. Conservative, with no thresholds to tune: better
+to skip a closed menu's link than to click a trap.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import asyncio
+import contextlib
+import weakref
+from typing import TYPE_CHECKING, Any
 
 from tellurium.browser.handles import handles_of, send_on_handle
 from tellurium.cdp.types import CDPError
 
 if TYPE_CHECKING:
     from tellurium.browser.element import Element
+    from tellurium.cdp.transport._session import Session
+
+# One forced-focus check at a time per CDP session (CSS.disable ends them all).
+_FOCUS_LOCKS: weakref.WeakKeyDictionary[Session, asyncio.Lock] = weakref.WeakKeyDictionary()
 
 # Run with ``this`` bound to the link, in the isolated world; returns the signals.
 _REASONS_JS = r"""
-function () {
+function (focused) {
     const el = this, doc = el.ownerDocument, win = doc.defaultView;
     const MIN = 2, SAME = 3, CAP = 200;
     const css = (n, pseudo) => win.getComputedStyle(n, pseudo);
@@ -74,14 +80,15 @@ function () {
     if (['id', 'class', 'name'].some((a) => marker.test(el.getAttribute(a) || ''))) {
         out.push('honeypot-marker');
     }
-    const finish = () => {
-        if (out.length && /(^|\s)nofollow(\s|$)/i.test(el.getAttribute('rel') || '')) {
-            out.push('nofollow');
+    const finish = (list = out) => {
+        if (list.length && /(^|\s)nofollow(\s|$)/i.test(el.getAttribute('rel') || '')) {
+            list.push('nofollow');
         }
-        return out;
+        return list;
     };
     const shown = el.checkVisibility ? el.checkVisibility() : true;
     if (!shown || el.getClientRects().length === 0) {
+        if (focused) return {seen: false};
         out.push('not-rendered');
         return finish();
     }
@@ -93,8 +100,7 @@ function () {
     const rect = (r) => ({l: r.left, t: r.top, r: r.right, b: r.bottom});
     const small = (a) => a.r - a.l < MIN || a.b - a.t < MIN;
     const meet = (a, b) => ({
-        l: Math.max(a.l, b.l), t: Math.max(a.t, b.t),
-        r: Math.min(a.r, b.r), b: Math.min(a.b, b.b),
+        l: Math.max(a.l, b.l), t: Math.max(a.t, b.t), r: Math.min(a.r, b.r), b: Math.min(a.b, b.b),
     });
     const clips = (v) => v === 'hidden' || v === 'clip';
     const box = el.getBoundingClientRect();
@@ -191,13 +197,10 @@ function () {
     let vis = shape(el, own, {...area}), off = false;
     const shift = {l: 0, t: 0};
     const hold = (n, s) => {
-        const r = n.getBoundingClientRect();
-        const pad = {l: r.left + n.clientLeft, t: r.top + n.clientTop};
-        pad.r = pad.l + n.clientWidth;
-        pad.b = pad.t + n.clientHeight;
-        const span = {t: pad.t - n.scrollTop, b: pad.t - n.scrollTop + n.scrollHeight};
-        span.l = s.direction === 'rtl' ? pad.r - n.scrollLeft - n.scrollWidth : pad.l - n.scrollLeft;
-        span.r = span.l + n.scrollWidth;
+        const r = n.getBoundingClientRect(), l = r.left + n.clientLeft, t = r.top + n.clientTop;
+        const pad = {l, t, r: l + n.clientWidth, b: t + n.clientHeight};
+        const x = s.direction === 'rtl' ? pad.r - n.scrollLeft - n.scrollWidth : l - n.scrollLeft;
+        const span = {l: x, t: t - n.scrollTop, r: x + n.scrollWidth, b: t - n.scrollTop + n.scrollHeight};
         for (const [axis, lo, hi] of axes) {
             const scrolled = scrolls(s[axis]);
             if (!scrolled && !clips(s[axis])) continue;
@@ -244,11 +247,13 @@ function () {
     else if (off) geometry = 'off-page';
     else if (small(vis)) geometry = 'clipped';
 
+    // Called again while Chrome forces :focus on the link: is it in sight then?
+    if (focused) return {seen: !geometry && !out.includes('transparent')};
     const hidden = geometry || out.includes('transparent');
-    if (hidden && revealedOnFocus()) {
-        const i = out.indexOf('transparent');
-        if (i >= 0) out.splice(i, 1);
-        return finish();
+    if (hidden && mayReveal()) {  // Python looks at the focused state, then picks one
+        const revealed = finish(out.filter((signal) => signal !== 'transparent'));
+        if (geometry) out.push(geometry);
+        return {reasons: finish(), revealed};
     }
     if (geometry) out.push(geometry);
     if (geometry || out.includes('visibility-hidden') || out.includes('transparent')) {
@@ -256,11 +261,8 @@ function () {
     }
 
     const rgba = (c) => {
-        const m = /^rgba?\(([^)]*)\)$/.exec(c || '');
-        if (!m) return null;
-        const p = m[1].split(/[\s,\/]+/).filter(Boolean).map(Number);
-        if (p.length < 3 || p.some(isNaN)) return null;
-        return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
+        const p = ((/^rgba?\(([^)]*)\)$/.exec(c || '') || [])[1] || '').split(/[\s,\/]+/).filter(Boolean).map(Number);
+        return p.length < 3 || p.some(isNaN) ? null : [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
     };
     const moved = (r) => ({l: r.l + shift.l, t: r.t + shift.t, r: r.r + shift.l, b: r.b + shift.t});
     const sees = (r) => r.width > 0 && r.height > 0 && !small(meet(moved(rect(r)), vis));
@@ -340,31 +342,33 @@ function () {
     if (runs.length && !marks && runs.every(unseen) && !overlaid()) out.push('same-color');
     return finish();
 
-    function revealedOnFocus() {
-        const focus = /:focus(-visible|-within)?/g;
-        const props = [
-            'position', 'left', 'top', 'right', 'bottom', 'transform', 'translate', 'scale',
-            'clip', 'clip-path', 'width', 'height', 'opacity', 'margin-left', 'margin-top',
-            'text-indent', 'overflow',
-        ];
-        let budget = 10000;
+    // Whether a :focus rule might bring the link back once a person tabs to it. Only a
+    // hint: the focused state itself decides. Not with a transition or an animation on
+    // the way (its events would reach the page), nor out of the tab order.
+    function mayReveal() {
+        const focus = /:focus(-visible|-within)?/g, animates = /^(transition|animation)/;
+        if (el.tabIndex < 0) return false;
+        let budget = 10000, found = false, moving = false;
+        const hit = new Set([el]);
         const scan = (rules) => {
             for (const rule of rules) {
-                if (--budget < 0) return false;
+                if (--budget < 0 || moving) return;
                 if (!rule.selectorText) {
-                    if (rule.cssRules && scan(rule.cssRules)) return true;
+                    if (rule.cssRules) scan(rule.cssRules);
                     continue;
                 }
                 if (!rule.selectorText.includes(':focus')) continue;
-                if (!props.some((p) => rule.style.getPropertyValue(p))) continue;
-                for (const part of rule.selectorText.split(',')) {
-                    if (!part.includes(':focus')) continue;
+                const parts = rule.selectorText.split(',').filter((part) => part.includes(':focus'));
+                const hits = chain.filter((n) => parts.some((part) => {
                     try {
-                        if (el.matches(part.replace(focus, '') || '*')) return true;
-                    } catch (e) { /* a selector matches() cannot take */ }
-                }
+                        return n.matches(part.replace(focus, '') || '*');
+                    } catch (e) { return false; }  // a selector matches() cannot take
+                }));
+                if (!hits.length) continue;
+                hits.forEach((n) => hit.add(n));
+                found = true;
+                moving = [...rule.style].some((name) => animates.test(name));
             }
-            return false;
         };
         const root = el.getRootNode();
         const sheets = [...doc.styleSheets, ...(doc.adoptedStyleSheets || [])];
@@ -372,9 +376,13 @@ function () {
         for (const sheet of sheets) {
             let rules;
             try { rules = sheet.cssRules; } catch (e) { continue; }  // cross-origin sheet
-            if (rules && scan(rules)) return true;
+            if (rules) scan(rules);
         }
-        return false;
+        // Too many rules to read through: the focused state alone decides.
+        return (found || budget < 0) && !moving && ![...hit].some((n) => {
+            const s = css(n);
+            return s.animationName !== 'none' || s.transitionDuration.split(',').some(parseFloat);
+        });
     }
 }
 """
@@ -387,29 +395,65 @@ class NoIsolatedWorldError(RuntimeError):
 async def reasons(element: Element) -> list[str]:
     """The trap signals of *element* (an ``<a>``) that fired; empty for a normal link.
 
-    One ``Runtime.callFunctionOn`` in the isolated world of the element's frame.
-    :class:`NoIsolatedWorldError` when that frame has none: the check never runs where
-    the page could see it.
+    One ``Runtime.callFunctionOn`` in the isolated world of the element's frame, and a
+    second one under a forced ``:focus`` when a focus rule might bring a hidden link back.
+    :class:`NoIsolatedWorldError` when that frame has no isolated world: the check never
+    runs where the page could see it.
     """
     session, tab = element._session, element._tab
     object_id = await element._resolve()
     target = await _isolated(element, object_id)
     if target is None:
         raise NoIsolatedWorldError("no isolated world in the link's frame: trap check not run")
-    call = {
-        "objectId": target,
-        "functionDeclaration": _REASONS_JS,
-        "returnByValue": True,
-    }
     try:
-        answer = await send_on_handle(session, "Runtime.callFunctionOn", call)
+        found = _value(await send_on_handle(session, "Runtime.callFunctionOn", _call(target)))
+        if isinstance(found, dict):
+            found = found["revealed"] if await _seen_focused(session, target) else found["reasons"]
     finally:
         if (handles := handles_of(tab)) is not None:
             handles.discard(target, session)
+    return list(found or [])
+
+
+def _call(target: str, *, focused: bool = False) -> dict:
+    args = {"arguments": [{"value": focused}], "returnByValue": True}
+    return {"objectId": target, "functionDeclaration": _REASONS_JS} | args
+
+
+def _value(answer: dict) -> Any:
     remote = answer.get("result", {})
     if remote.get("subtype") == "error" or "exceptionDetails" in answer:
         raise RuntimeError(remote.get("description", "trap-link check failed"))
-    return list(remote.get("value") or [])
+    return remote.get("value")
+
+
+async def _seen_focused(session: Session, target: str) -> bool:
+    """Whether the link is in sight while Chrome forces ``:focus`` and ``:focus-visible`` on it.
+
+    ``CSS.forcePseudoState`` only changes which rules match: focus does not move, no focus or
+    blur event fires, nothing scrolls. Force, measure and release go out back to back, so the
+    state lasts one round trip; ``CSS.disable`` drops what is left. One at a time per session.
+    """
+    async with _FOCUS_LOCKS.setdefault(session, asyncio.Lock()):
+        node = (await send_on_handle(session, "DOM.requestNode", {"objectId": target}))["nodeId"]
+        await send_on_handle(session, "CSS.enable", {})
+        try:
+            force = {"nodeId": node, "forcedPseudoClasses": ["focus", "focus-visible"]}
+            steps = [
+                ("CSS.forcePseudoState", force),
+                ("Runtime.callFunctionOn", _call(target, focused=True)),
+                ("CSS.forcePseudoState", force | {"forcedPseudoClasses": []}),
+            ]
+            forced, answer, _ = await asyncio.gather(
+                *(send_on_handle(session, method, params) for method, params in steps),
+                return_exceptions=True,
+            )
+        finally:
+            with contextlib.suppress(CDPError, TimeoutError, ConnectionError):
+                await send_on_handle(session, "CSS.disable", {})
+    if isinstance(answer, BaseException):
+        raise answer
+    return not isinstance(forced, BaseException) and bool(_value(answer).get("seen"))
 
 
 async def is_trap_link(element: Element) -> bool:
@@ -434,9 +478,8 @@ async def _isolated(element: Element, object_id: str) -> str | None:
         if context is None:
             return None
         try:
-            resolved = await send_on_handle(
-                session, "DOM.resolveNode", params | {"executionContextId": context}
-            )
+            where = params | {"executionContextId": context}
+            resolved = await send_on_handle(session, "DOM.resolveNode", where)
         except CDPError:
             tab._hsim_worlds.pop(frame_id, None)
             continue
