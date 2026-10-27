@@ -396,13 +396,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- With `stealth=True` Chrome is launched with `--user-agent=<profile User-Agent>` (the
-  profile aligned first with the binary's `--version`), so what the browser process loads
+- With `stealth=True` on the stock backend Chrome is launched with
+  `--user-agent=<profile User-Agent>` (the profile aligned first with the binary's
+  `--version`), so what the browser process loads
   itself, such as robots.txt, carries the same User-Agent as the pages instead of
   `HeadlessChrome/…`. A `--user-agent` in `args` wins. The full version stays the
   profile's everywhere (`getHighEntropyValues` `uaFullVersion` in pages and workers,
   `Sec-CH-UA-Full-Version`), as `fullVersionList` and `Sec-CH-UA-Full-Version-List`, instead
-  of the empty string Chrome leaves under `--user-agent`.
+  of the empty string Chrome leaves under `--user-agent`. The patched backend gets no such
+  flag: it would empty its native client hints and undo its reduced User-Agent
+  (`Chrome/146.0.0.0`).
 
 - Internal: `Tab.screenshot` and its full-page helpers moved to `tellurium/browser/screenshot.py`,
   the `Browser` cookie methods to the `CookieJar` mixin in `tellurium/browser/cookie_jar.py`.

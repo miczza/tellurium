@@ -61,6 +61,16 @@ class StealthEngine:
         )
         return self._extension_dir
 
+    def user_agent_flag(self) -> str | None:
+        """``--user-agent=<profile UA>`` for the launch, when this engine sets the
+        User-Agent per tab: what the browser process loads itself (robots.txt)
+        gets no ``Emulation.setUserAgentOverride``, only the flag reaches it.
+        ``None`` on a backend with a native one (patched), whose client hints
+        and reduced User-Agent the flag would undo."""
+        if "native_navigator" in self._caps:
+            return None
+        return "--user-agent=" + self._profile.user_agent
+
     def close(self) -> None:
         """Delete the extension directory now (idempotent)."""
         if self._extension_cleanup is not None:

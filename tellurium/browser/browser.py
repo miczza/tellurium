@@ -369,10 +369,9 @@ class Browser(CookieJar):
                 stealth_flags.append(f"--window-size={int(viewport[0])},{int(viewport[1])}")
 
             if stealth and stealth_engine is not None:
-                # What the browser process loads itself (robots.txt) gets no
-                # Emulation.setUserAgentOverride: only this flag reaches it.
-                if not any(a.startswith("--user-agent=") for a in args or []):
-                    stealth_flags.append("--user-agent=" + stealth_profile.user_agent)
+                ua_flag = stealth_engine.user_agent_flag()
+                if ua_flag and not any(a.startswith("--user-agent=") for a in args or []):
+                    stealth_flags.append(ua_flag)
                 ext_path = stealth_engine.build_extension()
                 if ext_path or user_exts:
                     stealth_flags.append(
