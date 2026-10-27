@@ -87,3 +87,10 @@ async def test_a_focus_rule_counts_only_if_the_forced_focus_shows_the_link(seen)
         ("CSS.forcePseudoState", []),
         ("CSS.disable", None),
     ]
+
+
+def test_the_check_is_the_script_shipped_with_the_stealth_scripts():
+    from tellurium.stealth.extension import SCRIPTS_DIR
+
+    script = (SCRIPTS_DIR / "trap_link.js").read_text()
+    assert trap_link._REASONS_JS == script

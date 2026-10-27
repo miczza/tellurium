@@ -22,7 +22,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   scroll), not read from the rules; a transition on the way back, or `tabindex="-1"`,
   leaves the link a trap. One `Runtime.callFunctionOn` (two around a forced focus) in the
   isolated world of the link's frame (OOPIFs included): no main-world call, global, node
-  or attribute; `trap_link.NoIsolatedWorldError` when the frame has no isolated world.
+  or attribute; `trap_link.NoIsolatedWorldError` when the frame has no isolated world. The
+  check is `tellurium/stealth/scripts/trap_link.js`, loaded like the other stealth scripts.
 - `Session.start(..., on_login_failure="raise"|"manual")`. `"raise"` (default) keeps the
   errors as they were; `"manual"` hands the browser to a person when validation fails with
   no `@session.login`, or the login callback raises: a headless Chrome is closed (its cookie
