@@ -826,6 +826,21 @@ fake what it reads, and no global, node or attribute is left behind. When that
 frame has no isolated world it raises `trap_link.NoIsolatedWorldError` instead of
 running where the page could see it.
 
+What it can still miss, or get wrong:
+
+- **Not looked at without a scroll**: a link covered by another box below the fold, or
+  inside a box that has to scroll to show it, is not hit-tested (scrolling would show).
+  A box painting over the link with `pointer-events: none` lets the hit-test through.
+- **Masks and shapes it cannot read**: a `mask-image: url(...)`, a `clip-path` with
+  `path()`, `url()` or `calc()`, text over an image or a gradient (no `same-color`).
+- **Focus rules, read not applied**: specificity against the other rules is not
+  computed (a `:focus` rule a more specific selector beats still counts), and a reveal
+  that goes through `transform`, `:has()`, a sibling's focus, `@container` or a script
+  is not seen: those links stay traps (false positives). A skip link whose only focus
+  rule is in a cross-origin sheet stays a trap too.
+- **Known false positives**: a `position: fixed` link inside an ancestor with a
+  `transform` (taken as fixed to the viewport); a link of a closed menu (by design).
+
 #### Custom JS
 
 ```python
