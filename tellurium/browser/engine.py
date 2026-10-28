@@ -227,3 +227,33 @@ class PatchedEngine(BrowserEngine):
             "native_network_timing",
             "native_navigator",
         }
+
+
+def select_engine(
+    browser: str,
+    executable: str | None,
+    *,
+    chromium_version: str | None,
+    chromium_sha256: str | None,
+    auto_security_update: bool,
+    webrtc_ip_flag: str | None,
+) -> BrowserEngine:
+    """The engine ``Browser.launch(browser=...)`` asks for: ``"patched"`` or stock.
+
+    The patched-only options are ignored, with a warning, for a stock browser.
+    """
+    if browser == "patched":
+        return PatchedEngine(
+            executable=executable,
+            chromium_version=chromium_version,
+            chromium_sha256=chromium_sha256,
+            auto_security_update=auto_security_update,
+            webrtc_ip_flag=webrtc_ip_flag,
+        )
+    if chromium_version or chromium_sha256 or auto_security_update:
+        logger.warning(
+            "chromium_version/chromium_sha256/auto_security_update are only "
+            "meaningful with browser='patched'; ignoring for browser=%r.",
+            browser,
+        )
+    return StockEngine(executable=executable)

@@ -15,7 +15,7 @@ from tellurium.browser.context import BrowserContext, tab_context
 from tellurium.browser.cookie_jar import CookieJar
 from tellurium.browser.dialog import check_policy
 from tellurium.browser.download import Downloads
-from tellurium.browser.engine import PatchedEngine, StockEngine
+from tellurium.browser.engine import select_engine
 from tellurium.browser.launcher import (
     _detect_chrome_version,
     build_chrome_flags,
@@ -219,22 +219,14 @@ class Browser(CookieJar):
         )
 
         # 1. Select engine
-        if browser == "patched":
-            engine = PatchedEngine(
-                executable=executable,
-                chromium_version=chromium_version,
-                chromium_sha256=chromium_sha256,
-                auto_security_update=auto_security_update,
-                webrtc_ip_flag=resolved_webrtc_ip,
-            )
-        else:
-            if chromium_version or chromium_sha256 or auto_security_update:
-                logger.warning(
-                    "chromium_version/chromium_sha256/auto_security_update are only "
-                    "meaningful with browser='patched'; ignoring for browser=%r.",
-                    browser,
-                )
-            engine = StockEngine(executable=executable)
+        engine = select_engine(
+            browser,
+            executable,
+            chromium_version=chromium_version,
+            chromium_sha256=chromium_sha256,
+            auto_security_update=auto_security_update,
+            webrtc_ip_flag=resolved_webrtc_ip,
+        )
         self._engine = engine
 
         # 2. Get executable (engines resolve it off the event loop)
@@ -583,7 +575,11 @@ class Browser(CookieJar):
     def downloads(self) -> Downloads:  # internal: Tab.expect_download, contexts
         return self._downloads
 
-    headless = property(lambda self: self._proc.headless, doc="Whether Chrome runs headless.")
+    @property
+    def headless(self) -> bool:
+        """Whether Chrome was launched headless (read-only): from the flags it got,
+        ``headless=True`` or ``--headless`` in ``args``, on every platform."""
+        return self._proc.headless
 
     async def wait_for_tab(self, url: str, *, timeout: float = 30) -> Tab:
         """Return the first open tab whose URL matches *url*, waiting for one.

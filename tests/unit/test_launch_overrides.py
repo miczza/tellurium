@@ -11,6 +11,7 @@ import asyncio
 import pytest
 
 from tellurium.browser import browser as browser_mod
+from tellurium.browser import engine as browser_engine
 from tellurium.stealth.profile import StealthProfile
 
 
@@ -28,7 +29,7 @@ def captured_flags(monkeypatch):
     async def fake_exec(self):
         return "/bin/true"
 
-    monkeypatch.setattr(browser_mod.StockEngine, "get_executable", fake_exec)
+    monkeypatch.setattr(browser_engine.StockEngine, "get_executable", fake_exec)
     return captured
 
 
@@ -124,7 +125,7 @@ def _profile_from_launch(monkeypatch, **kwargs):
     async def fake_exec(self):
         return "/bin/true"
 
-    monkeypatch.setattr(browser_mod.StockEngine, "get_executable", fake_exec)
+    monkeypatch.setattr(browser_engine.StockEngine, "get_executable", fake_exec)
     try:
         asyncio.run(browser_mod.Browser.launch(stealth=True, seed=1, **kwargs))
     except RuntimeError as exc:

@@ -10,6 +10,7 @@ import asyncio
 import pytest
 
 from tellurium.browser import browser as browser_mod
+from tellurium.browser import engine as engine_mod
 from tellurium.stealth.profile import StealthProfile
 
 
@@ -24,7 +25,7 @@ def _launch_flags(monkeypatch, version, engine="StockEngine", **kw) -> list[str]
         return "/bin/true"
 
     monkeypatch.setattr(browser_mod, "build_chrome_flags", fake_build_chrome_flags)
-    monkeypatch.setattr(getattr(browser_mod, engine), "get_executable", fake_exec)
+    monkeypatch.setattr(getattr(engine_mod, engine), "get_executable", fake_exec)
     monkeypatch.setattr(browser_mod, "_detect_chrome_version", lambda path: version)
     with pytest.raises(RuntimeError, match="stop-here"):
         asyncio.run(browser_mod.Browser.launch(headless=True, seed=1, **kw))
@@ -56,8 +57,8 @@ def test_a_user_agent_of_the_caller_is_refused_with_stealth(monkeypatch, flag, b
     async def no_exec(self):
         raise AssertionError("refused before anything is resolved or launched")
 
-    monkeypatch.setattr(browser_mod.StockEngine, "get_executable", no_exec)
-    monkeypatch.setattr(browser_mod.PatchedEngine, "get_executable", no_exec)
+    monkeypatch.setattr(engine_mod.StockEngine, "get_executable", no_exec)
+    monkeypatch.setattr(engine_mod.PatchedEngine, "get_executable", no_exec)
     launch = browser_mod.Browser.launch(stealth=True, browser=backend, args=[flag])
     with pytest.raises(ValueError, match="user-agent in args"):
         asyncio.run(launch)

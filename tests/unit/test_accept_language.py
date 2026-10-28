@@ -38,6 +38,7 @@ def test_user_agent_override_does_not_set_accept_language():
 def test_launch_flags_include_accept_lang(monkeypatch):
     """Browser.launch(stealth=True) passes --accept-lang=<profile languages>."""
     from tellurium.browser import browser as browser_mod
+    from tellurium.browser import engine as engine_mod
 
     captured = {}
 
@@ -50,7 +51,7 @@ def test_launch_flags_include_accept_lang(monkeypatch):
     async def fake_exec(self):
         return "/bin/true"
 
-    monkeypatch.setattr(browser_mod.StockEngine, "get_executable", fake_exec)
+    monkeypatch.setattr(engine_mod.StockEngine, "get_executable", fake_exec)
     try:
         asyncio.run(browser_mod.Browser.launch(headless=True, stealth=True, seed=1))
     except RuntimeError as e:

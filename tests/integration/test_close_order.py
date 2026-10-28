@@ -62,3 +62,28 @@ async def test_browser_headless_says_how_it_was_launched(headless):
         assert browser.headless is headless
     finally:
         await browser.close()
+
+
+@pytest.mark.parametrize("flag", ["--headless", "--headless=new"])
+async def test_headless_in_args_counts_as_headless(flag):
+    browser = await Browser.launch(args=[flag])
+    try:
+        assert browser.headless is True
+    finally:
+        await browser.close()
+
+
+async def test_a_close_cancelled_during_browser_close_still_stops_chrome():
+    browser = await Browser.launch(headless=True)
+    chrome = browser._proc.process
+    profile = browser._proc.temp_profile
+    closing = asyncio.ensure_future(browser.close())
+    for _ in range(3):
+        await asyncio.sleep(0.01)
+        closing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+    # Exit code 0 (Browser.close) when the machine is idle; under heavy load the
+    # escalation may end it instead: either way it is gone.
+    assert chrome.poll() is not None, "Chrome still running"
+    assert not os.path.exists(profile)
