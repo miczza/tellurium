@@ -459,6 +459,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Session.save()` during a start writes the cookie jar Chrome has now, not the one read at
+  the start: from another thread (`await asyncio.to_thread(session.save)`, as `tellurium mcp`
+  and `tellurium login` do) it waits for Chrome (at most 10 s); on the start's own loop it
+  returns a task to await (the close waits for it). Outside a start it returns `None` as before.
 - `SessionPool` works across one `asyncio.run` after another: its semaphore is made in the
   loop of the open instead of in `__init__` (it failed with "bound to a different event loop").
 - `SessionPool.open`: an identity deleted (by another process) while its open waited for a slot

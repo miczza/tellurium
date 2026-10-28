@@ -24,6 +24,8 @@ _VALID_MODES = ("all", "any")
 _LOGIN_FAILURE_POLICIES = ("raise", "manual")
 #: Seconds a person gets to sign in with ``on_login_failure="manual"``.
 MANUAL_TIMEOUT = 600.0
+#: Bound on a :meth:`Session.save` from another thread waiting for Chrome's jar.
+LIVE_SAVE_TIMEOUT = 2 * session_cookies.TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,11 @@ class Session:
         self._reinjection: session_cookies.Reinjection | None = None
         # Run in a thread once start holds the lock, before Chrome (SessionPool).
         self._on_lock: Any = None
+        # The Chrome of the running start (None between starts), its loop,
+        # and the live save under way.
+        self._live: Any = None
+        self._live_loop: asyncio.AbstractEventLoop | None = None
+        self._saving: asyncio.Task | None = None
 
         loaded = storage.load(self._json_path())
         if loaded is None:
@@ -135,9 +142,17 @@ class Session:
         self._login = fn
         return fn
 
-    def save(self, *, full: bool = False) -> None:
+    def save(self, *, full: bool = False) -> asyncio.Task | None:
         """Serialize the current session state to session.json, and the cookie
-        jar (as of the last start or close) to cookies.json.
+        jar to cookies.json: during a start, the jar Chrome has now; else the
+        one of the last start or close.
+
+        During a start the jar is read from Chrome: called from another thread
+        (``await asyncio.to_thread(session.save)``) it waits for it, at most
+        :data:`LIVE_SAVE_TIMEOUT` seconds; called on the start's own loop it
+        cannot wait, so it returns a task that writes it (``await
+        session.save()``; the close waits for it too). A Chrome that does not
+        answer leaves cookies.json as it was, with a warning in the log.
 
         `full=True` includes the last set of launch parameters used by start()
         (or stored hints if start() has not run). If neither exists, the file
@@ -163,8 +178,44 @@ class Session:
                 payload["launch"] = dict(launch)
 
         storage.save(self._json_path(), payload, full=full)
-        if self._session_cookies is not None:
-            session_cookies.save(self.path, self._session_cookies, at_close=self._cookies_at_close)
+        return self._save_cookies()
+
+    def _save_cookies(self) -> asyncio.Task | None:
+        browser, loop = self._live, self._live_loop
+        if browser is None or loop is None:
+            if self._session_cookies is not None:
+                session_cookies.save(
+                    self.path, self._session_cookies, at_close=self._cookies_at_close
+                )
+            return None
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is loop:
+            self._saving = loop.create_task(self._save_live(browser))
+            return self._saving
+        future = asyncio.run_coroutine_threadsafe(self._save_live(browser), loop)
+        try:
+            future.result(LIVE_SAVE_TIMEOUT)
+        except Exception:  # noqa: BLE001 - the loop is stuck or gone: keep the file
+            future.cancel()
+            logger.warning("could not save the cookies of %s", self.path, exc_info=True)
+        return None
+
+    async def _save_live(self, browser) -> None:
+        """Chrome's jar now (with the cookies a restore left pending), not as
+        it closes: the next start only puts back what Chrome lacks."""
+        self._saving = asyncio.current_task()
+        try:
+            jar = await session_cookies.snapshot(browser)
+            assert self._reinjection is not None  # set before _live
+            cookies = self._reinjection.keep(jar)
+            await asyncio.to_thread(session_cookies.save, self.path, cookies, at_close=False)
+        except Exception:  # noqa: BLE001 - Chrome gone or hung: keep the file
+            logger.warning("could not save the cookies of %s", self.path, exc_info=True)
+            return
+        self._session_cookies, self._cookies_at_close = cookies, False
 
     @asynccontextmanager
     async def start(self, *, on_login_failure: str = "raise", **kwargs):
@@ -226,17 +277,20 @@ class Session:
             )
             self._started = True
             await self._restore_cookies(browser)
+            self._live, self._live_loop = browser, asyncio.get_running_loop()
             manual = on_login_failure == "manual"
             if not await self._run_validation_and_login(browser, manual=manual):
                 if merged.get("headless"):  # a person needs a window
-                    closing, browser = browser, None
+                    closing, browser, self._live = browser, None, None
                     await self._close_browser(closing)
                     browser = await self._launch(Browser, chrome_dir, {**merged, "headless": False})
                     await self._restore_cookies(browser)
+                    self._live = browser
                 await self._manual_login(browser)
             yield browser
         finally:
             self._started = False
+            self._live = None
             try:
                 if browser is not None:
                     await self._close_browser(browser)
@@ -270,6 +324,9 @@ class Session:
         cookies.json: Chrome's jar lacks the cookies it holds, so writing it
         would lose them."""
         try:
+            saving = self._saving
+            if saving is not None and not saving.done():  # a live save writes first
+                await asyncio.gather(saving, return_exceptions=True)
             if self._reinjection is None:
                 return  # the finally still closes Chrome
             cookies = self._reinjection.keep(await session_cookies.snapshot(browser))

@@ -394,3 +394,48 @@ async def test_a_restore_never_answered_is_not_left_running(tmp_path, fake_launc
     await asyncio.sleep(0)
     assert asyncio.all_tasks() - before == set()
     assert session_cookies.load(str(tmp_path)) == [_SSO]
+
+
+async def test_save_from_a_thread_during_a_start_writes_the_current_jar(tmp_path, fake_launch):
+    session = Session("s", path=str(tmp_path))
+    async with session.start() as browser:
+        browser.jar = [_SSO, _KEPT]
+        await asyncio.to_thread(session.save)
+        assert session_cookies.read(str(tmp_path)) == ([_SSO, _KEPT], False)
+        browser.jar = [_KEPT]
+    assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)  # the close's is the last
+
+
+async def test_save_on_the_loop_during_a_start_writes_the_current_jar(tmp_path, fake_launch):
+    session = Session("s", path=str(tmp_path))
+    async with session.start() as browser:
+        browser.jar = [_SSO]
+        await session.save()  # on the loop: awaitable, the jar is read from Chrome
+        assert session_cookies.read(str(tmp_path)) == ([_SSO], False)
+        browser.jar = [_KEPT]
+        session.save()  # not awaited: the close waits for it, then writes its own
+    assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)
+    assert session.save() is None  # closed: the jar the close read
+    assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)
+
+
+async def test_a_live_save_keeps_the_cookies_a_failed_restore_left_pending(
+    tmp_path, fake_launch, monkeypatch
+):
+    browsers, make = fake_launch
+    monkeypatch.setattr(session_cookies, "TIMEOUT", 0.05)
+    make["factory"] = lambda: _FakeBrowser(jar=[_KEPT], hang_write=True)
+    session_cookies.save(str(tmp_path), [_SSO])
+    session = Session("s", path=str(tmp_path))
+    async with session.start():
+        await session.save()
+        assert session_cookies.load(str(tmp_path)) == [_KEPT, _SSO]
+
+
+async def test_a_live_save_with_chrome_gone_keeps_the_file(tmp_path, fake_launch):
+    session_cookies.save(str(tmp_path), [_SSO])
+    session = Session("s", path=str(tmp_path))
+    async with session.start() as browser:
+        browser.fail_read = True
+        await session.save()
+        assert session_cookies.load(str(tmp_path)) == [_SSO]
