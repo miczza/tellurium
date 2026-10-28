@@ -406,6 +406,11 @@ popup = await browser.wait_for_tab("*/checkout*")
 
 The first (primary) tab.
 
+#### `browser.headless -> bool`
+
+Read-only: whether Chrome was launched headless, from the flags it got
+(`headless=True`, or `--headless` in `args`), on every platform.
+
 #### `browser.new_context(proxy=None) -> BrowserContext`
 
 Create an isolated browser context (like incognito). Separate cookies and storage.
@@ -441,7 +446,9 @@ await browser.clear_cookies(domain=".example.com")
 
 #### `browser.close()`
 
-Close the browser, all tabs, and the Chrome process.
+Close the browser, all tabs, and the Chrome process. Chrome is first asked to close
+over CDP (`Browser.close`, the orderly exit that writes the cookie store) and given up
+to 5 s; then it gets SIGTERM and, if needed, SIGKILL.
 
 ---
 
