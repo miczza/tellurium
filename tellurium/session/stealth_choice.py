@@ -20,7 +20,7 @@ def stealth_for(session: Any) -> bool:
     from tellurium.stealth.engine import refuse_user_agent_arg
 
     try:
-        refuse_user_agent_arg(session._launch_hints.get("args"))
+        refuse_user_agent_arg((getattr(session, "_launch_hints", None) or {}).get("args"))
     except ValueError:
         logger.warning("session %s sets its own --user-agent: opened without stealth", session.path)
         return False
