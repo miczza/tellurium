@@ -72,8 +72,9 @@ if TYPE_CHECKING:
     from tellurium.browser.element import Element
 
 # Run with ``this`` bound to the link (or, with ``frame``, an ``<iframe>`` holding it), in
-# the isolated world; returns ``{reasons, nofollow, framed}``.
-_REASONS_JS = load_script("trap_link.js")
+# the isolated world; returns ``{reasons, nofollow, framed}``. One function: the style
+# checks (``trap_link_style.js``) are spliced into it as text.
+_REASONS_JS = load_script("trap_link.js", {"STYLE": load_script("trap_link_style.js")})
 _OWNER_DOCUMENT_JS = "function () { return this.ownerDocument; }"
 _MAX_FRAMES = 16
 
@@ -144,7 +145,7 @@ async def _check(
 async def _owner(session: Any, document: int) -> tuple[Any, int] | None:
     """The ``<iframe>`` holding *document* of *session*: the session it lives in and its
     backend id; ``None`` for the tab's own document."""
-    from tellurium.browser.geometry import _chain
+    from tellurium.browser.geometry import frame_chain
 
     tree = (await send_on_handle(session, "Page.getFrameTree", {}))["frameTree"]
     frames, children = [], list(tree.get("childFrames", []))
@@ -161,7 +162,7 @@ async def _owner(session: Any, document: int) -> tuple[Any, int] | None:
             continue
         if node.get("contentDocument", {}).get("backendNodeId") == document:
             return session, owner["backendNodeId"]
-    if not (hops := _chain(session)):
+    if not (hops := frame_chain(session)):
         return None
     _, parent, frame_id = hops[0]  # an OOPIF's root document: its <iframe> is in the parent's
     owner = await send_on_handle(parent, "DOM.getFrameOwner", {"frameId": frame_id})

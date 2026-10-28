@@ -413,6 +413,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   launch on the same `user_data_dir` even without `Session` (SIGTERM alone lost it about
   one time in four). `close()` can take up to 5 s longer when Chrome does not answer
   `Browser.close`; it is skipped when the pipe is already broken.
+- The RFC 9309 parser and matcher of robots.txt moved from `tellurium.browser.robots`
+  to `tellurium.browser.robots_rules` (no behaviour change; `parse`, `RobotsRules`,
+  `ALLOW_ALL` and `DISALLOW_ALL` are still importable from `robots`). New public name
+  `robots_rules.PRODUCT_TOKEN` (was `robots._AGENT`), the product-token pattern that
+  `Robots` checks `robots_agent` against.
+- The pruning of the AX tree into `SnapshotNode` trees (`build_nodes`) moved from
+  `tellurium.browser.snapshot` to `tellurium.browser.snapshot_text`, next to the
+  rendering (no behaviour change; `SnapshotNode`, `build_nodes` and `render` are still
+  importable from `snapshot`). New public names in `snapshot_text`, used by `snapshot`:
+  `Unread` (was `snapshot._Unread`, the URL of a cross-site iframe left out, with its
+  `state`), `ax_role` and `ax_props` (were `snapshot._role` and `snapshot._props`, the
+  role and properties of an AX node).
+- `tellurium.browser.geometry.frame_chain(session)` is public (it was `_chain`): the
+  `(session, parent session, frame id)` of each cross-site frame up to the tab; the
+  trap-link check uses it instead of the private name.
+- The style checks of the trap-link script (focus rules, CSS lengths) moved from
+  `stealth/scripts/trap_link.js` to `stealth/scripts/trap_link_style.js`, spliced back
+  into the same function when it is loaded (no behaviour change: still one
+  `Runtime.callFunctionOn`).
 - With `stealth=True` on the stock backend Chrome is launched with
   `--user-agent=<profile User-Agent>` (the profile aligned first with the binary's
   `--version`; no flag when that cannot be read, so flag and override never name two
