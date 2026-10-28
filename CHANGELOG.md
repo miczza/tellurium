@@ -464,6 +464,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `session.json` and `cookies.json` are written through a temporary file of their own (no
+  longer a fixed `<file>.tmp`): two writers at once (a live save and the close) no longer
+  leave a corrupt file, or fail renaming the other's.
 - `tellurium login` no longer loses a cookie with no expiry written in the last 0.3 s before
   the person closes the sign-in window: a second, minimized window of Chrome keeps its
   browsing session open, so the close reads the whole jar. Closing both windows falls back to
