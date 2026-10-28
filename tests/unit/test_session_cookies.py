@@ -508,3 +508,48 @@ async def test_save_now_from_another_loop_is_refused(tmp_path, fake_launch):
 
         with pytest.raises(RuntimeError, match="loop"):
             await asyncio.to_thread(elsewhere)
+
+
+def _slow_session_json(monkeypatch, seconds):
+    """session.json writes take *seconds* (the first step of a save)."""
+    import time
+
+    from tellurium.session import storage
+
+    real_save = storage.save
+
+    def slow_save(path, data, full):
+        time.sleep(seconds)
+        real_save(path, data, full)
+
+    monkeypatch.setattr(storage, "save", slow_save)
+
+
+async def test_a_save_now_begun_before_the_close_never_writes_after_it(
+    tmp_path, fake_launch, monkeypatch
+):
+    # The close comes while save_now() still writes session.json: the jar it
+    # then reads is newer than nothing the close wrote, and must not land.
+    session = Session("s", path=str(tmp_path))
+    async with session.start() as browser:
+        browser.jar = [_SSO]
+        _slow_session_json(monkeypatch, 0.3)
+        saving = asyncio.ensure_future(session.save_now())
+        await asyncio.sleep(0.05)
+        browser.jar = [_KEPT]
+    await saving
+    assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)
+
+
+async def test_a_save_from_a_thread_begun_before_the_close_never_writes_after_it(
+    tmp_path, fake_launch, monkeypatch
+):
+    session = Session("s", path=str(tmp_path))
+    async with session.start() as browser:
+        browser.jar = [_SSO]
+        _slow_session_json(monkeypatch, 0.3)
+        saving = asyncio.ensure_future(asyncio.to_thread(session.save))
+        await asyncio.sleep(0.05)
+        browser.jar = [_KEPT]
+    await saving
+    assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)
