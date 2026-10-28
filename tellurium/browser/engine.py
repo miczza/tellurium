@@ -120,8 +120,8 @@ class PatchedEngine(BrowserEngine):
             download_patched(info.latest, cache_root=self._cache_root, stop=stop)
         except DownloadCancelled:
             raise
-        except DownloadError as e:
-            logger.error("auto_security_update failed: %s", e)
+        except (DownloadError, OSError) as e:  # OSError: the network died mid-download
+            logger.error("auto_security_update failed, using the installed binary: %s", e)
 
     def resolve_binary_path(self, stop: threading.Event | None = None) -> Path:
         """Find and verify the binary to launch (blocking: run it in a thread).

@@ -246,3 +246,22 @@ def test_a_stoppable_download_keeps_its_network_waits_under_the_stop_timeout(tmp
     monkeypatch.setattr("urllib.request.urlopen", urlopen)
     dl.download_patched(cache_root=tmp_path / "cache", stop=stop)
     assert timeouts and all(t is not None and t < STOP_TIMEOUT for t in timeouts), timeouts
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="flock")
+def test_a_lock_error_that_is_not_busy_is_raised_at_once(tmp_path, monkeypatch):
+    # A filesystem without flock (ENOLCK, EINVAL) is not "held by an install":
+    # no 60 s wait, and the error is the real one.
+    import errno
+
+    def no_flock(fh):
+        raise OSError(errno.ENOLCK, "No locks available")
+
+    monkeypatch.setattr(_cache, "_try_lock", no_flock)
+    root = tmp_path / "cache"
+    root.mkdir()
+    start = time.monotonic()
+    with pytest.raises(OSError, match="No locks available"):
+        with _cache.reading_lock(root):
+            pass
+    assert time.monotonic() - start < 1

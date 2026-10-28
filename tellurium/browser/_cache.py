@@ -263,8 +263,13 @@ def _acquire(fh: Any, root: Path, stop: threading.Event | None) -> None:
         try:
             _try_lock(fh)
             return
-        except OSError:  # BlockingIOError on POSIX, PermissionError from msvcrt
+        except BlockingIOError:  # POSIX: held by an install
             pass
+        except OSError:
+            # msvcrt reports a held lock as PermissionError; on POSIX any other
+            # error (no flock on this filesystem) is not worth waiting for.
+            if sys.platform != "win32":
+                raise
         if stop is not None and stop.is_set():
             raise LockWaitStopped(f"Stopped waiting for the install lock of {root}")
         if time.monotonic() >= deadline:

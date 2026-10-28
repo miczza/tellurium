@@ -479,7 +479,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   found"; a cache whose lock file cannot be opened (read-only mount, image, another user's
   cache) is read without it. A launch waits for an install holding the lock at most 60 s
   (then `TimeoutError` naming the cache, e.g. behind a suspended `tellurium
-  download-browser`), and stops waiting as soon as it is cancelled.
+  download-browser`), and stops waiting as soon as it is cancelled. A filesystem without `flock`
+  raises its own error at once instead of waiting. With `auto_security_update=True`, a
+  security download that fails on the network (timeout, reset) is logged and the installed
+  binary is launched, as for any other download error.
 - A `Tab.get` (or `new_tab(url)`, `is_allowed`) whose robots.txt cannot be loaded because
   the hidden target it is loaded from cannot be opened (`Target.createTarget` or the
   attach failing or timing out) raises `NavigationError` with the cause chained, instead

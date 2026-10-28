@@ -101,6 +101,33 @@ def test_auto_security_update_installs_security_release(tmp_path, monkeypatch):
     assert downloaded == []
 
 
+@pytest.mark.parametrize("error", [TimeoutError("read timed out"), ConnectionResetError()])
+def test_auto_security_update_network_error_falls_back_to_installed(tmp_path, monkeypatch, error):
+    """A security download that dies on the network leaves the installed
+    binary in use: the launch goes on, the failure is only logged."""
+    from tellurium.browser import _cache
+    from tellurium.browser._update_check import UpdateInfo
+
+    cache_root = tmp_path / ".tellurium" / "chromium"
+    cur = cache_root / "146.0.7680.180"
+    cur.mkdir(parents=True)
+    (cur / "chrome").write_text("binary")
+    _cache.set_current("146.0.7680.180", cache_root)
+    info = UpdateInfo(
+        installed="146.0.7680.180",
+        latest="146.0.7680.195",
+        manifest={"security": True, "cve": []},
+    )
+    monkeypatch.setattr("tellurium.browser._update_check.check_for_update", lambda **kw: info)
+
+    def broken(v, **kw):
+        raise error
+
+    monkeypatch.setattr("tellurium.browser._patched_download.download_patched", broken)
+    eng = PatchedEngine(cache_root=cache_root, auto_security_update=True)
+    assert eng.resolve_binary_path() == cur / "chrome"
+
+
 def test_legacy_binary_name_still_resolves(tmp_path):
     """Installs done with the v0.1.0 README (binary named tellurium-chromium) keep working."""
     cache_root = tmp_path / ".tellurium" / "chromium"
