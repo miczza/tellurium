@@ -12,13 +12,14 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
-from tellurium.session import profile_release, session_cookies, storage
+from tellurium.session import manual_login, profile_release, session_cookies, storage
 from tellurium.session.errors import (
     SessionBusyError,
     SessionInvalidError,
     SessionLoginFailedError,
 )
 from tellurium.session.lock import SessionLock
+from tellurium.session.validators import combine as _combine_validators
 
 _VALID_MODES = ("all", "any")
 _LOGIN_FAILURE_POLICIES = ("raise", "manual")
@@ -218,7 +219,13 @@ class Session:
         self._session_cookies, self._cookies_at_close = cookies, False
 
     @asynccontextmanager
-    async def start(self, *, on_login_failure: str = "raise", **kwargs):
+    async def start(
+        self,
+        *,
+        on_login_failure: str = "raise",
+        manual_timeout: float = MANUAL_TIMEOUT,
+        **kwargs,
+    ):
         """Launch a browser bound to this session, run validators, and optionally
         execute the login callback if validation fails.
 
@@ -227,9 +234,11 @@ class Session:
         browser to a person instead: Chrome is reopened with a window if it was
         headless, a :meth:`Tab.wait_for_human` banner asks to sign in, and on
         "Done" the validators run again, until they pass
-        (:class:`SessionLoginFailedError` after :data:`MANUAL_TIMEOUT` seconds).
-        The yielded browser is then the headed one. All of it happens inside
-        this start, under its lock.
+        (:class:`SessionLoginFailedError` after *manual_timeout* seconds, at once
+        if there is no display for the window). There each round of the
+        validators gets at most ``manual_login.VALIDATOR_TIMEOUT`` seconds (a
+        hung one counts as not signed in). The yielded browser is then the
+        headed one. All of it happens inside this start, under its lock.
 
         Yields the Browser instance. Closes it on exit. Never auto-saves
         session.json; the cookie jar is written to cookies.json before Chrome
@@ -246,6 +255,8 @@ class Session:
                 f"on_login_failure must be one of {_LOGIN_FAILURE_POLICIES!r}, "
                 f"got {on_login_failure!r}"
             )
+        if not manual_timeout > 0:
+            raise ValueError(f"manual_timeout must be positive, got {manual_timeout!r}")
 
         merged = _merge_launch_params(kwargs, self._launch_hints)
         if self._chromium_version_loaded and "chromium_version" not in merged:
@@ -281,12 +292,15 @@ class Session:
             manual = on_login_failure == "manual"
             if not await self._run_validation_and_login(browser, manual=manual):
                 if merged.get("headless"):  # a person needs a window
+                    manual_login.check_display(self.name)
                     closing, browser, self._live = browser, None, None
                     await self._close_browser(closing)
                     browser = await self._launch(Browser, chrome_dir, {**merged, "headless": False})
                     await self._restore_cookies(browser)
                     self._live = browser
-                await self._manual_login(browser)
+                await manual_login.sign_in(
+                    browser, self.name, self._validators, self.validate_mode, manual_timeout
+                )
             yield browser
         finally:
             self._started = False
@@ -348,7 +362,11 @@ class Session:
         if not self._validators:
             return True
         tab = browser.main_tab
-        ok = await _combine_validators(self._validators, self.validate_mode, tab=tab)
+        if manual:  # bounded: a hung validator hands over to the person
+            timeout = manual_login.VALIDATOR_TIMEOUT
+            ok = await manual_login.signed_in(self._validators, self.validate_mode, tab, timeout)
+        else:
+            ok = await _combine_validators(self._validators, self.validate_mode, tab=tab)
         if ok:
             return True
         # Validation failed
@@ -367,27 +385,6 @@ class Session:
             raise SessionLoginFailedError("login callback raised") from exc
         return True
 
-    async def _manual_login(self, browser) -> None:
-        """A person signs in: a banner until "Done" and validators that pass."""
-        from tellurium.browser.human import wait_for_human
-
-        reason = f"Sign in to continue (session {self.name!r}), then click Done."
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + MANUAL_TIMEOUT
-        while True:
-            try:
-                await wait_for_human(
-                    browser.main_tab, reason, timeout=max(deadline - loop.time(), 0)
-                )
-            except TimeoutError as exc:
-                raise SessionLoginFailedError(
-                    f"nobody signed in to session {self.name!r} within {MANUAL_TIMEOUT:g} s"
-                ) from exc
-            tab = browser.main_tab
-            if await _combine_validators(self._validators, self.validate_mode, tab=tab):
-                return
-            reason = f"Still not signed in (session {self.name!r}): sign in, then click Done."
-
 
 _MANAGED_LAUNCH_KEYS = frozenset({"user_data_dir", "seed"})
 
@@ -404,39 +401,6 @@ def _merge_launch_params(kwargs: dict, hints: dict) -> dict:
         raise TypeError(f"session.start() manages these parameters internally: {sorted(bad)}")
     safe_hints = {k: v for k, v in hints.items() if k not in _MANAGED_LAUNCH_KEYS}
     return {**safe_hints, **kwargs}
-
-
-async def _combine_validators(validators, mode: str, *, tab) -> bool:
-    """Run validators sequentially with short-circuit semantics.
-
-    - "all": first falsy or raising validator wins (returns False).
-    - "any": first truthy validator wins (returns True); raises are skipped.
-    Returns the final boolean outcome.
-    """
-    if not validators:
-        return True
-
-    if mode == "all":
-        for v in validators:
-            try:
-                result = await v(tab)
-            except Exception:  # noqa: BLE001 - user validator errors mean invalid
-                return False
-            if not result:
-                return False
-        return True
-
-    if mode == "any":
-        for v in validators:
-            try:
-                result = await v(tab)
-            except Exception:  # noqa: BLE001 - user validator errors are skipped
-                continue
-            if result:
-                return True
-        return False
-
-    raise ValueError(f"unknown mode: {mode!r}")
 
 
 def _validate_json_value(value: Any) -> None:

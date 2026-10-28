@@ -7,6 +7,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Session.start(..., manual_timeout=600.0)`: the seconds a person gets to sign in with
+  `on_login_failure="manual"` (was the fixed `MANUAL_TIMEOUT`, still the default).
 - `SessionPool.open(name, create=True)`: with `create=False` a missing identity raises
   `FileNotFoundError` before any wait, and nothing is created or saved.
 - `tellurium mcp --respect-robots`: `navigate` and `tab-open` to a URL the site's
@@ -459,6 +461,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Session.start(on_login_failure="manual")`: without a display (`DISPLAY` and
+  `WAYLAND_DISPLAY` unset on Linux) it fails at once with a `SessionLoginFailedError` that
+  says so, instead of a `LaunchError` carrying Wayland's log from the headed relaunch; each
+  round of the validators gets at most 30 s (`manual_login.VALIDATOR_TIMEOUT`) and within the
+  deadline, so a validator that hangs shows the banner again instead of stalling the start.
 - `Session.save()` during a start writes the cookie jar Chrome has now, not the one read at
   the start: from another thread (`await asyncio.to_thread(session.save)`, as `tellurium mcp`
   and `tellurium login` do) it waits for Chrome (at most 10 s); on the start's own loop it
