@@ -490,8 +490,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   10 s); on the loop of the running start, where it cannot wait, it raises `RuntimeError`
   pointing to `await session.save_now()`. `tellurium mcp` and `tellurium login` use
   `save_now`.
-- `SessionPool` works across one `asyncio.run` after another: its semaphore is made in the
-  loop of the open instead of in `__init__` (it failed with "bound to a different event loop").
+- `SessionPool` works across one `asyncio.run` after another, and its `max_browsers` holds
+  across event loops running at once in threads: the slots are a count under a thread lock,
+  waited for without blocking the loop, instead of an `asyncio.Semaphore` made in `__init__`
+  (it failed with "bound to a different event loop").
 - `SessionPool.open`: an identity deleted (by another process) while its open waited for a slot
   no longer starts empty with a seed that is never saved: under the session lock its
   `session.json` is written again with the same seed, or `FileNotFoundError` with

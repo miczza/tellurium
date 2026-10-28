@@ -130,3 +130,47 @@ async def test_the_lock_file_is_never_removed_while_held(tmp_path, launched, mon
         await _removed_while_waiting(pool, launched, create=False)
     assert lock_file not in removed
     assert await pool.list() == ["a"]
+
+
+def test_the_cap_holds_across_loops_running_at_once_in_threads(tmp_path, monkeypatch):
+    """Three threads, each with its own asyncio.run: still one browser at a time."""
+    import threading
+
+    guard = threading.Lock()
+    count = {"now": 0, "peak": 0}
+
+    class _Counted(_FakeBrowser):
+        async def close(self):
+            with guard:
+                count["now"] -= 1
+
+    async def launch(**kwargs):
+        with guard:
+            count["now"] += 1
+            count["peak"] = max(count["peak"], count["now"])
+        return _Counted(kwargs.get("seed"))
+
+    monkeypatch.setattr(tellurium.Browser, "launch", launch)
+    pool = SessionPool(tmp_path, max_browsers=1)
+    errors: list[BaseException] = []
+
+    def run(k):
+        async def opens():
+            async def one(i):
+                async with pool.open(f"t{k}-{i}"):
+                    await asyncio.sleep(0.02)
+
+            await asyncio.wait_for(asyncio.gather(*(one(i) for i in range(5))), 30)
+
+        try:
+            asyncio.run(opens())
+        except BaseException as exc:  # noqa: BLE001 - collected for the assert
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run, args=(k,)) for k in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert count == {"now": 0, "peak": 1}

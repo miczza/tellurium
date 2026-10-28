@@ -5,8 +5,8 @@ directory (its profile, cookies and fingerprint seed). :meth:`SessionPool.open`
 starts it, but never more than ``max_browsers`` at a time across the pool: a
 slot is taken before Chrome starts and given back only after it is closed, on
 error and cancellation too, and an open still waiting for a slot can be
-cancelled; the slots belong to the event loop of the open, so a pool lives
-across one ``asyncio.run`` after another. A name is claimed in the pool before the wait, so the same
+cancelled; the cap holds across event loops and threads (one ``asyncio.run``
+after another, or several at once in threads). A name is claimed in the pool before the wait, so the same
 identity opened twice fails at once (:class:`SessionBusyError`), as does one
 another process holds (its session lock), instead of queueing for a slot.
 """
@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator, Iterator
@@ -29,6 +30,7 @@ from tellurium.session import lock as session_lock
 from tellurium.session import profile_release
 from tellurium.session.errors import SessionBusyError
 from tellurium.session.session import _MANAGED_LAUNCH_KEYS, Session
+from tellurium.session.slots import Slots
 
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 _SESSION_FILE = "session.json"
@@ -52,9 +54,8 @@ class SessionPool:
         self.directory = os.path.abspath(os.path.expanduser(os.fspath(directory)))
         self.max_browsers = max_browsers
         self._launch = dict(launch)
-        # Made in the loop of the first open (a semaphore is bound to one).
-        self._slots: asyncio.Semaphore | None = None
-        self._slots_loop: asyncio.AbstractEventLoop | None = None
+        self._slots = Slots(max_browsers)  # bound to no loop
+        self._claims_lock = threading.Lock()  # _claimed, from any thread
         self._claimed: set[str] = set()  # names being opened, open or being deleted
 
     def path(self, name: str) -> str:
@@ -130,7 +131,7 @@ class SessionPool:
         with self._claim(name, path):
             # Before the wait for a slot: a session busy elsewhere fails now.
             session = await asyncio.to_thread(_prepare, name, path, session, create)
-            async with self._slots_here():
+            async with self._slots.slot():
                 session._on_lock = functools.partial(_ensure, name, path, session, create)
                 try:
                     async with session.start(**{**self._launch, **launch}) as browser:
@@ -142,22 +143,17 @@ class SessionPool:
                 finally:
                     session._on_lock = None
 
-    def _slots_here(self) -> asyncio.Semaphore:
-        loop = asyncio.get_running_loop()
-        if self._slots is None or self._slots_loop is not loop:
-            # A loop gone takes its opens with it: the new one starts with all slots.
-            self._slots, self._slots_loop = asyncio.Semaphore(self.max_browsers), loop
-        return self._slots
-
     @contextmanager
     def _claim(self, name: str, path: str) -> Iterator[None]:
-        if name in self._claimed:
-            raise SessionBusyError(path, os.getpid())
-        self._claimed.add(name)
+        with self._claims_lock:
+            if name in self._claimed:
+                raise SessionBusyError(path, os.getpid())
+            self._claimed.add(name)
         try:
             yield
         finally:
-            self._claimed.discard(name)
+            with self._claims_lock:
+                self._claimed.discard(name)
 
     def _names(self) -> list[str]:
         try:
