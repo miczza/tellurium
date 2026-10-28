@@ -471,8 +471,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   security download in flight at its next chunk (and waits up to 10 s for it), removes the
   partial file and leaves `current` where it was; before, the download went on in its
   thread and could still switch `current`. The binary is looked up under the cache's
-  install lock, so a forced reinstall swapping the version directory no longer makes a
-  concurrent launch fail with "binary not found".
+  install lock (shared: launches do not wait for each other), so a forced reinstall
+  swapping the version directory no longer makes a concurrent launch fail with "binary not
+  found"; a cache whose lock file cannot be opened (read-only mount, image, another user's
+  cache) is read without it.
 - A `Tab.get` (or `new_tab(url)`, `is_allowed`) whose robots.txt cannot be loaded because
   the hidden target it is loaded from cannot be opened (`Target.createTarget` or the
   attach failing or timing out) raises `NavigationError` with the cause chained, instead

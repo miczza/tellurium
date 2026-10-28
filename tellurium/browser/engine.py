@@ -128,13 +128,14 @@ class PatchedEngine(BrowserEngine):
 
         Setting *stop* from another thread ends a security download in flight
         (:class:`~tellurium.browser._patched_download.DownloadCancelled`).
-        The cache is read under its install lock, so a reinstall swapping
-        the version directory is waited for instead of seen half done.
+        The cache is read under its install lock (shared), so a reinstall
+        swapping the version directory is waited for instead of seen half
+        done; a cache this process may not lock is read without it.
         """
         if not self._chromium_version:
             self._maybe_auto_security_update(stop)
         root = self._cache_root
-        lock = _cache.install_lock(root) if root.is_dir() else contextlib.nullcontext()
+        lock = _cache.reading_lock(root) if root.is_dir() else contextlib.nullcontext()
         with lock:
             return self._find_binary()
 

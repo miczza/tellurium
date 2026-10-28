@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -116,3 +117,24 @@ def test_a_forced_reinstall_in_flight_does_not_hide_the_binary(tmp_path, monkeyp
     finally:
         swapper.join(5)
     assert binary.is_file()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
+@pytest.mark.parametrize("lock_file", ["absent", "read-only"])
+def test_a_read_only_cache_still_launches(tmp_path, monkeypatch, lock_file):
+    """A cache nobody can reinstall into (ro mount, image, another user's) is read without lock."""
+    monkeypatch.setattr("tellurium.browser._update_check.check_for_update", lambda **kw: None)
+    root = tmp_path / "cache"
+    version_dir = _install(root, NEW)
+    _cache.set_current(NEW, root)
+    lock = root / _cache.LOCK_NAME
+    if lock_file == "absent":
+        lock.unlink()
+    else:
+        lock.chmod(0o444)
+    root.chmod(0o555)
+    try:
+        binary = PatchedEngine(cache_root=root).resolve_binary_path()
+    finally:
+        root.chmod(0o755)
+    assert binary.is_file() and binary.resolve().parent == version_dir

@@ -21,6 +21,7 @@ Override the root with the ``TELLURIUM_CACHE_DIR`` environment variable.
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import os
 import re
@@ -195,6 +196,48 @@ def install_lock(root: Path | None = None) -> Iterator[None]:
                 yield
             finally:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def reading_lock(root: Path) -> Iterator[None]:
+    """Hold the install lock *shared* while reading the cache (POSIX).
+
+    Installs, which hold it exclusive, are waited for; other readers are
+    not. A lock file that cannot be opened for permissions (a read-only
+    mount, an image, another user's cache) means reading without the lock:
+    this process could not install there either. Windows has no shared
+    lock: there the reader holds :func:`install_lock`.
+    """
+    fh = _open_lock(root / LOCK_NAME)
+    if fh is None:
+        yield
+        return
+    with fh:
+        if sys.platform == "win32":
+            with install_lock(root):
+                yield
+            return
+        import fcntl
+
+        fcntl.flock(fh.fileno(), fcntl.LOCK_SH)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def _open_lock(path: Path) -> Any:
+    """The lock file opened for locking, or ``None`` if permissions forbid it."""
+    modes = ("a+b",) if sys.platform == "win32" else ("a+b", "rb")
+    for mode in modes:
+        try:
+            return open(path, mode)  # noqa: SIM115 - the caller closes it
+        except (PermissionError, FileNotFoundError):
+            continue
+        except OSError as e:
+            if e.errno != errno.EROFS:
+                raise
+    return None
 
 
 def remove_orphans(root: Path | None = None) -> list[Path]:
