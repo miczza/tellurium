@@ -14,6 +14,7 @@ SPLIT = 450
     "path",
     [
         "tellurium/browser/robots.py",
+        "tellurium/browser/snapshot.py",
     ],
 )
 def test_split_file_is_under_the_ceiling(path):
@@ -28,3 +29,11 @@ def test_the_robots_parser_lives_in_its_own_module():
     assert robots.RobotsRules is robots_rules.RobotsRules
     assert robots.ALLOW_ALL is robots_rules.ALLOW_ALL
     assert robots.DISALLOW_ALL is robots_rules.DISALLOW_ALL
+
+
+def test_the_snapshot_text_lives_in_its_own_module():
+    from tellurium.browser import snapshot, snapshot_text
+
+    assert snapshot.SnapshotNode is snapshot_text.SnapshotNode
+    assert snapshot.build_nodes is snapshot_text.build_nodes
+    assert snapshot.render is snapshot_text.render

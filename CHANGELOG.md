@@ -406,6 +406,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The RFC 9309 parser and matcher of robots.txt moved from `tellurium.browser.robots`
   to `tellurium.browser.robots_rules` (no behaviour change; `parse`, `RobotsRules`,
   `ALLOW_ALL` and `DISALLOW_ALL` are still importable from `robots`).
+- The pruning of the AX tree into `SnapshotNode` trees (`build_nodes`) moved from
+  `tellurium.browser.snapshot` to `tellurium.browser.snapshot_text`, next to the
+  rendering (no behaviour change; `SnapshotNode`, `build_nodes` and `render` are still
+  importable from `snapshot`).
 - With `stealth=True` on the stock backend Chrome is launched with
   `--user-agent=<profile User-Agent>` (the profile aligned first with the binary's
   `--version`; no flag when that cannot be read, so flag and override never name two
