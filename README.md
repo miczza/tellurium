@@ -1498,7 +1498,7 @@ async with session.start(stealth=True, headless=False) as browser:
     tab = browser.main_tab
     await tab.get("https://example.com/dashboard")
     # ... scraping ...
-    session.save()
+    await session.save_now()  # metadata, seed and the cookies Chrome has now
 ```
 
 ### On-disk layout
@@ -1523,7 +1523,8 @@ Tellurium sets `0600` permissions on POSIX; it does not encrypt the file.
 | `@session.validate` | Register an async `(tab) -> bool` validator. Multiple allowed. |
 | `@session.login` | Register the async `(tab, metadata)` login callback. Only one. |
 | `session.start(**kwargs)` | Async context manager. Launches the browser, runs validators, calls login on failure. Kwargs are forwarded to `Browser.launch()` (except `user_data_dir` and `seed`). |
-| `session.save(full=False)` | Persist state. `full=True` also saves launch params used. |
+| `session.save(full=False)` | Persist state (`session.json`, and the cookie jar of the last start or close to `cookies.json`). `full=True` also saves launch params used. On the loop of a running start it raises `RuntimeError`: use `save_now`. From another thread during a start it waits for Chrome's jar (at most 10 s). |
+| `await session.save_now(full=False)` | The same from async code: during a start, the cookie jar is the one Chrome has now (read within 5 s; a Chrome that does not answer leaves `cookies.json` as it was, with a warning in the log). |
 
 ### Validation modes
 
@@ -1537,6 +1538,18 @@ When a login cannot be scripted (2FA, captchas, SSO), let a person do it:
 ```bash
 tellurium login github https://github.com/login   # once; then MCP and scripts reuse it
 ```
+
+Chrome opens two windows: the one to sign in, and a second one, minimized,
+titled "tellurium login: keep this window". Chrome forgets the cookies with no
+expiry (most sign-ins) when its last window closes, so this second window keeps
+its browsing session alive while you close the first: the whole cookie jar is
+then saved, a cookie written an instant before included. Leave it alone; it
+closes with Chrome at the end. A window manager may not honour the minimize
+(some Wayland compositors, a bare X server): it then shows as a normal window,
+and works the same. If you close both, the cookies read while a window was
+open are saved, and one set in the last 0.3 s can be missed. A session saved
+with its own `--user-agent` in its launch args is opened without stealth, and
+`tellurium login` (like the MCP `session-open` reply) says so.
 
 "Done" (like Enter or closing the window) saves the session as it is: it does
 not prove that the sign-in worked, and a hostile page can even trick a click
@@ -1606,7 +1619,8 @@ titles = await asyncio.gather(*(scrape(f"user{i}") for i in range(20)))
 - **Names** are 1-64 letters, digits, `.`, `_` or `-`, starting with a letter or
   digit: anything else is a `ValueError`, so no name escapes the directory.
 - `open()` writes `session.json` only for an identity that has none (so its seed
-  lasts); metadata you change is saved by `session.save()`, as with `Session`.
+  lasts); metadata you change is saved by `await session.save_now()` (or
+  `session.save()` outside the open), as with `Session`.
 
 ## Patched binary (chromium-telluride)
 

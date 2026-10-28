@@ -11,6 +11,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   got (`headless=True` or `--headless` in `args`), on every platform. `wait_for_human`
   uses it instead of reading the process's command line, which the Windows launcher does
   not keep (it fell back to the user agent, which `--user-agent` rewrites).
+- `await Session.save_now(full=False)`: `save()` from async code; during a start the cookie
+  jar written is the one Chrome has now (read within 5 s), with the cookies a failed restore
+  left pending.
+- `Session.start(..., manual_timeout=600.0)`: the seconds a person gets to sign in with
+  `on_login_failure="manual"` (was the fixed `MANUAL_TIMEOUT`, still the default).
+- `SessionPool.open(name, create=True)`: with `create=False` a missing identity raises
+  `FileNotFoundError` before any wait, and nothing is created or saved.
 - `tellurium mcp --respect-robots`: `navigate` and `tab-open` to a URL the site's
   robots.txt disallows fail with "Navigation failed: robots.txt of <origin> disallows
   <path>" instead of opening it (stdio and HTTP; the sessions launch with
@@ -502,6 +509,50 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   raises its own error at once instead of waiting. With `auto_security_update=True`, a
   security download that fails on the network (timeout, reset) is logged and the installed
   binary is launched, as for any other download error.
+- A `save_now()` cancelled (or a `save()` from a thread that gives up) mid-write no longer
+  writes `cookies.json` after the close, over the jar the close saved: the writes of a start
+  go one at a time, and a live save begun before the close is dropped. `save_now()` from a loop
+  other than the start's raises `RuntimeError` instead of writing the old jar.
+- `session.json` and `cookies.json` are written through a temporary file of their own (no
+  longer a fixed `<file>.tmp`): two writers at once (a live save and the close) no longer
+  leave a corrupt file, or fail renaming the other's.
+- `tellurium login` no longer loses a cookie with no expiry written in the last 0.3 s before
+  the person closes the sign-in window: a second, minimized window of Chrome keeps its
+  browsing session open, so the close reads the whole jar. Closing both windows falls back to
+  the jar read while one was open, as before.
+- A session saved with its own `--user-agent` among its launch args opens again from
+  `tellurium mcp` and `tellurium login`: they launch it without stealth instead of failing
+  with a `ValueError` that suggests a `stealth=False` neither offers. The person is told: the
+  `session-open` reply carries a `Warning:` line (and `warning` in its data), `tellurium login`
+  prints it on stderr.
+- `Session.start(on_login_failure="manual")`: without a display (`DISPLAY` and
+  `WAYLAND_DISPLAY` unset on Linux) it fails at once with a `SessionLoginFailedError` that
+  says so, instead of a `LaunchError` carrying Wayland's log from the headed relaunch; each
+  round of the validators gets at most 30 s (`manual_login.VALIDATOR_TIMEOUT`) and within the
+  deadline, so a validator that hangs shows the banner again instead of stalling the start.
+- `Session.save()` during a start no longer writes the cookie jar read at the start: from
+  another thread (`await asyncio.to_thread(session.save)`) it waits for Chrome's jar (at most
+  10 s); on the loop of the running start, where it cannot wait, it raises `RuntimeError`
+  pointing to `await session.save_now()`. `tellurium mcp` and `tellurium login` use
+  `save_now`.
+- `SessionPool` works across one `asyncio.run` after another, and its `max_browsers` holds
+  across event loops running at once in threads: the slots are a count under a thread lock,
+  waited for without blocking the loop, instead of an `asyncio.Semaphore` made in `__init__`
+  (it failed with "bound to a different event loop").
+- `SessionPool.open`: an identity deleted (by another process) while its open waited for a slot
+  no longer starts empty with a seed that is never saved: under the session lock its
+  `session.json` is written again with the same seed, or `FileNotFoundError` with
+  `create=False` (the empty folder the lock made is then moved away under the lock taken anew,
+  never by removing a held lock file).
+- `Session.start` waiting for a dead holder's Chrome now recognises it on Linux when its
+  rewritten title has arguments after `--user-data-dir` (a URL, headed) or the profile path
+  holds ` --`: it no longer starts a second Chrome on a profile still in use (exit 21).
+- `Session`: a cookie restore whose answer from Chrome comes after the 5 s timeout (or the
+  look at Chrome's jar that comes first) still counts when it arrives, so the close no longer
+  puts back a cookie Chrome took (or already had) and the site deleted during the run.
+- A `cookies.json` that cannot be parsed, whatever the error (a `RecursionError` on a
+  deeply nested file included), no longer fails every `Session.start`: it gives a warning,
+  is moved to `cookies.json.bad-<time>` and the next close writes a good one.
 - A `Tab.get` (or `new_tab(url)`, `is_allowed`) whose robots.txt cannot be loaded because
   the hidden target it is loaded from cannot be opened (`Target.createTarget` or the
   attach failing or timing out) raises `NavigationError` with the cause chained, instead

@@ -51,9 +51,34 @@ def test_corrupt_file_warns_and_is_ignored(tmp_path):
         assert session_cookies.load(str(tmp_path)) == []
 
 
+def test_a_too_nested_file_warns_and_is_set_aside(tmp_path):
+    """A RecursionError is a bad file too: set aside, so the next close rewrites it."""
+    (tmp_path / session_cookies.COOKIES_FILE).write_text("[" * 100_000)
+    with pytest.warns(UserWarning, match="cookies.json"):
+        assert session_cookies.read(str(tmp_path)) == ([], False)
+    assert not (tmp_path / session_cookies.COOKIES_FILE).exists()
+    aside = [p.name for p in tmp_path.iterdir() if p.name.startswith("cookies.json.bad-")]
+    assert len(aside) == 1
+
+
+def test_any_parsing_error_is_a_bad_file(tmp_path, monkeypatch):
+    session_cookies.save(str(tmp_path), [_SSO])
+
+    def broken(raw):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(session_cookies.Cookie, "from_json", staticmethod(broken))
+    with pytest.warns(UserWarning, match="unexpected"):
+        assert session_cookies.load(str(tmp_path)) == []
+
+
 class _FakeBrowser:
-    def __init__(self, jar=(), fail_read=False, hang_read=False, hang_write=False):
+    def __init__(
+        self, jar=(), fail_read=False, hang_read=False, hang_write=False, late_read=0, late_write=0
+    ):
         self.jar = list(jar)
+        self.late_read = late_read  # the first read answers this late
+        self.late_write = late_write  # writes are applied at once, answered this late
         self.fail_read = fail_read
         self.hang_read = hang_read
         self.hang_write = hang_write
@@ -66,7 +91,11 @@ class _FakeBrowser:
             await asyncio.Event().wait()
         if self.fail_read:
             raise ConnectionError("chrome is gone")
-        return list(self.jar)
+        jar = list(self.jar)
+        if self.late_read:
+            late, self.late_read = self.late_read, 0
+            await asyncio.sleep(late)
+        return jar
 
     async def set_cookies(self, cookies):
         self.events.append("set_cookies")
@@ -78,6 +107,8 @@ class _FakeBrowser:
                 self.jar[same[0]] = cookie
             else:
                 self.jar.append(cookie)
+        if self.late_write:
+            await asyncio.sleep(self.late_write)
 
     async def close(self):
         self.events.append("close")
@@ -311,3 +342,214 @@ async def test_a_cookie_changed_after_a_failed_restore_is_kept(tmp_path, fake_la
     async with Session("s", path=str(tmp_path)).start() as browser:
         browser.jar = [newest]
     assert session_cookies.load(str(tmp_path)) == [newest]
+
+
+async def test_a_start_on_a_too_nested_file_succeeds_and_rewrites_it(tmp_path, fake_launch):
+    (tmp_path / session_cookies.COOKIES_FILE).write_text("[" * 100_000)
+    with pytest.warns(UserWarning, match="cookies.json"):
+        async with Session("s", path=str(tmp_path)).start() as browser:
+            browser.jar = [_SSO]
+    assert session_cookies.read(str(tmp_path)) == ([_SSO], True)
+
+
+async def test_a_restore_answered_late_counts_and_a_deleted_cookie_stays_deleted(
+    tmp_path, fake_launch, monkeypatch
+):
+    """Chrome took the cookies but answered after the timeout; the site then
+    logged out: the close must not bring the cookie back."""
+    browsers, make = fake_launch
+    monkeypatch.setattr(session_cookies, "TIMEOUT", 0.05)
+    make["factory"] = lambda: _FakeBrowser(late_write=0.2)
+    session_cookies.save(str(tmp_path), [_SSO])
+    async with Session("s", path=str(tmp_path)).start() as browser:
+        assert browser.jar == [_SSO]
+        await asyncio.sleep(0.3)  # the late answer arrives
+        browser.jar = []  # logout
+    assert session_cookies.load(str(tmp_path)) == []
+
+
+async def test_a_cookie_chrome_had_and_the_site_deleted_stays_deleted_after_a_late_read(
+    tmp_path, fake_launch, monkeypatch
+):
+    """The start's look at Chrome's jar timed out, its answer came later: a
+    cookie Chrome had then and the site deleted is not put back."""
+    browsers, make = fake_launch
+    monkeypatch.setattr(session_cookies, "TIMEOUT", 0.05)
+    make["factory"] = lambda: _FakeBrowser(jar=[_SSO], late_read=0.2)
+    session_cookies.save(str(tmp_path), [_SSO], at_close=True)
+    async with Session("s", path=str(tmp_path)).start() as browser:
+        await asyncio.sleep(0.3)
+        browser.jar = []
+    assert session_cookies.load(str(tmp_path)) == []
+
+
+async def test_a_restore_never_answered_is_not_left_running(tmp_path, fake_launch, monkeypatch):
+    browsers, make = fake_launch
+    monkeypatch.setattr(session_cookies, "TIMEOUT", 0.05)
+    make["factory"] = lambda: _FakeBrowser(hang_write=True)
+    session_cookies.save(str(tmp_path), [_SSO])
+    before = asyncio.all_tasks()
+    async with Session("s", path=str(tmp_path)).start():
+        pass
+    await asyncio.sleep(0)
+    assert asyncio.all_tasks() - before == set()
+    assert session_cookies.load(str(tmp_path)) == [_SSO]
+
+
+async def test_save_from_a_thread_during_a_start_writes_the_current_jar(tmp_path, fake_launch):
+    session = Session("s", path=str(tmp_path))
+    async with session.start() as browser:
+        browser.jar = [_SSO, _KEPT]
+        await asyncio.to_thread(session.save)
+        assert session_cookies.read(str(tmp_path)) == ([_SSO, _KEPT], False)
+        browser.jar = [_KEPT]
+    assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)  # the close's is the last
+
+
+async def test_save_now_during_a_start_writes_the_current_jar(tmp_path, fake_launch):
+    session = Session("s", path=str(tmp_path))
+    async with session.start() as browser:
+        browser.jar = [_SSO]
+        assert await session.save_now() is None
+        assert session_cookies.read(str(tmp_path)) == ([_SSO], False)
+        assert (tmp_path / "session.json").exists()
+        browser.jar = [_KEPT]
+    assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)  # the close's is the last
+    await session.save_now()  # closed: the jar the close read
+    assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)
+
+
+async def test_save_on_the_loop_of_a_running_start_points_to_save_now(tmp_path, fake_launch):
+    """It cannot wait for Chrome there, and an old snapshot would be wrong."""
+    session = Session("s", path=str(tmp_path))
+    async with session.start() as browser:
+        browser.jar = [_SSO]
+        with pytest.raises(RuntimeError, match=r"await session.save_now\(\)"):
+            session.save()
+        assert not (tmp_path / session_cookies.COOKIES_FILE).exists() or (
+            session_cookies.load(str(tmp_path)) == []
+        )
+    assert session.save() is None  # closed: fine again
+
+
+async def test_a_live_save_keeps_the_cookies_a_failed_restore_left_pending(
+    tmp_path, fake_launch, monkeypatch
+):
+    browsers, make = fake_launch
+    monkeypatch.setattr(session_cookies, "TIMEOUT", 0.05)
+    make["factory"] = lambda: _FakeBrowser(jar=[_KEPT], hang_write=True)
+    session_cookies.save(str(tmp_path), [_SSO])
+    session = Session("s", path=str(tmp_path))
+    async with session.start():
+        await session.save_now()
+        assert session_cookies.load(str(tmp_path)) == [_KEPT, _SSO]
+
+
+async def test_a_live_save_with_chrome_gone_keeps_the_file(tmp_path, fake_launch):
+    session_cookies.save(str(tmp_path), [_SSO])
+    session = Session("s", path=str(tmp_path))
+    async with session.start() as browser:
+        browser.fail_read = True
+        await session.save_now()
+        assert session_cookies.load(str(tmp_path)) == [_SSO]
+
+
+def _slow_live_writes(monkeypatch, seconds):
+    """cookies.json writes of a running session (not the close's) take *seconds*."""
+    import time
+
+    real_save = session_cookies.save
+
+    def slow_save(folder, cookies, *, at_close=False):
+        if not at_close:
+            time.sleep(seconds)
+        real_save(folder, cookies, at_close=at_close)
+
+    monkeypatch.setattr(session_cookies, "save", slow_save)
+
+
+async def test_a_cancelled_save_now_never_writes_after_the_close(
+    tmp_path, fake_launch, monkeypatch
+):
+    session = Session("s", path=str(tmp_path))
+    async with session.start() as browser:
+        browser.jar = [_SSO]
+        _slow_live_writes(monkeypatch, 0.5)
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(session.save_now(), 0.2)  # its write still runs
+        browser.jar = [_KEPT]
+    assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)
+    await asyncio.sleep(1.0)  # the cancelled write has ended by now
+    assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)
+
+
+async def test_a_save_from_a_thread_that_times_out_never_writes_after_the_close(
+    tmp_path, fake_launch, monkeypatch
+):
+    from tellurium.session import session as session_mod
+
+    monkeypatch.setattr(session_mod, "LIVE_SAVE_TIMEOUT", 0.2)
+    session = Session("s", path=str(tmp_path))
+    async with session.start() as browser:
+        browser.jar = [_SSO]
+        _slow_live_writes(monkeypatch, 0.5)
+        await asyncio.to_thread(session.save)  # gives up after 0.2 s
+        browser.jar = [_KEPT]
+    await asyncio.sleep(1.0)
+    assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)
+
+
+async def test_save_now_from_another_loop_is_refused(tmp_path, fake_launch):
+    session = Session("s", path=str(tmp_path))
+    async with session.start():
+
+        def elsewhere():
+            return asyncio.run(session.save_now())
+
+        with pytest.raises(RuntimeError, match="loop"):
+            await asyncio.to_thread(elsewhere)
+
+
+def _slow_session_json(monkeypatch, seconds):
+    """session.json writes take *seconds* (the first step of a save)."""
+    import time
+
+    from tellurium.session import storage
+
+    real_save = storage.save
+
+    def slow_save(path, data, full):
+        time.sleep(seconds)
+        real_save(path, data, full)
+
+    monkeypatch.setattr(storage, "save", slow_save)
+
+
+async def test_a_save_now_begun_before_the_close_never_writes_after_it(
+    tmp_path, fake_launch, monkeypatch
+):
+    # The close comes while save_now() still writes session.json: the jar it
+    # then reads is newer than nothing the close wrote, and must not land.
+    session = Session("s", path=str(tmp_path))
+    async with session.start() as browser:
+        browser.jar = [_SSO]
+        _slow_session_json(monkeypatch, 0.3)
+        saving = asyncio.ensure_future(session.save_now())
+        await asyncio.sleep(0.05)
+        browser.jar = [_KEPT]
+    await saving
+    assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)
+
+
+async def test_a_save_from_a_thread_begun_before_the_close_never_writes_after_it(
+    tmp_path, fake_launch, monkeypatch
+):
+    session = Session("s", path=str(tmp_path))
+    async with session.start() as browser:
+        browser.jar = [_SSO]
+        _slow_session_json(monkeypatch, 0.3)
+        saving = asyncio.ensure_future(asyncio.to_thread(session.save))
+        await asyncio.sleep(0.05)
+        browser.jar = [_KEPT]
+    await saving
+    assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)

@@ -214,3 +214,47 @@ def test_load_restores_chromium_version_lock(tmp_path):
     )
     sess = Session("test", path=str(sess_dir))
     assert sess.chromium_version == "146.0.7680.188"
+
+
+def test_two_writers_never_leave_a_corrupt_or_partial_file(tmp_path):
+    """Each write has its own temporary file: concurrent writers (a live save
+    in a thread, the close) never mix their bytes or rename each other's."""
+    import os
+    import threading
+
+    path = str(tmp_path / "cookies.json")
+    storage.write_private(path, {"n": -1})
+    errors: list[BaseException] = []
+    bad: list[str] = []
+    stop = threading.Event()
+
+    def writer(k):
+        try:
+            for i in range(300):
+                storage.write_private(path, {"n": i, "who": k, "pad": "x" * (k * 500)})
+        except BaseException as exc:  # noqa: BLE001 - collected for the assert
+            errors.append(exc)
+
+    def reader():
+        while not stop.is_set():
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            try:
+                json.loads(text)
+            except ValueError:
+                bad.append(text[:40])
+
+    threads = [threading.Thread(target=writer, args=(k,)) for k in (1, 2)]
+    watcher = threading.Thread(target=reader)
+    watcher.start()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    stop.set()
+    watcher.join()
+    assert errors == []
+    assert bad == []
+    assert os.listdir(tmp_path) == ["cookies.json"]  # no temporary file left
+    if sys.platform != "win32":
+        assert os.stat(path).st_mode & 0o777 == 0o600

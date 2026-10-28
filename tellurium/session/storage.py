@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import warnings
 from datetime import datetime, timezone
 from typing import Any
@@ -43,24 +44,25 @@ def save(path: str, data: dict[str, Any], full: bool) -> None:
 
 
 def write_private(path: str, data: Any) -> None:
-    """Write *data* as JSON to *path* atomically (temp file, fsync, rename),
-    mode 0600 on POSIX."""
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    """Write *data* as JSON to *path* atomically (a temporary file of its own
+    in the same folder, fsync, rename), mode 0600 on POSIX: concurrent writers
+    never mix their bytes, the last rename wins whole."""
+    folder = os.path.dirname(os.path.abspath(path))
+    os.makedirs(folder, exist_ok=True)
 
-    tmp = path + ".tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd, tmp = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=folder)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:  # mkstemp: 0600 already
             json.dump(data, f, indent=2, sort_keys=True)
             f.flush()
             os.fsync(f.fileno())
+        os.replace(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)
         except OSError:
             pass
         raise
-    os.replace(tmp, path)
     if sys.platform != "win32":
         os.chmod(path, 0o600)
 

@@ -73,9 +73,12 @@ def _runs_on(pid: int, chrome_dir: str) -> bool:
     except OSError:
         return True  # unreadable: assume the worst, it may be Chrome
     wanted = os.path.realpath(chrome_dir)
-    for given in _user_data_dirs(cmdline):
-        # A relative one is relative to the process's own working directory.
-        if os.path.realpath(os.path.join(f"/proc/{pid}/cwd", os.fsdecode(given))) == wanted:
+    cwd = f"/proc/{pid}/cwd"  # a relative one is relative to the process's own
+    for values in _candidates(cmdline):
+        paths = [os.path.join(cwd, os.fsdecode(v)) for v in values]
+        if len(paths) > 1:  # a rewritten title: the longest that is a folder
+            paths = [next((p for p in paths if os.path.isdir(p)), None)]
+        if any(p is not None and os.path.realpath(p) == wanted for p in paths):
             return True
     return False
 
@@ -83,19 +86,20 @@ def _runs_on(pid: int, chrome_dir: str) -> bool:
 _FLAG = b"--user-data-dir="
 
 
-def _user_data_dirs(cmdline: bytes) -> list[bytes]:
-    """The values *cmdline* (``/proc/<pid>/cmdline``) may give
-    ``--user-data-dir=`` (the only form Chrome reads).
+def _candidates(cmdline: bytes) -> list[list[bytes]]:
+    """For each ``--user-data-dir=`` (the only form Chrome reads) of *cmdline*
+    (``/proc/<pid>/cmdline``), the values it may have, the longest first.
 
-    Its arguments are NUL-separated, unless the process rewrote its title, as
-    Chrome does on Linux: then they are one string joined by spaces, and a
-    value with spaces ends where the next switch (`` --``) starts, or at the end.
+    Its arguments are NUL-separated, so a value is exact, unless the process
+    rewrote its title, as Chrome does on Linux: then they are one string
+    joined by spaces, and the value may end at any space (a path may hold
+    `` --``, a URL may follow the switches) or at the end.
     """
     cmdline = cmdline.rstrip(b"\0")
     if b"\0" in cmdline:
-        return [arg[len(_FLAG) :] for arg in cmdline.split(b"\0") if arg.startswith(_FLAG)]
+        return [[arg[len(_FLAG) :]] for arg in cmdline.split(b"\0") if arg.startswith(_FLAG)]
     found = []
-    for arg in (b" " + cmdline).split(b" " + _FLAG)[1:]:
-        value, _, _ = arg.partition(b" --")
-        found.append(value)
+    for rest in (b" " + cmdline).split(b" " + _FLAG)[1:]:
+        ends = [i for i, c in enumerate(rest) if c == ord(" ")]
+        found.append([rest, *(rest[:i] for i in reversed(ends))])
     return found

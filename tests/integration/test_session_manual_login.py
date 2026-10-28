@@ -12,16 +12,13 @@ import pytest
 import tellurium
 from tellurium import Session
 from tellurium.session import SessionBusyError, SessionLoginFailedError
-from tellurium.session import session as session_mod
 from tests.integration.test_wait_for_human import _click_node, _done_button
 
 pytestmark = pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="needs a display (xvfb-run)")
 
 
-@pytest.fixture(autouse=True)
-def _short_manual_timeout(monkeypatch):
-    """A Done that is lost fails the test in a minute, not in ten."""
-    monkeypatch.setattr(session_mod, "MANUAL_TIMEOUT", 60.0)
+#: A Done that is lost fails the test in a minute, not in ten.
+_MINUTE = 60.0
 
 
 @pytest.fixture
@@ -78,7 +75,9 @@ async def test_a_headless_start_reopens_headed_and_waits_for_the_validators(
 
     helper = asyncio.create_task(person())
     try:
-        async with session.start(headless=True, on_login_failure="manual") as browser:
+        async with session.start(
+            headless=True, on_login_failure="manual", manual_timeout=_MINUTE
+        ) as browser:
             await helper
             assert [kw.get("headless") for kw, _ in launched] == [True, False]
             assert browser is launched[1][1]
@@ -106,7 +105,9 @@ async def test_done_before_signing_in_shows_the_banner_again(tmp_path, local_ser
 
     helper = asyncio.create_task(person())
     try:
-        async with session.start(headless=False, on_login_failure="manual") as browser:
+        async with session.start(
+            headless=False, on_login_failure="manual", manual_timeout=_MINUTE
+        ) as browser:
             await helper
             assert len(launched) == 1  # headed already: no second Chrome
             assert "auth=1" in await browser.main_tab.eval("document.cookie")
@@ -128,17 +129,16 @@ async def test_a_login_callback_that_fails_hands_over_to_a_person(tmp_path, loca
 
     helper = asyncio.create_task(person())
     try:
-        async with session.start(headless=False, on_login_failure="manual"):
+        async with session.start(headless=False, on_login_failure="manual", manual_timeout=_MINUTE):
             await helper
     finally:
         helper.cancel()
 
 
-async def test_nobody_signing_in_fails_the_start(tmp_path, local_server, launched, monkeypatch):
-    monkeypatch.setattr(session_mod, "MANUAL_TIMEOUT", 1.5)
+async def test_nobody_signing_in_fails_the_start(tmp_path, local_server, launched):
     session = _session(str(tmp_path / "s"), local_server)
     with pytest.raises(SessionLoginFailedError, match="within"):
-        async with session.start(headless=True, on_login_failure="manual"):
+        async with session.start(headless=True, on_login_failure="manual", manual_timeout=1.5):
             pass
     assert all(b._proc.process.poll() is not None for _, b in launched)
 

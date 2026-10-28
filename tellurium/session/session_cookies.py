@@ -58,17 +58,32 @@ def save(folder: str, cookies: list[Cookie], *, at_close: bool = False) -> None:
 
 def read(folder: str) -> tuple[list[Cookie], bool]:
     """The cookies of ``cookies.json`` not yet expired, and whether they were
-    saved as Chrome closed; none if it is missing, a warning and none if it
-    cannot be read (a bad file never blocks a start)."""
+    saved as Chrome closed; none if it is missing. A file that cannot be read
+    gives a warning and none; one that cannot be parsed (any error, a
+    ``RecursionError`` on deep nesting too) is moved to
+    ``cookies.json.bad-<time>``, so a bad file never blocks a start and the
+    next close writes a good one."""
+    path = _file(folder)
     try:
-        with open(_file(folder), encoding="utf-8") as f:
-            raw: Any = json.load(f)
-        cookies = _live([Cookie.from_json(c) for c in raw["cookies"]])
-        return cookies, raw.get("at_close") is True
+        with open(path, "rb") as f:
+            data = f.read()
     except FileNotFoundError:
         return [], False
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-        warnings.warn(f"ignoring unreadable {_file(folder)}: {exc}", stacklevel=2)
+    except OSError as exc:
+        warnings.warn(f"ignoring unreadable {path}: {exc}", stacklevel=2)
+        return [], False
+    try:
+        raw: Any = json.loads(data.decode("utf-8"))
+        cookies = _live([Cookie.from_json(c) for c in raw["cookies"]])
+        return cookies, raw.get("at_close") is True
+    except Exception as exc:  # noqa: BLE001 - whatever the content, it is a bad file
+        aside = f"{path}.bad-{time.time_ns()}"
+        try:
+            os.replace(path, aside)
+        except OSError:
+            aside = None
+        where = f", moved to {aside}" if aside else ""
+        warnings.warn(f"ignoring unreadable {path}{where}: {exc!r}", stacklevel=2)
         return [], False
 
 
@@ -94,8 +109,11 @@ class Reinjection:
     the newer) Chrome's are left alone. Until Chrome has taken them
     (a timeout, a cancelled start, a Chrome gone) they stay *pending*, and
     :meth:`keep` adds them to the jar the close reads, so a failed restore
-    never costs the saved cookies; a cookie Chrome has set anew meanwhile
-    (the site logged in again) is Chrome's, not ours.
+    never costs the saved cookies. A call that timed out is not given up: its
+    late answer still counts (the jar Chrome had, or that it took the cookies),
+    until :meth:`drop`. So a cookie Chrome has set anew meanwhile (the site
+    logged in again) is Chrome's, not ours, and one Chrome had or took and the
+    site deleted stays deleted.
     """
 
     def __init__(self, saved: list[Cookie], *, saved_wins: bool = False) -> None:
@@ -103,27 +121,67 @@ class Reinjection:
         self._saved_wins = saved_wins
         # Chrome's jar as the start found it; None until read.
         self._seen: dict[tuple, Cookie] | None = None
+        self._calls: set[asyncio.Future] = set()  # those still to answer
 
     async def run(self, browser: Any) -> None:
         if not self.pending:
             return
-        self._seen = {_key(c): c for c in await snapshot(browser)}
-        seen = self._seen
-        self.pending = [c for c in self.pending if self._differs(c, seen.get(_key(c)))]
+        jar = await self._answer(browser.get_cookies(), self._saw)
+        self._saw(jar)
         if self.pending:
-            await asyncio.wait_for(browser.set_cookies(self.pending), TIMEOUT)
-        self.pending = []  # in Chrome now: from here on its jar is the truth
+            await self._answer(browser.set_cookies(self.pending), self._took)
+        self._took(None)  # in Chrome now: from here on its jar is the truth
 
     def keep(self, jar: list[Cookie]) -> list[Cookie]:
         """*jar* (Chrome's at the close) with the pending cookies it lacks, or
-        has still as the start found them."""
+        has still as the start found them (and must take ours over)."""
         kept = {_key(c): c for c in jar}
         for cookie in self.pending:
             key = _key(cookie)
             current = kept.get(key)
-            if current is None or (self._seen is not None and self._seen.get(key) == current):
+            if self._seen is None:  # Chrome's jar never seen: put back what it lacks
+                restore = current is None
+            else:
+                before = self._seen.get(key)
+                restore = self._differs(cookie, before) and current == before
+            if restore:
                 kept[key] = cookie
         return list(kept.values())
+
+    def drop(self) -> None:
+        """Stop waiting for the late answers (the close has read the jar)."""
+        for call in self._calls:
+            call.cancel()
+        self._calls.clear()
+
+    async def _answer(self, call: Any, late: Any) -> Any:
+        """The answer of *call* within :data:`TIMEOUT`; past it (or if the
+        start is cancelled) *late* gets the answer when it comes."""
+        future = asyncio.ensure_future(call)
+        try:
+            return await asyncio.wait_for(asyncio.shield(future), TIMEOUT)
+        except BaseException:
+            if future.done():  # it failed, or answered just as the wait ended
+                self._landed(future, late)
+                raise
+            self._calls.add(future)
+            future.add_done_callback(lambda f: self._landed(f, late))
+            raise
+
+    def _landed(self, future: asyncio.Future, late: Any) -> None:
+        self._calls.discard(future)
+        if not future.cancelled() and future.exception() is None:
+            late(future.result())
+
+    def _saw(self, jar: list[Cookie]) -> None:
+        if self._seen is not None:
+            return
+        self._seen = {_key(c): c for c in jar}
+        seen = self._seen
+        self.pending = [c for c in self.pending if self._differs(c, seen.get(_key(c)))]
+
+    def _took(self, _: Any) -> None:
+        self.pending = []
 
     def _differs(self, cookie: Cookie, chrome: Cookie | None) -> bool:
         """Whether *cookie* must go back over Chrome's copy *chrome*."""
