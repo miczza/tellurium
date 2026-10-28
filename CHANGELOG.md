@@ -413,6 +413,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `tellurium.browser.geometry.frame_chain(session)` is public (it was `_chain`): the
   `(session, parent session, frame id)` of each cross-site frame up to the tab; the
   trap-link check uses it instead of the private name.
+- The style checks of the trap-link script (focus rules, CSS lengths) moved from
+  `stealth/scripts/trap_link.js` to `stealth/scripts/trap_link_style.js`, spliced back
+  into the same function when it is loaded (no behaviour change: still one
+  `Runtime.callFunctionOn`).
 - With `stealth=True` on the stock backend Chrome is launched with
   `--user-agent=<profile User-Agent>` (the profile aligned first with the binary's
   `--version`; no flag when that cannot be read, so flag and override never name two

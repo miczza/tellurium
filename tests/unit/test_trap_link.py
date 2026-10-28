@@ -80,4 +80,5 @@ def test_the_check_is_the_script_shipped_with_the_stealth_scripts():
     from tellurium.stealth.extension import SCRIPTS_DIR
 
     script = (SCRIPTS_DIR / "trap_link.js").read_text()
-    assert trap_link._REASONS_JS == script
+    style = (SCRIPTS_DIR / "trap_link_style.js").read_text()
+    assert trap_link._REASONS_JS == script.replace("{{STYLE}}", style)

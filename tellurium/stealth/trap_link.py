@@ -72,8 +72,9 @@ if TYPE_CHECKING:
     from tellurium.browser.element import Element
 
 # Run with ``this`` bound to the link (or, with ``frame``, an ``<iframe>`` holding it), in
-# the isolated world; returns ``{reasons, nofollow, framed}``.
-_REASONS_JS = load_script("trap_link.js")
+# the isolated world; returns ``{reasons, nofollow, framed}``. One function: the style
+# checks (``trap_link_style.js``) are spliced into it as text.
+_REASONS_JS = load_script("trap_link.js", {"STYLE": load_script("trap_link_style.js")})
 _OWNER_DOCUMENT_JS = "function () { return this.ownerDocument; }"
 _MAX_FRAMES = 16
 

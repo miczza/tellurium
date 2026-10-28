@@ -15,6 +15,7 @@ SPLIT = 450
     [
         "tellurium/browser/robots.py",
         "tellurium/browser/snapshot.py",
+        "tellurium/stealth/scripts/trap_link.js",
     ],
 )
 def test_split_file_is_under_the_ceiling(path):
