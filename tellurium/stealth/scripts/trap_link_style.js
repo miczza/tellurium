@@ -1,5 +1,8 @@
-    // The style checks of trap_link.js (focus rules, CSS lengths), spliced in by
-    // trap_link.py: closures of its function, not a script of their own.
+    // The style checks of trap_link.js (focus rules, CSS lengths). Not valid JS on its
+    // own: trap_link.py pastes it, as text, at the {{STYLE}} placeholder near the end of
+    // the function in trap_link.js, whose variables (el, css, chain, ...) it uses.
+    // Guarded by tests/unit/test_trap_link.py::
+    // test_the_check_is_the_script_shipped_with_the_stealth_scripts.
     // Whether the values the :focus, :focus-visible and :focus-within rules declare
     // undo what hides the link, once a person tabs to it. They are read, never applied:
     // nothing is fetched, no transition starts, the focus does not move.
