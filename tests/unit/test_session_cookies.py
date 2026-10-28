@@ -452,3 +452,59 @@ async def test_a_live_save_with_chrome_gone_keeps_the_file(tmp_path, fake_launch
         browser.fail_read = True
         await session.save_now()
         assert session_cookies.load(str(tmp_path)) == [_SSO]
+
+
+def _slow_live_writes(monkeypatch, seconds):
+    """cookies.json writes of a running session (not the close's) take *seconds*."""
+    import time
+
+    real_save = session_cookies.save
+
+    def slow_save(folder, cookies, *, at_close=False):
+        if not at_close:
+            time.sleep(seconds)
+        real_save(folder, cookies, at_close=at_close)
+
+    monkeypatch.setattr(session_cookies, "save", slow_save)
+
+
+async def test_a_cancelled_save_now_never_writes_after_the_close(
+    tmp_path, fake_launch, monkeypatch
+):
+    session = Session("s", path=str(tmp_path))
+    async with session.start() as browser:
+        browser.jar = [_SSO]
+        _slow_live_writes(monkeypatch, 0.5)
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(session.save_now(), 0.2)  # its write still runs
+        browser.jar = [_KEPT]
+    assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)
+    await asyncio.sleep(1.0)  # the cancelled write has ended by now
+    assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)
+
+
+async def test_a_save_from_a_thread_that_times_out_never_writes_after_the_close(
+    tmp_path, fake_launch, monkeypatch
+):
+    from tellurium.session import session as session_mod
+
+    monkeypatch.setattr(session_mod, "LIVE_SAVE_TIMEOUT", 0.2)
+    session = Session("s", path=str(tmp_path))
+    async with session.start() as browser:
+        browser.jar = [_SSO]
+        _slow_live_writes(monkeypatch, 0.5)
+        await asyncio.to_thread(session.save)  # gives up after 0.2 s
+        browser.jar = [_KEPT]
+    await asyncio.sleep(1.0)
+    assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)
+
+
+async def test_save_now_from_another_loop_is_refused(tmp_path, fake_launch):
+    session = Session("s", path=str(tmp_path))
+    async with session.start():
+
+        def elsewhere():
+            return asyncio.run(session.save_now())
+
+        with pytest.raises(RuntimeError, match="loop"):
+            await asyncio.to_thread(elsewhere)

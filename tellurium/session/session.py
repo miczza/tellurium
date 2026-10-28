@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import secrets
+import threading
 import warnings
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -71,6 +72,10 @@ class Session:
         self._live: Any = None
         self._live_loop: asyncio.AbstractEventLoop | None = None
         self._saving: asyncio.Task | None = None
+        # Writes of cookies.json during a start: one at a time, and none from
+        # a live save begun before the close's (its epoch is then stale).
+        self._jar_lock = threading.Lock()
+        self._jar_epoch = 0
 
         loaded = storage.load(self._json_path())
         if loaded is None:
@@ -181,9 +186,14 @@ class Session:
         one Chrome has now (read within ``session_cookies.TIMEOUT``; a Chrome
         that does not answer leaves cookies.json as it was, with a warning in
         the log), else the one of the last start or close."""
-        await asyncio.to_thread(self._write_json, full)
         browser = self._live
-        if browser is None or _running_loop() is not self._live_loop:
+        if browser is not None and _running_loop() is not self._live_loop:
+            raise RuntimeError(
+                "session.save_now() must run on the loop of the running start; "
+                "from another thread use session.save()"
+            )
+        await asyncio.to_thread(self._write_json, full)
+        if browser is None:
             await asyncio.to_thread(self._write_known_jar)
             return
         self._saving = asyncio.ensure_future(self._save_live(browser))
@@ -221,16 +231,37 @@ class Session:
 
     async def _save_live(self, browser) -> None:
         """Chrome's jar now (with the cookies a restore left pending), not as
-        it closes: the next start only puts back what Chrome lacks."""
+        it closes: the next start only puts back what Chrome lacks. Cancelled
+        mid-write, the write may still end, but never after the close's."""
+        epoch = self._jar_epoch
         try:
             jar = await session_cookies.snapshot(browser)
             assert self._reinjection is not None  # set before _live
             cookies = self._reinjection.keep(jar)
-            await asyncio.to_thread(session_cookies.save, self.path, cookies, at_close=False)
+            wrote = await asyncio.to_thread(self._write_jar, cookies, epoch=epoch)
         except Exception:  # noqa: BLE001 - Chrome gone or hung: keep the file
             logger.warning("could not save the cookies of %s", self.path, exc_info=True)
             return
-        self._session_cookies, self._cookies_at_close = cookies, False
+        if wrote:
+            self._session_cookies, self._cookies_at_close = cookies, False
+
+    def _write_jar(self, cookies: list, *, epoch: int | None = None) -> bool:
+        """Write *cookies* to cookies.json, one writer at a time: the close's
+        (*epoch* ``None``: saved at close, and from then on the live saves
+        begun before it are stale), or a live save's begun at *epoch*, skipped
+        (``False``) if the close has come since."""
+        with self._jar_lock:
+            if epoch is None:
+                self._jar_epoch += 1
+            elif epoch != self._jar_epoch:
+                return False
+            session_cookies.save(self.path, cookies, at_close=epoch is None)
+            return True
+
+    def _seal_jar(self) -> None:
+        """No live save writes from now on; one under way has ended."""
+        with self._jar_lock:
+            self._jar_epoch += 1
 
     @asynccontextmanager
     async def start(
@@ -358,17 +389,21 @@ class Session:
             if self._reinjection is None:
                 return  # the finally still closes Chrome
             cookies = self._reinjection.keep(await session_cookies.snapshot(browser))
-            await asyncio.to_thread(session_cookies.save, self.path, cookies, at_close=True)
+            await asyncio.to_thread(self._write_jar, cookies)
             self._session_cookies, self._cookies_at_close = cookies, True
         except Exception:  # noqa: BLE001 - Chrome gone: keep the previous file
             logger.warning("could not save the cookies of %s", self.path, exc_info=True)
         finally:
             if self._reinjection is not None:
                 self._reinjection.drop()
+            self._jar_epoch += 1  # a live save that has not written yet never will
             try:
-                await browser.close()
-            except Exception:  # noqa: BLE001 - cleanup after failure
-                pass
+                await asyncio.to_thread(self._seal_jar)  # and one writing has ended
+            finally:
+                try:
+                    await browser.close()
+                except Exception:  # noqa: BLE001 - cleanup after failure
+                    pass
 
     async def _run_validation_and_login(self, browser, *, manual: bool) -> bool:
         """Whether the session is good (no validators, they pass, or the login

@@ -464,6 +464,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A `save_now()` cancelled (or a `save()` from a thread that gives up) mid-write no longer
+  writes `cookies.json` after the close, over the jar the close saved: the writes of a start
+  go one at a time, and a live save begun before the close is dropped. `save_now()` from a loop
+  other than the start's raises `RuntimeError` instead of writing the old jar.
 - `session.json` and `cookies.json` are written through a temporary file of their own (no
   longer a fixed `<file>.tmp`): two writers at once (a live save and the close) no longer
   leave a corrupt file, or fail renaming the other's.
