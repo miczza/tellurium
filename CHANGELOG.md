@@ -488,7 +488,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `SessionPool.open`: an identity deleted (by another process) while its open waited for a slot
   no longer starts empty with a seed that is never saved: under the session lock its
   `session.json` is written again with the same seed, or `FileNotFoundError` with
-  `create=False`.
+  `create=False` (the empty folder the lock made is then moved away under the lock taken anew,
+  never by removing a held lock file).
 - `Session.start` waiting for a dead holder's Chrome now recognises it on Linux when its
   rewritten title has arguments after `--user-data-dir` (a URL, headed) or the profile path
   holds ` --`: it no longer starts a second Chrome on a profile still in use (exit 21).

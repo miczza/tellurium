@@ -108,3 +108,25 @@ async def test_without_create_an_identity_removed_while_waiting_is_not_reborn(tm
         await _removed_while_waiting(pool, launched, create=False)
     assert len(launched) == 1  # only a's Chrome
     assert await pool.list() == ["a"]
+
+
+async def test_the_lock_file_is_never_removed_while_held(tmp_path, launched, monkeypatch):
+    """The folder the start's lock made again is cleared only after the lock is
+    let go and taken anew, by moving the folder away: a lock file removed while
+    held would let another process lock a new one beside it."""
+    pool = SessionPool(tmp_path, max_browsers=1)
+    await pool.create("b", seed=77)
+    lock_file = os.path.join(pool.path("b"), "session.lock")
+    removed: list[str] = []
+    real_unlink = os.unlink
+
+    def spying_unlink(path, *args, **kwargs):
+        removed.append(os.fspath(path))
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "unlink", spying_unlink)
+    monkeypatch.setattr(os, "remove", spying_unlink)
+    with pytest.raises(FileNotFoundError):
+        await _removed_while_waiting(pool, launched, create=False)
+    assert lock_file not in removed
+    assert await pool.list() == ["a"]

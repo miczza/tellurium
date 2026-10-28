@@ -14,7 +14,6 @@ another process holds (its session lock), instead of queueing for a slot.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import functools
 import os
 import re
@@ -136,6 +135,10 @@ class SessionPool:
                 try:
                     async with session.start(**{**self._launch, **launch}) as browser:
                         yield browser
+                except _Gone:
+                    # The start's lock made the folder again: away once it is let go.
+                    await asyncio.to_thread(self._discard_empty, name, path)
+                    raise
                 finally:
                     session._on_lock = None
 
@@ -174,6 +177,19 @@ class SessionPool:
             session.save()
             return session
 
+    def _discard_empty(self, name: str, path: str) -> None:
+        """Move away *path* if it holds nothing but its lock file, under the
+        lock (taken anew), as :meth:`delete` does; left as it is if busy."""
+        grave = os.path.join(self.directory, f".{name}.deleted-{uuid.uuid4().hex}")
+        try:
+            with _held(path):
+                if os.listdir(path) != [session_lock.LOCK_FILE]:
+                    return
+                os.rename(path, grave)
+        except (OSError, SessionBusyError):
+            return  # someone else has it now, or Windows: the folder stays
+        shutil.rmtree(grave, ignore_errors=True)
+
 
 def _load(name: str, path: str) -> Session:
     if not os.path.isdir(path):
@@ -194,19 +210,20 @@ def _prepare(name: str, path: str, session: Session | None, create: bool) -> Ses
         return session
 
 
+class _Gone(FileNotFoundError):
+    """The identity was deleted while its open waited, and is not to be made again."""
+
+
 def _ensure(name: str, path: str, session: Session, create: bool) -> None:
     """With the session lock held: *session* has its ``session.json``, saved
-    now if missing and *create*; else :class:`FileNotFoundError`, and the
-    folder the lock made again is removed if it holds nothing else."""
+    now if missing and *create*; else :class:`FileNotFoundError` (the lock
+    file is left alone while held)."""
     if os.path.exists(os.path.join(path, _SESSION_FILE)):
         return
     if create:
         session.save()
         return
-    with contextlib.suppress(OSError):
-        os.unlink(os.path.join(path, session_lock.LOCK_FILE))
-        os.rmdir(path)
-    raise FileNotFoundError(f"no session named {name!r} at {path}")
+    raise _Gone(f"no session named {name!r} at {path}")
 
 
 @contextmanager
