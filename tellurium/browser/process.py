@@ -8,6 +8,7 @@ in a safe order whether the launch succeeded, failed or was cancelled.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -29,6 +30,13 @@ OUTPUT_TAIL_BYTES = 8192
 
 #: Lowest fd the child's pipe ends are parked on before landing on 3 and 4.
 _PARK_FD = 10
+
+#: How long Chrome gets to exit on its own after ``Browser.close``, before the signals.
+CLOSE_GRACE = 5.0
+
+#: ``Browser.close`` with an id the session router never hands out (it counts
+#: up from 0); its reply, if any, matches no pending command and is dropped.
+_BROWSER_CLOSE = json.dumps({"id": 2**31 - 1, "method": "Browser.close"}).encode() + b"\0"
 
 
 def launch_chrome_posix(
@@ -166,6 +174,7 @@ class BrowserProcess:
         self.temp_profile: str | None = None
         self.chrome_tmp: str | None = None  # Chrome's TMPDIR
         self.downloads_tmp: str | None = None  # default downloads folder
+        self.headless = False  # whether the flags Chrome got make it headless
         self._output: OutputTail | None = None
         self._log_path: Path | None = None
         self._log_file: Any = None
@@ -192,6 +201,7 @@ class BrowserProcess:
         Chrome's TMPDIR is a directory of ours, removed by :meth:`close`:
         it leaves shared-memory files and its singleton socket there.
         """
+        self.headless = any(f == "--headless" or f.startswith("--headless=") for f in flags)
         self.chrome_tmp = tempfile.mkdtemp(prefix="tellurium_tmp_")
         env = {**os.environ, "TMPDIR": self.chrome_tmp}
         output, tail_fd = subprocess.DEVNULL, None
@@ -253,6 +263,10 @@ class BrowserProcess:
     async def close(self) -> None:
         """Stop Chrome, then release its pipe, output, forwarder and temp folders.
 
+        Chrome is first asked to close over CDP (``Browser.close``, the
+        orderly exit that writes the cookie store) and given
+        :data:`CLOSE_GRACE` seconds; then SIGTERM, then SIGKILL. The CDP
+        reader keeps draining the pipe meanwhile, so Chrome never blocks on it.
         Chrome is stopped *before* its pipe is closed: on Windows, closing a
         pipe handle with a read pending on it can block until Chrome exits.
         Every step runs, even when an earlier one fails or the caller is
@@ -261,6 +275,10 @@ class BrowserProcess:
         Safe to call more than once.
         """
         cancelled = False
+        if self.process is not None and self.transport is not None:
+            cancelled |= await _settle(
+                "ask Chrome to close", self._ask_to_close(), timeout=CLOSE_GRACE + 2
+            )
         if self.reader is not None:
             reader, self.reader = self.reader, None
             reader.cancel()
@@ -287,6 +305,26 @@ class BrowserProcess:
                 cancelled |= await _settle(f"remove {path}", removal)
         if cancelled:
             raise asyncio.CancelledError
+
+    async def _ask_to_close(self) -> None:
+        """Send ``Browser.close`` and wait (at most :data:`CLOSE_GRACE`) for Chrome to exit.
+
+        Skipped when Chrome is gone or nobody reads the pipe any more (no
+        reader, or it ended: the pipe is broken); a failed send just leaves
+        the signals to do it.
+        """
+        process = self.process
+        if process.poll() is not None or self.reader is None or self.reader.done():
+            return
+        try:
+            await asyncio.wait_for(self.transport.send(_BROWSER_CLOSE), 1.0)
+        except (OSError, ConnectionError, asyncio.TimeoutError) as exc:
+            logger.debug("Could not send Browser.close: %s", exc)
+            return
+        try:
+            await asyncio.to_thread(process.wait, CLOSE_GRACE)
+        except subprocess.TimeoutExpired:
+            logger.debug("Chrome ignored Browser.close for %.0f s; signalling it", CLOSE_GRACE)
 
 
 async def _settle(what: str, awaitable: Any, timeout: float = 15.0) -> bool:

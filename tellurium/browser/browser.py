@@ -560,9 +560,7 @@ class Browser(CookieJar):
             )
         except Exception as exc:  # noqa: BLE001 — a bad IANA id must not kill launch
             logger.warning(
-                "Timezone override %r rejected by Chrome: %s",
-                self._timezone_override,
-                exc,
+                "Timezone override %r rejected by Chrome: %s", self._timezone_override, exc
             )
 
     # ------------------------------------------------------------------
@@ -584,6 +582,8 @@ class Browser(CookieJar):
     @property
     def downloads(self) -> Downloads:  # internal: Tab.expect_download, contexts
         return self._downloads
+
+    headless = property(lambda self: self._proc.headless, doc="Whether Chrome runs headless.")
 
     async def wait_for_tab(self, url: str, *, timeout: float = 30) -> Tab:
         """Return the first open tab whose URL matches *url*, waiting for one.

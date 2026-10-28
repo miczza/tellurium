@@ -20,7 +20,7 @@ def _tab(replies):
             raise reply
         return {"frameTree": {"frame": {"id": "F", "loaderId": "L", "url": reply}}}
 
-    browser = SimpleNamespace(_stealth_engine=SimpleNamespace(_headless=True))
+    browser = SimpleNamespace(headless=True)
     return SimpleNamespace(_session=SimpleNamespace(send=send, on=MagicMock()), _browser=browser)
 
 
@@ -43,3 +43,26 @@ async def test_a_busy_page_still_honours_the_timeout(monkeypatch):
     else:
         raise AssertionError("no TimeoutError")
     assert loop.time() - start < 2
+
+
+def _version_tab(headless: bool, product: str):
+    async def send(method, params=None, timeout=None):
+        assert method == "Browser.getVersion"
+        return {"product": product, "userAgent": product}
+
+    # Windows: the process object has no args to read.
+    browser = SimpleNamespace(
+        headless=headless,
+        _proc=SimpleNamespace(process=object()),
+        _router=SimpleNamespace(root=SimpleNamespace(send=send)),
+    )
+    return SimpleNamespace(_browser=browser)
+
+
+async def test_headless_comes_from_how_the_browser_was_launched():
+    # --user-agent rewrote what Chrome reports: only the launch knows.
+    assert await human._headless(_version_tab(True, "Chrome/156.0.0.0"))
+
+
+async def test_a_headed_browser_is_not_headless():
+    assert not await human._headless(_version_tab(False, "Chrome/156.0.0.0"))

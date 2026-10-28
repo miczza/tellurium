@@ -7,6 +7,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Browser.headless` (read-only): whether Chrome was launched headless, from the flags it
+  got (`headless=True` or `--headless` in `args`), on every platform. `wait_for_human`
+  uses it instead of reading the process's command line, which the Windows launcher does
+  not keep (it fell back to the user agent, which `--user-agent` rewrites).
 - `tellurium mcp --respect-robots`: `navigate` and `tab-open` to a URL the site's
   robots.txt disallows fail with "Navigation failed: robots.txt of <origin> disallows
   <path>" instead of opening it (stdio and HTTP; the sessions launch with
@@ -403,6 +407,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `browser.close()` first asks Chrome to close with the CDP command `Browser.close` and
+  waits up to 5 s for it to exit, then sends SIGTERM and SIGKILL as before. The orderly exit
+  writes the cookie store, so a cookie written right before `close()` is there at the next
+  launch on the same `user_data_dir` even without `Session` (SIGTERM alone lost it about
+  one time in four). `close()` can take up to 5 s longer when Chrome does not answer
+  `Browser.close`; it is skipped when the pipe is already broken.
 - With `stealth=True` on the stock backend Chrome is launched with
   `--user-agent=<profile User-Agent>` (the profile aligned first with the binary's
   `--version`; no flag when that cannot be read, so flag and override never name two

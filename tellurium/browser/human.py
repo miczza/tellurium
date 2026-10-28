@@ -220,19 +220,13 @@ def _condition(until: Until) -> Callable[[Tab, dict], Awaitable[bool]] | None:
 
 
 async def _headless(tab: Tab) -> bool:
-    """Whether *tab*'s Chrome is headless: yes if any witness says so. The
-    stealth engine knows what tellurium asked for; the command line Chrome was
-    started with has ``--headless`` (where it is kept: not on Windows, and a
-    wrapper script adding the flag hides it); Chrome's user agent and product
-    say ``HeadlessChrome`` unless ``--user-agent`` rewrites them (the new
-    headless mode reports ``Chrome/…`` as product, the old shell does not)."""
-    engine = getattr(tab._browser, "_stealth_engine", None)
-    if engine is not None and engine._headless:
-        return True
-    argv = getattr(getattr(tab._browser._proc, "process", None), "args", None)
-    if isinstance(argv, (list, tuple)) and any(
-        str(a) == "--headless" or str(a).startswith("--headless=") for a in argv
-    ):
+    """Whether *tab*'s Chrome is headless: yes if any witness says so.
+    :attr:`Browser.headless` knows the flags tellurium launched it with, on
+    every platform; Chrome's user agent and product say ``HeadlessChrome``
+    when a wrapper script adds the flag, unless ``--user-agent`` rewrites
+    them (the new headless mode reports ``Chrome/…`` as product, the old
+    shell does not)."""
+    if tab._browser.headless:
         return True
     info = await tab._browser._router.root.send("Browser.getVersion", {}, timeout=CALL_TIMEOUT)
     return any("HeadlessChrome" in info.get(key, "") for key in ("product", "userAgent"))
