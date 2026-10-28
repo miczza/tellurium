@@ -42,3 +42,22 @@ async def test_a_live_chrome_holds_its_profile_until_it_closes(tmp_path):
     finally:
         await browser.close()
     assert await profile_release.wait(str(chrome_dir), 10.0) is None
+
+
+async def test_a_headed_chrome_with_a_url_and_a_dash_dash_path_holds_its_profile(tmp_path):
+    """Headed, with a URL after the switches and `` --`` in the profile path:
+    the rewritten title is still read right (a kill -9 of the holder must
+    not let the next start in while this Chrome lives)."""
+    if not os.environ.get("DISPLAY"):
+        pytest.skip("needs a display (xvfb-run)")
+    chrome_dir = tmp_path / "a --b" / "chrome"
+    browser = await Browser.launch(
+        user_data_dir=str(chrome_dir), headless=False, args=["about:blank"]
+    )
+    try:
+        pid = _lock_pid(chrome_dir)
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            assert b"about:blank" in f.read()
+        assert await profile_release.wait(str(chrome_dir), 0.3) == pid
+    finally:
+        await browser.close()

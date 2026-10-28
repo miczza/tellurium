@@ -457,6 +457,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Session.start` waiting for a dead holder's Chrome now recognises it on Linux when its
+  rewritten title has arguments after `--user-data-dir` (a URL, headed) or the profile path
+  holds ` --`: it no longer starts a second Chrome on a profile still in use (exit 21).
 - `Session`: a cookie restore whose answer from Chrome comes after the 5 s timeout (or the
   look at Chrome's jar that comes first) still counts when it arrives, so the close no longer
   puts back a cookie Chrome took (or already had) and the site deleted during the run.

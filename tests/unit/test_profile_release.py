@@ -143,11 +143,51 @@ async def test_a_chrome_on_a_sibling_profile_is_not_ours(tmp_path):
 
 
 def test_user_data_dir_is_read_from_a_rewritten_title_too():
-    # Chrome on Linux rewrites its title: one string of space-joined arguments.
-    title = b"/opt/chrome --no-first-run --user-data-dir=/x/with space/chrome dir --headless=new\0"
-    assert profile_release._user_data_dirs(title) == [b"/x/with space/chrome dir"]
-    last = b"/opt/chrome --user-data-dir=/x/a b\0"
-    assert profile_release._user_data_dirs(last) == [b"/x/a b"]
+    # Chrome on Linux rewrites its title: one string of space-joined arguments,
+    # so a value may end at any space; the longest first.
+    title = b"/opt/chrome --no-first-run --user-data-dir=/x/a b --headless=new\0"
+    assert profile_release._candidates(title) == [[b"/x/a b --headless=new", b"/x/a b", b"/x/a"]]
     argv = b"/opt/chrome\0--user-data-dir=/x/a b --c\0--headless\0"
-    assert profile_release._user_data_dirs(argv) == [b"/x/a b --c"]
-    assert profile_release._user_data_dirs(b"/usr/bin/python3\0-c\0pass\0") == []
+    assert profile_release._candidates(argv) == [[b"/x/a b --c"]]
+    assert profile_release._candidates(b"/usr/bin/python3\0-c\0pass\0") == []
+
+
+def _title(tmp_path, monkeypatch, cmdline: bytes):
+    """/proc/<pid>/cmdline of a process that rewrote its title to *cmdline*."""
+    real_open = open
+
+    def fake_open(path, *args, **kwargs):
+        if str(path).endswith("/cmdline"):
+            import io
+
+            return io.BytesIO(cmdline)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", fake_open)
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc"), reason="needs /proc")
+def test_a_title_with_a_url_after_the_profile_is_recognised(tmp_path, monkeypatch):
+    chrome_dir = tmp_path / "chrome"
+    chrome_dir.mkdir()
+    title = f"/opt/chrome --user-data-dir={chrome_dir} https://example.test/login".encode()
+    _title(tmp_path, monkeypatch, title + b"\0")
+    assert profile_release._runs_on(os.getpid(), str(chrome_dir))
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc"), reason="needs /proc")
+def test_a_profile_path_with_a_dash_dash_is_recognised(tmp_path, monkeypatch):
+    chrome_dir = tmp_path / "a --b" / "chrome"
+    chrome_dir.mkdir(parents=True)
+    _title(tmp_path, monkeypatch, f"/opt/chrome --user-data-dir={chrome_dir} --headless".encode())
+    assert profile_release._runs_on(os.getpid(), str(chrome_dir))
+    assert not profile_release._runs_on(os.getpid(), str(tmp_path / "a"))
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc"), reason="needs /proc")
+def test_a_prefix_of_the_profile_is_another_profile(tmp_path, monkeypatch):
+    (tmp_path / "chrome").mkdir()
+    (tmp_path / "chrome dir").mkdir()
+    _title(tmp_path, monkeypatch, f"/opt/chrome --user-data-dir={tmp_path}/chrome dir".encode())
+    assert profile_release._runs_on(os.getpid(), str(tmp_path / "chrome dir"))
+    assert not profile_release._runs_on(os.getpid(), str(tmp_path / "chrome"))
