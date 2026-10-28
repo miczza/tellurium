@@ -183,3 +183,20 @@ async def test_a_failed_launch_frees_the_slot(tmp_path):
     async with pool.open("b") as browser:
         assert await asyncio.wait_for(browser.main_tab.eval("1 + 1"), 30) == 2
     assert await asyncio.to_thread(_running, str(tmp_path)) == set()
+
+
+def test_one_pool_in_two_asyncio_runs(tmp_path):
+    """The slots belong to the loop of the open: a second asyncio.run with the
+    same pool opens (and queues on its one slot) as the first did."""
+    pool = SessionPool(tmp_path, max_browsers=1, headless=True)
+
+    async def two_at_once():
+        async def use(name):
+            async with pool.open(name) as browser:
+                return await asyncio.wait_for(browser.main_tab.eval("1 + 1"), 30)
+
+        return await asyncio.wait_for(asyncio.gather(use("a"), use("b")), 120)
+
+    assert asyncio.run(two_at_once()) == [2, 2]
+    assert asyncio.run(two_at_once()) == [2, 2]
+    assert _running(str(tmp_path)) == set()
