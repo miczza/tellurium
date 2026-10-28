@@ -19,7 +19,8 @@ def test_patched_engine_capabilities():
     assert "native_cdp_fix" in caps
     assert "native_network_timing" in caps
     assert "native_navigator" in caps
-    assert "native_timezone" in caps
+    # Only once a MANIFEST says the binary reads --fingerprint-timezone.
+    assert "native_timezone" not in caps
 
 
 def test_patched_engine_build_args_no_profile_uses_random_seed():

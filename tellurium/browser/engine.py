@@ -23,6 +23,31 @@ STOP_TIMEOUT = 10.0
 #: spaces, no ``=``, nothing a command line could split or reinterpret.
 _IANA_TIMEZONE = re.compile(r"[A-Za-z0-9_+\-]+(?:/[A-Za-z0-9_+\-]+)*")
 
+#: An ICU custom id (``GMT+05:30``, ``GMT-3``, ``GMT+0530``): what ICU's
+#: ``TimeZone::createTimeZone`` accepts, so the flag and
+#: ``Emulation.setTimezoneOverride`` take the same values.
+_GMT_PREFIX = re.compile(r"GMT[+-]", re.IGNORECASE)
+_CUSTOM_TIMEZONE = re.compile(
+    r"GMT[+-](?:(?P<h>\d{1,2})(?::(?P<m>\d{2})(?::(?P<s>\d{2}))?)?"
+    r"|(?P<hh>\d{1,2})(?P<mm>\d{2})(?P<ss>\d{2})?)",
+    re.IGNORECASE,
+)
+
+
+def _is_timezone_id(timezone: object) -> bool:
+    """True for an IANA id or an ICU custom ``GMT±h[h][[:]mm[[:]ss]]`` id."""
+    if not isinstance(timezone, str):
+        return False
+    if not _GMT_PREFIX.match(timezone):
+        return _IANA_TIMEZONE.fullmatch(timezone) is not None
+    custom = _CUSTOM_TIMEZONE.fullmatch(timezone)
+    if custom is None:
+        return False
+    hours, minutes, seconds = (
+        int(custom[a] or custom[b] or 0) for a, b in (("h", "hh"), ("m", "mm"), ("s", "ss"))
+    )
+    return hours <= 23 and minutes <= 59 and seconds <= 59
+
 
 class BinaryCorruptedError(RuntimeError):
     """Raised when binary SHA256 does not match expected (MANIFEST or pin)."""
@@ -65,8 +90,9 @@ class PatchedEngine(BrowserEngine):
     Flags emitted (contract: ``chromium-telluride/docs/usage.md``):
     ``--fingerprint=<seed>`` (always; random seed when no profile/seed is
     given because the fork requires it), ``--fingerprint-platform=<os>``,
-    ``--fingerprint-timezone=<IANA>`` (only with a plausible timezone; the
-    CDP override stays for binaries that do not read it) and
+    ``--fingerprint-timezone=<IANA|GMT±hh:mm>`` (only with a valid timezone;
+    the CDP override stays for binaries that do not read it, and
+    ``native_timezone`` is declared only when the MANIFEST lists the flag) and
     ``--fingerprint-webrtc-ip=<mode>``.
     """
 
@@ -90,6 +116,8 @@ class PatchedEngine(BrowserEngine):
         self._auto_security_update = auto_security_update
         self._webrtc_ip_flag = webrtc_ip_flag
         self._seed = seed
+        #: ``supported_flags`` of the resolved binary's MANIFEST (empty until known).
+        self._supported_flags: frozenset[str] = frozenset()
         if auto_security_update and chromium_version:
             logger.warning(
                 "auto_security_update=True is ignored when chromium_version is pinned "
@@ -178,7 +206,9 @@ class PatchedEngine(BrowserEngine):
 
             manifest = ReleaseManifest.from_path(manifest_path)
             verify_binary(binary, manifest, current_platform())
+            self._supported_flags = frozenset(manifest.supported_flags)
         else:
+            self._supported_flags = frozenset()
             logger.warning(
                 "No MANIFEST.json in %s; skipping integrity verification. "
                 "Reinstall with `tellurium download-browser --browser patched` "
@@ -224,11 +254,13 @@ class PatchedEngine(BrowserEngine):
             args.append(f"--fingerprint-platform={target_os}")
         timezone = getattr(profile, "timezone", None)
         if timezone is not None:
-            if isinstance(timezone, str) and _IANA_TIMEZONE.fullmatch(timezone):
+            if _is_timezone_id(timezone):
                 args.append(f"--fingerprint-timezone={timezone}")
             else:
                 logger.warning(
-                    "Timezone %r is not a plausible IANA id; not passed as --fingerprint-timezone.",
+                    "Timezone %r is neither an IANA id nor GMT+hh:mm; not passed as "
+                    "--fingerprint-timezone: contexts outside the CDP override "
+                    "(workers, service workers) stay on the host timezone.",
                     timezone,
                 )
         if self._webrtc_ip_flag is not None:
@@ -236,14 +268,17 @@ class PatchedEngine(BrowserEngine):
         return args
 
     def capabilities(self) -> set[str]:
-        return {
+        caps = {
             "native_fingerprint",
             "native_client_hints",
             "native_cdp_fix",
             "native_network_timing",
             "native_navigator",
-            "native_timezone",
         }
+        # Only a binary whose MANIFEST lists the flag reads it (146 does not).
+        if "--fingerprint-timezone" in self._supported_flags:
+            caps.add("native_timezone")
+        return caps
 
 
 def select_engine(

@@ -9,9 +9,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Patched engine: `--fingerprint-timezone=<IANA>` with the timezone of the stealth profile
   (GeoIP and the manual `timezone=` of `launch` included) or, with stealth off, the manual
-  `timezone=`; capability `native_timezone`. A value that is not a plausible IANA id (empty,
-  spaces, `=`) is logged and not passed. Stock Chrome gets no flag; the
-  `Emulation.setTimezoneOverride` override stays, for binaries that do not read the flag.
+  `timezone=`. IANA ids and ICU custom ids (`GMT+05:30`, `GMT-3`) pass, as with
+  `Emulation.setTimezoneOverride`; anything else (empty, spaces, `=`, `GMT+24:00`) is not
+  passed, with a warning that contexts outside the CDP override stay on the host timezone.
+  Capability `native_timezone` only when the binary's MANIFEST lists
+  `--fingerprint-timezone` in `supported_flags`; the flag is passed regardless. Stock Chrome
+  gets no flag; the CDP override stays, for binaries that do not read the flag.
 - `Browser.headless` (read-only): whether Chrome was launched headless, from the flags it
   got (`headless=True` or `--headless` in `args`), on every platform. `wait_for_human`
   uses it instead of reading the process's command line, which the Windows launcher does
