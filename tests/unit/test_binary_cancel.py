@@ -15,7 +15,8 @@ import pytest
 
 from tellurium.browser import _cache
 from tellurium.browser import _patched_download as dl
-from tellurium.browser.engine import PatchedEngine
+from tellurium.browser.engine import STOP_TIMEOUT, PatchedEngine
+from tests.unit.test_patched_download import _fake_github, _make_tarball
 
 OLD = "145.0.7600.1"
 NEW = "146.0.7680.188"
@@ -68,7 +69,7 @@ def security_release(tmp_path, monkeypatch):
         "v0.1.0-" + NEW, "https://example.invalid/t.tar.gz", "t.tar.gz", None, None
     )
     monkeypatch.setattr(dl, "find_release", lambda version=None, **kw: assets)
-    monkeypatch.setattr(dl, "_release_tarball_sha", lambda assets: "ab" * 32)
+    monkeypatch.setattr(dl, "_release_tarball_sha", lambda assets, timeout=15: "ab" * 32)
     monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=None: response)
     yield root, response
     abort.set()
@@ -188,3 +189,60 @@ async def test_cancelling_the_launch_stops_waiting_for_the_lock(tmp_path, monkey
     finally:
         release.set()
         holder.join(5)
+
+
+def _stopping_github(tmp_path, stop, when):
+    """The fake GitHub of test_patched_download, setting *stop* when *when* is fetched."""
+    tar = _make_tarball(tmp_path / "rel.tar.gz")
+    urlopen, calls, name = _fake_github(tmp_path, tar)
+    timeouts: list[float | None] = []
+
+    def stopping(req, timeout=None):
+        timeouts.append(timeout)
+        reply = urlopen(req, timeout)
+        if when in calls[-1]:
+            stop.set()
+        return reply
+
+    return stopping, calls, name, timeouts
+
+
+@pytest.mark.parametrize("when", ["/releases", "SHA256SUMS"])
+def test_a_stop_while_finding_the_release_downloads_nothing(tmp_path, monkeypatch, when):
+    stop = threading.Event()
+    urlopen, calls, name, _ = _stopping_github(tmp_path, stop, when)
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    root = tmp_path / "cache"
+    with pytest.raises(dl.DownloadCancelled):
+        dl.download_patched(cache_root=root, stop=stop)
+    assert not any(c.endswith(name) for c in calls), "the tarball was fetched after the stop"
+    assert _cache.installed_browsers(root) == []
+
+
+def test_a_stop_while_installing_installs_nothing(tmp_path, monkeypatch):
+    root = tmp_path / "cache"
+    _install(root, OLD)
+    _cache.set_current(OLD, root)
+    stop = threading.Event()
+    real_verify = dl.verify_binary
+
+    def verify_then_stop(*args):
+        real_verify(*args)
+        stop.set()  # the launch is cancelled while the binary is hashed
+
+    monkeypatch.setattr(dl, "verify_binary", verify_then_stop)
+    tar = _make_tarball(tmp_path / "rel.tar.gz")
+    with pytest.raises(dl.DownloadCancelled):
+        dl.install_from_tarball(tar, cache_root=root, stop=stop)
+    assert [b.version for b in _cache.installed_browsers(root)] == [OLD]
+    assert _cache.current_version(root) == OLD
+    assert [p.name for p in root.iterdir() if p.name.startswith(".install-")] == []
+
+
+def test_a_stoppable_download_keeps_its_network_waits_under_the_stop_timeout(tmp_path, monkeypatch):
+    """The thread of a cancelled launch must not outlive the wait the launch declares."""
+    stop = threading.Event()
+    urlopen, _, _, timeouts = _stopping_github(tmp_path, stop, "never")
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    dl.download_patched(cache_root=tmp_path / "cache", stop=stop)
+    assert timeouts and all(t is not None and t < STOP_TIMEOUT for t in timeouts), timeouts

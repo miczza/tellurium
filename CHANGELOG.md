@@ -468,9 +468,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Patched backend: cancelling `Browser.launch` while the binary is being resolved stops a
-  security download in flight at its next chunk (and waits up to 10 s for it), removes the
-  partial file and leaves `current` where it was; before, the download went on in its
-  thread and could still switch `current`. The binary is looked up under the cache's
+  security download in flight (between release lookup, `SHA256SUMS`, each 64 KiB chunk,
+  each extracted file and the swap; network waits of such a download are 5 s) and waits up
+  to 10 s for it, removes the partial files and leaves `current` where it was; before, the
+  download went on in its thread and could still switch `current`.
+  `download_patched(..., stop=)` and `install_from_tarball(..., stop=)` take a
+  `threading.Event` for this. The binary is looked up under the cache's
   install lock (shared: launches do not wait for each other), so a forced reinstall
   swapping the version directory no longer makes a concurrent launch fail with "binary not
   found"; a cache whose lock file cannot be opened (read-only mount, image, another user's

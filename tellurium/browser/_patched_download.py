@@ -23,7 +23,7 @@ import tempfile
 import threading
 import urllib.request
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -45,6 +45,11 @@ _TOP_DIR = "chromium-telluride"
 
 ProgressCallback = Callable[[int, int | None], None]
 
+#: Network timeout of each request and read of a stoppable download (one with
+#: a stop event): a stop is seen within it even on a stalled connection, under
+#: the 10 s a cancelled launch waits (``engine.STOP_TIMEOUT``).
+STOPPABLE_TIMEOUT = 5.0
+
 
 class DownloadError(RuntimeError):
     """Raised when a release cannot be found, fetched, or verified."""
@@ -52,6 +57,11 @@ class DownloadError(RuntimeError):
 
 class DownloadCancelled(DownloadError):
     """Raised when the caller's stop event ends a download before it is installed."""
+
+
+def _check_stop(stop: threading.Event | None, what: str) -> None:
+    if stop is not None and stop.is_set():
+        raise DownloadCancelled(f"{what} cancelled")
 
 
 @dataclass(frozen=True)
@@ -111,19 +121,23 @@ def _assets_from_release(rel: dict[str, Any], platform: str) -> ReleaseAssets | 
 
 
 def find_release(
-    version: str | None = None, *, platform: str | None = None, api_url: str = RELEASES_API
+    version: str | None = None,
+    *,
+    platform: str | None = None,
+    api_url: str = RELEASES_API,
+    timeout: float = 15,
 ) -> ReleaseAssets:
     """Locate release assets for *version* (chromium upstream) or the latest."""
     platform = platform or current_platform()
     if version is None:
-        rel = _http_json(f"{api_url}/latest")
+        rel = _http_json(f"{api_url}/latest", timeout)
         assets = _assets_from_release(rel, platform)
         if assets is None:
             raise DownloadError(
                 f"Latest release {rel.get('tag_name')} has no {platform} tarball asset."
             )
         return assets
-    releases = _http_json(f"{api_url}?per_page=50")
+    releases = _http_json(f"{api_url}?per_page=50", timeout)
     for rel in releases:
         tag = rel.get("tag_name", "")
         if tag.endswith(f"-{version}") or tag == version or tag == f"v{version}":
@@ -160,16 +174,17 @@ def _download(
     progress: ProgressCallback | None = None,
     stop: threading.Event | None = None,
 ) -> None:
-    """Fetch *url* into *dest*; *stop* is checked between chunks."""
+    """Fetch *url* into *dest*; *stop* is checked between chunks, which are
+    then smaller and come under :data:`STOPPABLE_TIMEOUT`."""
+    timeout, size = (60, 1 << 20) if stop is None else (STOPPABLE_TIMEOUT, 1 << 16)
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=60) as resp, open(dest, "wb") as out:  # noqa: S310
+    with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest, "wb") as out:  # noqa: S310
         total_hdr = resp.headers.get("Content-Length")
         total = int(total_hdr) if total_hdr and total_hdr.isdigit() else None
         done = 0
         while True:
-            if stop is not None and stop.is_set():
-                raise DownloadCancelled(f"Download of {url} cancelled")
-            chunk = resp.read(1 << 20)
+            _check_stop(stop, f"Download of {url}")
+            chunk = resp.read(size)
             if not chunk:
                 break
             out.write(chunk)
@@ -193,19 +208,21 @@ def _checked(version: str, context: str = "Invalid version") -> str:
         raise DownloadError(f"{context}: {e}") from None
 
 
-def _release_tarball_sha(assets: ReleaseAssets) -> str | None:
+def _release_tarball_sha(assets: ReleaseAssets, timeout: float = 15) -> str | None:
     """The tarball's SHA256 from the release's SHA256SUMS, or None if unavailable."""
     if not assets.sha256sums_url:
         return None
     try:
-        return _expected_tarball_sha(_http_text(assets.sha256sums_url), assets.tarball_name)
+        sums = _http_text(assets.sha256sums_url, timeout)
+        return _expected_tarball_sha(sums, assets.tarball_name)
     except Exception as e:  # noqa: BLE001 — any failure means "not verified"
         log.warning("Could not fetch SHA256SUMS: %s", e)
         return None
 
 
-def _safe_extract(tar_path: Path, dest: Path) -> None:
-    """Extract *tar_path* into *dest*, stripping the ``chromium-telluride/`` top dir."""
+def _safe_extract(tar_path: Path, dest: Path, stop: threading.Event | None = None) -> None:
+    """Extract *tar_path* into *dest*, stripping the ``chromium-telluride/`` top dir;
+    *stop* is checked before each member."""
     dest.mkdir(parents=True, exist_ok=True)
     with tarfile.open(tar_path, "r:gz") as tf:
         members = []
@@ -232,10 +249,16 @@ def _safe_extract(tar_path: Path, dest: Path) -> None:
                     raise DownloadError(f"Refusing to extract unsafe link {m.name!r}")
             m.name = name
             members.append(m)
+
+        def each() -> Iterator[tarfile.TarInfo]:
+            for member in members:
+                _check_stop(stop, "Install")
+                yield member
+
         try:
-            tf.extractall(dest, members=members, filter="data")
+            tf.extractall(dest, members=each(), filter="data")
         except TypeError:  # Python < 3.12 without the filter backport
-            tf.extractall(dest, members=members)  # noqa: S202
+            tf.extractall(dest, members=each())  # noqa: S202
 
 
 def install_from_tarball(
@@ -245,16 +268,19 @@ def install_from_tarball(
     expected_tarball_sha256: str | None = None,
     set_current: bool = True,
     force: bool = False,
+    stop: threading.Event | None = None,
 ) -> _cache.InstalledBrowser:
     """Install a local release tarball into the cache and return the entry.
 
     The swap into place and the ``current`` switch run under the cache's
     install lock; an install of the same binary that is already there is
     kept (Chrome may be running from it) unless *force*. Filesystem errors
-    are raised as :class:`DownloadError`.
+    are raised as :class:`DownloadError`. Setting *stop* before the swap
+    ends the install with :class:`DownloadCancelled`, nothing changed;
+    once the swap has begun it is finished.
     """
     try:
-        return _install(tar_path, cache_root, expected_tarball_sha256, set_current, force)
+        return _install(tar_path, cache_root, expected_tarball_sha256, set_current, force, stop)
     except OSError as e:
         raise DownloadError(f"Could not install chromium-telluride: {e}") from e
 
@@ -265,6 +291,7 @@ def _install(
     expected_tarball_sha256: str | None,
     set_current: bool,
     force: bool,
+    stop: threading.Event | None = None,
 ) -> _cache.InstalledBrowser:
     root = cache_root if cache_root is not None else _cache.cache_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -277,7 +304,7 @@ def _install(
 
     staging = Path(tempfile.mkdtemp(prefix=".install-", dir=root))
     try:
-        _safe_extract(tar_path, staging)
+        _safe_extract(tar_path, staging, stop)
         manifest_path = staging / _cache.MANIFEST_NAME
         if not manifest_path.is_file():
             raise DownloadError("Tarball has no MANIFEST.json; refusing to install.")
@@ -295,6 +322,7 @@ def _install(
         final = root / _checked(version, "Refusing install dir from MANIFEST.json")
         if final.resolve().parent != root.resolve():
             raise DownloadError(f"Refusing install dir outside the cache: {final}")
+        _check_stop(stop, "Install")
         with _cache.install_lock(root):
             _cache.sweep_orphans(root)
             _swap_in(staging, final, manifest, force)
@@ -353,8 +381,11 @@ def download_patched(
     """
     if version is not None:
         _checked(version)
-    assets = find_release(version, api_url=api_url)
-    expected = _release_tarball_sha(assets)
+    timeout = 15 if stop is None else STOPPABLE_TIMEOUT
+    assets = find_release(version, api_url=api_url, timeout=timeout)
+    _check_stop(stop, "Download")
+    expected = _release_tarball_sha(assets, timeout)
+    _check_stop(stop, "Download")
     if expected is None and not allow_unverified:
         raise DownloadError(
             f"Release {assets.tag}: no SHA256SUMS entry for {assets.tarball_name}; "
@@ -366,14 +397,13 @@ def download_patched(
         tar_path = Path(tmp) / assets.tarball_name
         log.info("Downloading %s (%s)", assets.tarball_name, assets.tag)
         _download(assets.tarball_url, tar_path, progress, stop)
-        if stop is not None and stop.is_set():
-            raise DownloadCancelled(f"Install of {assets.tarball_name} cancelled")
         return install_from_tarball(
             tar_path,
             cache_root=root,
             expected_tarball_sha256=expected,
             set_current=set_current,
             force=force,
+            stop=stop,
         )
 
 
