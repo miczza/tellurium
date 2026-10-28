@@ -130,7 +130,11 @@ async def _windows_closed(browser: Any) -> None:
             if candidate is not None:
                 jar = candidate  # read with a window still open: the whole jar
             await asyncio.sleep(POLL)
-        await session_cookies.Reinjection(jar).run(browser)
+        reinjection = session_cookies.Reinjection(jar)
+        try:
+            await reinjection.run(browser)
+        finally:
+            reinjection.drop()
     except ConnectionError:
         return  # Chrome is gone: the session keeps what it had
 

@@ -274,6 +274,8 @@ class Session:
         except Exception:  # noqa: BLE001 - Chrome gone: keep the previous file
             logger.warning("could not save the cookies of %s", self.path, exc_info=True)
         finally:
+            if self._reinjection is not None:
+                self._reinjection.drop()
             try:
                 await browser.close()
             except Exception:  # noqa: BLE001 - cleanup after failure

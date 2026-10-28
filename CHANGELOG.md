@@ -457,6 +457,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Session`: a cookie restore whose answer from Chrome comes after the 5 s timeout (or the
+  look at Chrome's jar that comes first) still counts when it arrives, so the close no longer
+  puts back a cookie Chrome took (or already had) and the site deleted during the run.
 - A `cookies.json` that cannot be parsed, whatever the error (a `RecursionError` on a
   deeply nested file included), no longer fails every `Session.start`: it gives a warning,
   is moved to `cookies.json.bad-<time>` and the next close writes a good one.

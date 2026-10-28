@@ -73,8 +73,12 @@ def test_any_parsing_error_is_a_bad_file(tmp_path, monkeypatch):
 
 
 class _FakeBrowser:
-    def __init__(self, jar=(), fail_read=False, hang_read=False, hang_write=False):
+    def __init__(
+        self, jar=(), fail_read=False, hang_read=False, hang_write=False, late_read=0, late_write=0
+    ):
         self.jar = list(jar)
+        self.late_read = late_read  # the first read answers this late
+        self.late_write = late_write  # writes are applied at once, answered this late
         self.fail_read = fail_read
         self.hang_read = hang_read
         self.hang_write = hang_write
@@ -87,7 +91,11 @@ class _FakeBrowser:
             await asyncio.Event().wait()
         if self.fail_read:
             raise ConnectionError("chrome is gone")
-        return list(self.jar)
+        jar = list(self.jar)
+        if self.late_read:
+            late, self.late_read = self.late_read, 0
+            await asyncio.sleep(late)
+        return jar
 
     async def set_cookies(self, cookies):
         self.events.append("set_cookies")
@@ -99,6 +107,8 @@ class _FakeBrowser:
                 self.jar[same[0]] = cookie
             else:
                 self.jar.append(cookie)
+        if self.late_write:
+            await asyncio.sleep(self.late_write)
 
     async def close(self):
         self.events.append("close")
@@ -340,3 +350,47 @@ async def test_a_start_on_a_too_nested_file_succeeds_and_rewrites_it(tmp_path, f
         async with Session("s", path=str(tmp_path)).start() as browser:
             browser.jar = [_SSO]
     assert session_cookies.read(str(tmp_path)) == ([_SSO], True)
+
+
+async def test_a_restore_answered_late_counts_and_a_deleted_cookie_stays_deleted(
+    tmp_path, fake_launch, monkeypatch
+):
+    """Chrome took the cookies but answered after the timeout; the site then
+    logged out: the close must not bring the cookie back."""
+    browsers, make = fake_launch
+    monkeypatch.setattr(session_cookies, "TIMEOUT", 0.05)
+    make["factory"] = lambda: _FakeBrowser(late_write=0.2)
+    session_cookies.save(str(tmp_path), [_SSO])
+    async with Session("s", path=str(tmp_path)).start() as browser:
+        assert browser.jar == [_SSO]
+        await asyncio.sleep(0.3)  # the late answer arrives
+        browser.jar = []  # logout
+    assert session_cookies.load(str(tmp_path)) == []
+
+
+async def test_a_cookie_chrome_had_and_the_site_deleted_stays_deleted_after_a_late_read(
+    tmp_path, fake_launch, monkeypatch
+):
+    """The start's look at Chrome's jar timed out, its answer came later: a
+    cookie Chrome had then and the site deleted is not put back."""
+    browsers, make = fake_launch
+    monkeypatch.setattr(session_cookies, "TIMEOUT", 0.05)
+    make["factory"] = lambda: _FakeBrowser(jar=[_SSO], late_read=0.2)
+    session_cookies.save(str(tmp_path), [_SSO], at_close=True)
+    async with Session("s", path=str(tmp_path)).start() as browser:
+        await asyncio.sleep(0.3)
+        browser.jar = []
+    assert session_cookies.load(str(tmp_path)) == []
+
+
+async def test_a_restore_never_answered_is_not_left_running(tmp_path, fake_launch, monkeypatch):
+    browsers, make = fake_launch
+    monkeypatch.setattr(session_cookies, "TIMEOUT", 0.05)
+    make["factory"] = lambda: _FakeBrowser(hang_write=True)
+    session_cookies.save(str(tmp_path), [_SSO])
+    before = asyncio.all_tasks()
+    async with Session("s", path=str(tmp_path)).start():
+        pass
+    await asyncio.sleep(0)
+    assert asyncio.all_tasks() - before == set()
+    assert session_cookies.load(str(tmp_path)) == [_SSO]
