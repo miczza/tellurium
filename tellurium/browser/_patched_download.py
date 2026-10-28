@@ -20,6 +20,7 @@ import shutil
 import sys
 import tarfile
 import tempfile
+import threading
 import urllib.request
 import uuid
 from collections.abc import Callable
@@ -47,6 +48,10 @@ ProgressCallback = Callable[[int, int | None], None]
 
 class DownloadError(RuntimeError):
     """Raised when a release cannot be found, fetched, or verified."""
+
+
+class DownloadCancelled(DownloadError):
+    """Raised when the caller's stop event ends a download before it is installed."""
 
 
 @dataclass(frozen=True)
@@ -149,13 +154,21 @@ def latest_version(*, api_url: str = RELEASES_API) -> str | None:
 # --------------------------------------------------------------------------- #
 
 
-def _download(url: str, dest: Path, progress: ProgressCallback | None = None) -> None:
+def _download(
+    url: str,
+    dest: Path,
+    progress: ProgressCallback | None = None,
+    stop: threading.Event | None = None,
+) -> None:
+    """Fetch *url* into *dest*; *stop* is checked between chunks."""
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(req, timeout=60) as resp, open(dest, "wb") as out:  # noqa: S310
         total_hdr = resp.headers.get("Content-Length")
         total = int(total_hdr) if total_hdr and total_hdr.isdigit() else None
         done = 0
         while True:
+            if stop is not None and stop.is_set():
+                raise DownloadCancelled(f"Download of {url} cancelled")
             chunk = resp.read(1 << 20)
             if not chunk:
                 break
@@ -327,13 +340,16 @@ def download_patched(
     set_current: bool = True,
     allow_unverified: bool = False,
     force: bool = False,
+    stop: threading.Event | None = None,
 ) -> _cache.InstalledBrowser:
     """Download and install a chromium-telluride release (latest by default).
 
     The tarball must match the release's ``SHA256SUMS``: the MANIFEST that
     checks the binary ships inside the same tarball, so it proves nothing
     alone. A missing or unreadable ``SHA256SUMS`` is a :class:`DownloadError`
-    unless *allow_unverified* is set.
+    unless *allow_unverified* is set. Setting *stop* (from another thread)
+    ends the download at its next chunk with :class:`DownloadCancelled`;
+    nothing is installed and ``current`` is left alone.
     """
     if version is not None:
         _checked(version)
@@ -349,7 +365,9 @@ def download_patched(
     with tempfile.TemporaryDirectory(prefix=".download-", dir=root) as tmp:
         tar_path = Path(tmp) / assets.tarball_name
         log.info("Downloading %s (%s)", assets.tarball_name, assets.tag)
-        _download(assets.tarball_url, tar_path, progress)
+        _download(assets.tarball_url, tar_path, progress, stop)
+        if stop is not None and stop.is_set():
+            raise DownloadCancelled(f"Install of {assets.tarball_name} cancelled")
         return install_from_tarball(
             tar_path,
             cache_root=root,

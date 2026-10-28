@@ -155,7 +155,7 @@ async def test_engine_get_executable_does_not_block_the_loop(tmp_path, monkeypat
 
     from tellurium.browser.engine import PatchedEngine
 
-    def slow_resolve(self):
+    def slow_resolve(self, stop=None):
         time.sleep(0.6)
         return tmp_path / "chrome"
 

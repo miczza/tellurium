@@ -23,7 +23,7 @@ class _Stop(Exception):
 
 
 async def test_patched_binary_resolution_runs_off_the_event_loop(monkeypatch):
-    def slow_resolve(self):
+    def slow_resolve(self, stop=None):
         time.sleep(BLOCK)  # stands for urllib, the download and the hash
         return "/opt/fake/chrome"
 

@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import secrets
+import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 from tellurium.browser import _cache, _update_check
 
 logger = logging.getLogger("tellurium")
+
+#: How long a cancelled launch waits for the binary resolution to stop: a
+#: download stops at its next chunk, the update check within its timeout.
+STOP_TIMEOUT = 10.0
 
 
 class BinaryCorruptedError(RuntimeError):
@@ -93,27 +99,49 @@ class PatchedEngine(BrowserEngine):
     # Binary resolution
     # ------------------------------------------------------------------ #
 
-    def _maybe_auto_security_update(self) -> None:
+    def _maybe_auto_security_update(self, stop: threading.Event | None = None) -> None:
         info = _update_check.check_for_update(cache_root=self._cache_root)
         if info is None or not info.security or not self._auto_security_update:
             return
-        from tellurium.browser._patched_download import DownloadError, download_patched
+        from tellurium.browser._patched_download import (
+            DownloadCancelled,
+            DownloadError,
+            download_patched,
+        )
 
         logger.warning(
             "auto_security_update: installing security release %s (CVE: %s)",
             info.latest,
             ", ".join(info.manifest.get("cve", [])) or "n/a",
         )
+        if stop is not None and stop.is_set():
+            raise DownloadCancelled("auto_security_update cancelled")
         try:
-            download_patched(info.latest, cache_root=self._cache_root)
+            download_patched(info.latest, cache_root=self._cache_root, stop=stop)
+        except DownloadCancelled:
+            raise
         except DownloadError as e:
             logger.error("auto_security_update failed: %s", e)
 
-    def resolve_binary_path(self) -> Path:
+    def resolve_binary_path(self, stop: threading.Event | None = None) -> Path:
+        """Find and verify the binary to launch (blocking: run it in a thread).
+
+        Setting *stop* from another thread ends a security download in flight
+        (:class:`~tellurium.browser._patched_download.DownloadCancelled`).
+        The cache is read under its install lock, so a reinstall swapping
+        the version directory is waited for instead of seen half done.
+        """
+        if not self._chromium_version:
+            self._maybe_auto_security_update(stop)
+        root = self._cache_root
+        lock = _cache.install_lock(root) if root.is_dir() else contextlib.nullcontext()
+        with lock:
+            return self._find_binary()
+
+    def _find_binary(self) -> Path:
         if self._chromium_version:
             version_dir = self._cache_root / self._chromium_version
         else:
-            self._maybe_auto_security_update()
             current = _cache.current_version(self._cache_root)
             if current is None:
                 # No symlink yet: fall back to the newest installed version.
@@ -155,8 +183,19 @@ class PatchedEngine(BrowserEngine):
         if self._executable:
             return self._executable
         # In a thread: the daily update check (HTTP), a security download and
-        # the binary hash all block.
-        return str(await asyncio.to_thread(self.resolve_binary_path))
+        # the binary hash all block. A cancellation stops the thread too, and
+        # waits for it: no download goes on, no partial file stays behind.
+        stop = threading.Event()
+        work = asyncio.ensure_future(asyncio.to_thread(self.resolve_binary_path, stop))
+        try:
+            return str(await asyncio.shield(work))
+        except asyncio.CancelledError:
+            stop.set()
+            await asyncio.wait([work], timeout=STOP_TIMEOUT)
+            raise
+        finally:
+            # Retrieved here, so a failure after a cancellation is not reported as lost.
+            work.add_done_callback(lambda done: done.cancelled() or done.exception())
 
     # ------------------------------------------------------------------ #
     # Flags
