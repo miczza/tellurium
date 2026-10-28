@@ -457,6 +457,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A `cookies.json` that cannot be parsed, whatever the error (a `RecursionError` on a
+  deeply nested file included), no longer fails every `Session.start`: it gives a warning,
+  is moved to `cookies.json.bad-<time>` and the next close writes a good one.
 - A `Tab.get` (or `new_tab(url)`, `is_allowed`) whose robots.txt cannot be loaded because
   the hidden target it is loaded from cannot be opened (`Target.createTarget` or the
   attach failing or timing out) raises `NavigationError` with the cause chained, instead

@@ -58,17 +58,32 @@ def save(folder: str, cookies: list[Cookie], *, at_close: bool = False) -> None:
 
 def read(folder: str) -> tuple[list[Cookie], bool]:
     """The cookies of ``cookies.json`` not yet expired, and whether they were
-    saved as Chrome closed; none if it is missing, a warning and none if it
-    cannot be read (a bad file never blocks a start)."""
+    saved as Chrome closed; none if it is missing. A file that cannot be read
+    gives a warning and none; one that cannot be parsed (any error, a
+    ``RecursionError`` on deep nesting too) is moved to
+    ``cookies.json.bad-<time>``, so a bad file never blocks a start and the
+    next close writes a good one."""
+    path = _file(folder)
     try:
-        with open(_file(folder), encoding="utf-8") as f:
-            raw: Any = json.load(f)
-        cookies = _live([Cookie.from_json(c) for c in raw["cookies"]])
-        return cookies, raw.get("at_close") is True
+        with open(path, "rb") as f:
+            data = f.read()
     except FileNotFoundError:
         return [], False
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-        warnings.warn(f"ignoring unreadable {_file(folder)}: {exc}", stacklevel=2)
+    except OSError as exc:
+        warnings.warn(f"ignoring unreadable {path}: {exc}", stacklevel=2)
+        return [], False
+    try:
+        raw: Any = json.loads(data.decode("utf-8"))
+        cookies = _live([Cookie.from_json(c) for c in raw["cookies"]])
+        return cookies, raw.get("at_close") is True
+    except Exception as exc:  # noqa: BLE001 - whatever the content, it is a bad file
+        aside = f"{path}.bad-{time.time_ns()}"
+        try:
+            os.replace(path, aside)
+        except OSError:
+            aside = None
+        where = f", moved to {aside}" if aside else ""
+        warnings.warn(f"ignoring unreadable {path}{where}: {exc!r}", stacklevel=2)
         return [], False
 
 

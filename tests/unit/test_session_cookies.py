@@ -51,6 +51,27 @@ def test_corrupt_file_warns_and_is_ignored(tmp_path):
         assert session_cookies.load(str(tmp_path)) == []
 
 
+def test_a_too_nested_file_warns_and_is_set_aside(tmp_path):
+    """A RecursionError is a bad file too: set aside, so the next close rewrites it."""
+    (tmp_path / session_cookies.COOKIES_FILE).write_text("[" * 100_000)
+    with pytest.warns(UserWarning, match="cookies.json"):
+        assert session_cookies.read(str(tmp_path)) == ([], False)
+    assert not (tmp_path / session_cookies.COOKIES_FILE).exists()
+    aside = [p.name for p in tmp_path.iterdir() if p.name.startswith("cookies.json.bad-")]
+    assert len(aside) == 1
+
+
+def test_any_parsing_error_is_a_bad_file(tmp_path, monkeypatch):
+    session_cookies.save(str(tmp_path), [_SSO])
+
+    def broken(raw):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(session_cookies.Cookie, "from_json", staticmethod(broken))
+    with pytest.warns(UserWarning, match="unexpected"):
+        assert session_cookies.load(str(tmp_path)) == []
+
+
 class _FakeBrowser:
     def __init__(self, jar=(), fail_read=False, hang_read=False, hang_write=False):
         self.jar = list(jar)
@@ -311,3 +332,11 @@ async def test_a_cookie_changed_after_a_failed_restore_is_kept(tmp_path, fake_la
     async with Session("s", path=str(tmp_path)).start() as browser:
         browser.jar = [newest]
     assert session_cookies.load(str(tmp_path)) == [newest]
+
+
+async def test_a_start_on_a_too_nested_file_succeeds_and_rewrites_it(tmp_path, fake_launch):
+    (tmp_path / session_cookies.COOKIES_FILE).write_text("[" * 100_000)
+    with pytest.warns(UserWarning, match="cookies.json"):
+        async with Session("s", path=str(tmp_path)).start() as browser:
+            browser.jar = [_SSO]
+    assert session_cookies.read(str(tmp_path)) == ([_SSO], True)
