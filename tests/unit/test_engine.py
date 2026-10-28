@@ -19,6 +19,7 @@ def test_patched_engine_capabilities():
     assert "native_cdp_fix" in caps
     assert "native_network_timing" in caps
     assert "native_navigator" in caps
+    assert "native_timezone" in caps
 
 
 def test_patched_engine_build_args_no_profile_uses_random_seed():
@@ -44,9 +45,13 @@ def test_patched_engine_build_args_with_profile():
         locale = "de-DE"
 
     args = engine.build_args(FakeProfile())
-    assert args == ["--fingerprint=42069", "--fingerprint-platform=linux"]
-    # timezone/locale are NOT flags of chromium-telluride (no patch implements them)
-    assert not any("timezone" in a or "locale" in a for a in args)
+    assert args == [
+        "--fingerprint=42069",
+        "--fingerprint-platform=linux",
+        "--fingerprint-timezone=Europe/Berlin",
+    ]
+    # locale is NOT a flag of chromium-telluride (Intl and languages go via --lang and CDP)
+    assert not any("locale" in a for a in args)
 
 
 def test_patched_engine_build_args_partial_profile():

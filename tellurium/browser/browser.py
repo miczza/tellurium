@@ -137,10 +137,10 @@ class Browser(CookieJar):
             Raises :class:`~tellurium.browser.launcher.LaunchError` when
             Chrome branded >= 137 is used (use Chrome for Testing instead).
         timezone:
-            Manual IANA timezone override (``"Europe/Rome"``).  Takes
-            precedence over the GeoIP result and over the stealth profile's
-            default.  Applied with ``Emulation.setTimezoneOverride`` even when
-            ``stealth=False``.
+            Manual IANA timezone override (``"Europe/Rome"``), over GeoIP and
+            the stealth profile.  Applied with ``Emulation.setTimezoneOverride``
+            even when ``stealth=False``; the patched engine also gets
+            ``--fingerprint-timezone``.
         languages:
             Manual ``navigator.languages`` override (``["it-IT", "it", "en"]``).
             Takes precedence over GeoIP / profile.  Passed to Chrome as
@@ -341,7 +341,7 @@ class Browser(CookieJar):
             if stealth and stealth_profile is not None:
                 engine_args = engine.build_args(stealth_profile)
             else:
-                seeded = SimpleNamespace(seed=seed) if seed is not None else None
+                seeded = SimpleNamespace(seed=seed, timezone=timezone)
                 engine_args = engine.build_args(seeded)
 
             # 7. Stealth flags (extension + WebRTC)

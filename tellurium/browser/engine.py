@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import secrets
 import threading
 from abc import ABC, abstractmethod
@@ -17,6 +18,10 @@ logger = logging.getLogger("tellurium")
 #: How long a cancelled launch waits for the binary resolution to stop: a
 #: download stops at its next chunk, the update check within its timeout.
 STOP_TIMEOUT = 10.0
+
+#: A plausible IANA timezone id (``Europe/Rome``, ``Etc/GMT+3``, ``UTC``): no
+#: spaces, no ``=``, nothing a command line could split or reinterpret.
+_IANA_TIMEZONE = re.compile(r"[A-Za-z0-9_+\-]+(?:/[A-Za-z0-9_+\-]+)*")
 
 
 class BinaryCorruptedError(RuntimeError):
@@ -59,8 +64,10 @@ class PatchedEngine(BrowserEngine):
 
     Flags emitted (contract: ``chromium-telluride/docs/usage.md``):
     ``--fingerprint=<seed>`` (always; random seed when no profile/seed is
-    given because the fork requires it), ``--fingerprint-platform=<os>``
-    and ``--fingerprint-webrtc-ip=<mode>``.
+    given because the fork requires it), ``--fingerprint-platform=<os>``,
+    ``--fingerprint-timezone=<IANA>`` (only with a plausible timezone; the
+    CDP override stays for binaries that do not read it) and
+    ``--fingerprint-webrtc-ip=<mode>``.
     """
 
     VERSION = "146.0.7680.188"
@@ -215,6 +222,15 @@ class PatchedEngine(BrowserEngine):
         target_os = getattr(profile, "target_os", None)
         if target_os:
             args.append(f"--fingerprint-platform={target_os}")
+        timezone = getattr(profile, "timezone", None)
+        if timezone is not None:
+            if isinstance(timezone, str) and _IANA_TIMEZONE.fullmatch(timezone):
+                args.append(f"--fingerprint-timezone={timezone}")
+            else:
+                logger.warning(
+                    "Timezone %r is not a plausible IANA id; not passed as --fingerprint-timezone.",
+                    timezone,
+                )
         if self._webrtc_ip_flag is not None:
             args.append(f"--fingerprint-webrtc-ip={self._webrtc_ip_flag}")
         return args
@@ -226,6 +242,7 @@ class PatchedEngine(BrowserEngine):
             "native_cdp_fix",
             "native_network_timing",
             "native_navigator",
+            "native_timezone",
         }
 
 
