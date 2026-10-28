@@ -88,7 +88,10 @@ async def login(name: str, url: str | None = None, *, directory: str, enter: boo
     session = await asyncio.to_thread(Session, name, path=os.path.join(directory, name))
     hints = session._launch_hints
     args = [*(hints.get("args") or []), KEEP_ALIVE]
-    stealth = stealth_choice.stealth_for(session)
+    warning = stealth_choice.notice(session)
+    if warning is not None:
+        print(f"Warning: {warning}", file=sys.stderr)
+    stealth = warning is None
     async with session.start(headless=False, stealth=stealth, args=args) as browser:
         await session.save_now()  # the seed survives a crash
         tab = browser.main_tab

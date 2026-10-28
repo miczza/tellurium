@@ -24,7 +24,7 @@ from tellurium.mcp.limits import SessionBudget
 from tellurium.mcp.results import Reply, ToolError
 from tellurium.mcp.tool import Tool, param
 from tellurium.session import Session, SessionBusyError
-from tellurium.session.stealth_choice import stealth_for
+from tellurium.session.stealth_choice import notice
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,8 @@ class BrowserSession:
         self.browser = browser
         self.session: Session | None = session
         self._stack = stack
+        #: What the agent must be told about how it was opened (no stealth), if anything.
+        self.notice: str | None = None
 
     @property
     def persistent(self) -> bool:
@@ -152,7 +154,8 @@ class SessionPool:
         stack.callback(self._claims.release, name, self)  # last out: after the save and close
         try:
             session = await asyncio.to_thread(Session, name, path=path)
-            options = {**self._launch_options(), "stealth": stealth_for(session)}
+            warning = notice(session)
+            options = {**self._launch_options(), "stealth": warning is None}
             browser = await stack.enter_async_context(session.start(**options))
             await session.save_now()  # the seed survives a crash
         except SessionBusyError as exc:  # another process took it after the check
@@ -161,7 +164,9 @@ class SessionPool:
         except BaseException:
             await stack.aclose()
             raise
-        return BrowserSession(name, browser, stack, session)
+        opened = BrowserSession(name, browser, stack, session)
+        opened.notice = warning
+        return opened
 
     def get(self, session_id: str) -> BrowserSession:
         try:
@@ -289,7 +294,11 @@ async def _session_open(pool: SessionPool, args: dict[str, Any]) -> Reply:
     }
     verb = "opened" if created else "already open:"
     kind = "named session" if session.persistent else "throwaway session"
-    return Reply(f"{verb} {kind} {session.id}, tab {tid}", data)
+    text = f"{verb} {kind} {session.id}, tab {tid}"
+    if session.notice:
+        text += f"\nWarning: {session.notice}"
+        data["warning"] = session.notice
+    return Reply(text, data)
 
 
 async def _session_list(pool: SessionPool, args: dict[str, Any]) -> Reply:

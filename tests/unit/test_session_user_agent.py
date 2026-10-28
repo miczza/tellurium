@@ -7,7 +7,6 @@ suggests a stealth=False neither lets one choose."""
 from __future__ import annotations
 
 import json
-import logging
 
 import pytest
 
@@ -25,17 +24,20 @@ def _saved(folder, args):
     return Session(folder.name, path=str(folder))
 
 
-def test_stealth_unless_the_session_sets_its_own_user_agent(tmp_path, caplog):
-    assert stealth_choice.stealth_for(Session("a", path=str(tmp_path / "a"))) is True
-    assert stealth_choice.stealth_for(_saved(tmp_path / "b", ["--lang=it"])) is True
-    with caplog.at_level(logging.WARNING):
-        assert stealth_choice.stealth_for(_saved(tmp_path / "c", [_UA])) is False
-    assert "user-agent" in caplog.text.lower()
+def test_stealth_unless_the_session_sets_its_own_user_agent(tmp_path):
+    assert stealth_choice.notice(Session("a", path=str(tmp_path / "a"))) is None
+    assert stealth_choice.notice(_saved(tmp_path / "b", ["--lang=it"])) is None
+    assert "without stealth" in stealth_choice.notice(_saved(tmp_path / "c", [_UA]))
+
+
+class _FakeTab:
+    closed = False
 
 
 class _FakeBrowser:
     def __init__(self):
-        self.main_tab = object()
+        self.main_tab = _FakeTab()
+        self.tabs = [self.main_tab]
 
     async def get_cookies(self, domain=None):
         return []
@@ -63,7 +65,7 @@ def launched(monkeypatch):
     return seen
 
 
-async def test_tellurium_login_opens_it(tmp_path, launched, monkeypatch):
+async def test_tellurium_login_opens_it(tmp_path, launched, monkeypatch, capsys):
     _saved(tmp_path / "acct", [_UA])
 
     async def done_at_once(browser, tab, stdin, keeper=None):
@@ -77,19 +79,24 @@ async def test_tellurium_login_opens_it(tmp_path, launched, monkeypatch):
     await login_command.login("acct", directory=str(tmp_path))
     assert launched[0]["stealth"] is False
     assert _UA in launched[0]["args"]
+    err = capsys.readouterr().err
+    assert "without stealth" in err and "--user-agent" in err
 
 
 async def test_mcp_opens_it(tmp_path, launched):
     pytest.importorskip("mcp")
     from tellurium.mcp.config import ServerConfig
-    from tellurium.mcp.sessions import SessionPool
+    from tellurium.mcp.sessions import SessionPool, _session_open
 
     config = ServerConfig(home=tmp_path)
     _saved(config.sessions_dir / "acct", [_UA])
     async with SessionPool(config) as pool:
-        await pool.open("acct")
+        reply = await _session_open(pool, {"name": "acct"})
+        again = await _session_open(pool, {"name": "acct"})
     assert launched[0]["stealth"] is False
     assert _UA in launched[0]["args"]
+    assert "without stealth" in reply.text and "--user-agent" in reply.text
+    assert "without stealth" in again.text  # every reply about this session says it
 
 
 async def test_mcp_keeps_stealth_for_the_others(tmp_path, launched):
