@@ -405,11 +405,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - The RFC 9309 parser and matcher of robots.txt moved from `tellurium.browser.robots`
   to `tellurium.browser.robots_rules` (no behaviour change; `parse`, `RobotsRules`,
-  `ALLOW_ALL` and `DISALLOW_ALL` are still importable from `robots`).
+  `ALLOW_ALL` and `DISALLOW_ALL` are still importable from `robots`). New public name
+  `robots_rules.PRODUCT_TOKEN` (was `robots._AGENT`), the product-token pattern that
+  `Robots` checks `robots_agent` against.
 - The pruning of the AX tree into `SnapshotNode` trees (`build_nodes`) moved from
   `tellurium.browser.snapshot` to `tellurium.browser.snapshot_text`, next to the
   rendering (no behaviour change; `SnapshotNode`, `build_nodes` and `render` are still
-  importable from `snapshot`).
+  importable from `snapshot`). New public names in `snapshot_text`, used by `snapshot`:
+  `Unread` (was `snapshot._Unread`, the URL of a cross-site iframe left out, with its
+  `state`), `ax_role` and `ax_props` (were `snapshot._role` and `snapshot._props`, the
+  role and properties of an AX node).
 - `tellurium.browser.geometry.frame_chain(session)` is public (it was `_chain`): the
   `(session, parent session, frame id)` of each cross-site frame up to the tab; the
   trap-link check uses it instead of the private name.
