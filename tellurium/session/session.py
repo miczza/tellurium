@@ -143,22 +143,53 @@ class Session:
         self._login = fn
         return fn
 
-    def save(self, *, full: bool = False) -> asyncio.Task | None:
+    def save(self, *, full: bool = False) -> None:
         """Serialize the current session state to session.json, and the cookie
-        jar to cookies.json: during a start, the jar Chrome has now; else the
-        one of the last start or close.
+        jar to cookies.json: the one of the last start or close, or, during a
+        start, the jar Chrome has now.
 
-        During a start the jar is read from Chrome: called from another thread
-        (``await asyncio.to_thread(session.save)``) it waits for it, at most
-        :data:`LIVE_SAVE_TIMEOUT` seconds; called on the start's own loop it
-        cannot wait, so it returns a task that writes it (``await
-        session.save()``; the close waits for it too). A Chrome that does not
-        answer leaves cookies.json as it was, with a warning in the log.
+        During a start, on its own loop, use ``await session.save_now()``:
+        ``save()`` cannot wait for Chrome there and raises ``RuntimeError``
+        (an old jar would be wrong). From another thread
+        (``await asyncio.to_thread(session.save)``) it waits for Chrome, at
+        most :data:`LIVE_SAVE_TIMEOUT` seconds. A Chrome that does not answer
+        leaves cookies.json as it was, with a warning in the log.
 
         `full=True` includes the last set of launch parameters used by start()
         (or stored hints if start() has not run). If neither exists, the file
         is still lean (no `launch` block).
         """
+        if self._live is not None and _running_loop() is self._live_loop:
+            raise RuntimeError(
+                "session.save() on the loop of a running start cannot read Chrome's "
+                "cookies: use `await session.save_now()`"
+            )
+        self._write_json(full)
+        browser, loop = self._live, self._live_loop
+        if browser is None or loop is None:
+            self._write_known_jar()
+            return
+        future = asyncio.run_coroutine_threadsafe(self._tracked_save(browser), loop)
+        try:
+            future.result(LIVE_SAVE_TIMEOUT)
+        except Exception:  # noqa: BLE001 - the loop is stuck or gone: keep the file
+            future.cancel()
+            logger.warning("could not save the cookies of %s", self.path, exc_info=True)
+
+    async def save_now(self, *, full: bool = False) -> None:
+        """:meth:`save`, from async code: during a start the cookie jar is the
+        one Chrome has now (read within ``session_cookies.TIMEOUT``; a Chrome
+        that does not answer leaves cookies.json as it was, with a warning in
+        the log), else the one of the last start or close."""
+        await asyncio.to_thread(self._write_json, full)
+        browser = self._live
+        if browser is None or _running_loop() is not self._live_loop:
+            await asyncio.to_thread(self._write_known_jar)
+            return
+        self._saving = asyncio.ensure_future(self._save_live(browser))
+        await self._saving
+
+    def _write_json(self, full: bool) -> None:
         if self._created_at is None:
             self._created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -179,35 +210,18 @@ class Session:
                 payload["launch"] = dict(launch)
 
         storage.save(self._json_path(), payload, full=full)
-        return self._save_cookies()
 
-    def _save_cookies(self) -> asyncio.Task | None:
-        browser, loop = self._live, self._live_loop
-        if browser is None or loop is None:
-            if self._session_cookies is not None:
-                session_cookies.save(
-                    self.path, self._session_cookies, at_close=self._cookies_at_close
-                )
-            return None
-        try:
-            running = asyncio.get_running_loop()
-        except RuntimeError:
-            running = None
-        if running is loop:
-            self._saving = loop.create_task(self._save_live(browser))
-            return self._saving
-        future = asyncio.run_coroutine_threadsafe(self._save_live(browser), loop)
-        try:
-            future.result(LIVE_SAVE_TIMEOUT)
-        except Exception:  # noqa: BLE001 - the loop is stuck or gone: keep the file
-            future.cancel()
-            logger.warning("could not save the cookies of %s", self.path, exc_info=True)
-        return None
+    def _write_known_jar(self) -> None:
+        if self._session_cookies is not None:
+            session_cookies.save(self.path, self._session_cookies, at_close=self._cookies_at_close)
+
+    async def _tracked_save(self, browser) -> None:
+        self._saving = asyncio.current_task()  # the close waits for it
+        await self._save_live(browser)
 
     async def _save_live(self, browser) -> None:
         """Chrome's jar now (with the cookies a restore left pending), not as
         it closes: the next start only puts back what Chrome lacks."""
-        self._saving = asyncio.current_task()
         try:
             jar = await session_cookies.snapshot(browser)
             assert self._reinjection is not None  # set before _live
@@ -428,6 +442,13 @@ def _validate_json_value(value: Any) -> None:
         f"metadata values must be JSON-serializable "
         f"(str, int, float, bool, None, list, dict); got {type(value).__name__}"
     )
+
+
+def _running_loop() -> asyncio.AbstractEventLoop | None:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
 
 
 def _fresh_seed() -> int:

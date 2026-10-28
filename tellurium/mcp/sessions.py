@@ -53,7 +53,7 @@ class BrowserSession:
         """Save a named session, then close its browser (both even on error)."""
         try:
             if self.session is not None:
-                await asyncio.to_thread(self.session.save)
+                await self.session.save_now()
         finally:
             await self._stack.aclose()
 
@@ -154,7 +154,7 @@ class SessionPool:
             session = await asyncio.to_thread(Session, name, path=path)
             options = {**self._launch_options(), "stealth": stealth_for(session)}
             browser = await stack.enter_async_context(session.start(**options))
-            await asyncio.to_thread(session.save)  # the seed survives a crash
+            await session.save_now()  # the seed survives a crash
         except SessionBusyError as exc:  # another process took it after the check
             await stack.aclose()
             raise busy(name, exc.pid) from exc

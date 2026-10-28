@@ -90,7 +90,7 @@ async def login(name: str, url: str | None = None, *, directory: str, enter: boo
     args = [*(hints.get("args") or []), KEEP_ALIVE]
     stealth = stealth_choice.stealth_for(session)
     async with session.start(headless=False, stealth=stealth, args=args) as browser:
-        await asyncio.to_thread(session.save)  # the seed survives a crash
+        await session.save_now()  # the seed survives a crash
         tab = browser.main_tab
         keeper = await _open_keeper(browser)
         if url:
@@ -99,7 +99,7 @@ async def login(name: str, url: str | None = None, *, directory: str, enter: boo
             except (TimeoutError, NavigationError) as exc:
                 print(f"Warning: could not open {url}: {exc}", file=sys.stderr)
         await _until_done(browser, tab, sys.stdin if enter else None, keeper)
-    await asyncio.to_thread(session.save)
+    await session.save_now()
     return session.path
 
 

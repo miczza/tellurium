@@ -79,7 +79,7 @@ async def test_first_run_triggers_login_then_persists(tmp_path, local_server):
         await tab.get(f"{local_server}/dashboard.html")
         el = await tab.select(".welcome", timeout=3)
         assert el is not None
-        s.save()
+        await s.save_now()
 
     # session.json must exist and contain our metadata
     import json as J
@@ -114,7 +114,7 @@ async def test_second_run_skips_login(tmp_path, local_server):
         await tab.wait(0.6)
 
     async with s.start(headless=True):
-        s.save()
+        await s.save_now()
     assert login_calls["n"] == 1
 
     # Re-open the same session dir: cookie is still in user_data_dir
@@ -160,7 +160,7 @@ async def test_portability_new_session_loads_metadata(tmp_path, local_server):
         await tab.wait(0.6)
 
     async with s_a.start(headless=True):
-        s_a.save()
+        await s_a.save_now()
 
     # Step 2: script B constructs a Session with just the name/path, no
     # hardcoded credentials. Simulate cookie invalidation by deleting cookies
@@ -272,7 +272,7 @@ async def test_full_save_roundtrips_launch_params(tmp_path, local_server):
     s = Session("full1", path=str(tmp_path / "s"))
 
     async with s.start(headless=True):
-        s.save(full=True)
+        await s.save_now(full=True)
 
     # Reopen the same session: launch_hints should now contain headless=True
     s2 = Session("full1", path=str(tmp_path / "s"))
@@ -292,3 +292,22 @@ async def test_a_too_nested_cookies_file_warns_and_the_start_goes_on(tmp_path):
             assert await browser.main_tab.eval("1 + 1") == 2
     assert json.loads((path / "cookies.json").read_text())["at_close"] is True
     assert any(p.name.startswith("cookies.json.bad-") for p in path.iterdir())
+
+
+async def test_save_now_writes_the_cookie_chrome_has_now(tmp_path, local_server):
+    """A cookie set by the page a moment ago is in cookies.json while Chrome
+    still runs; save() on the loop points to save_now instead."""
+    import json
+
+    session = Session("s", path=str(tmp_path / "s"))
+    async with session.start(headless=True) as browser:
+        tab = browser.main_tab
+        await tab.get(f"{local_server}/basic.html")
+        await tab.eval("document.cookie = 'fresh=1; path=/'")
+        await session.save_now()
+        saved = json.loads((tmp_path / "s" / "cookies.json").read_text())
+        assert any(c["name"] == "fresh" and c["expires"] == -1 for c in saved["cookies"])
+        assert saved["at_close"] is False
+        assert (tmp_path / "s" / "session.json").exists()
+        with pytest.raises(RuntimeError, match="save_now"):
+            session.save()

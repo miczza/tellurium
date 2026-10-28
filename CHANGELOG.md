@@ -7,6 +7,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `await Session.save_now(full=False)`: `save()` from async code; during a start the cookie
+  jar written is the one Chrome has now (read within 5 s), with the cookies a failed restore
+  left pending.
 - `Session.start(..., manual_timeout=600.0)`: the seconds a person gets to sign in with
   `on_login_failure="manual"` (was the fixed `MANUAL_TIMEOUT`, still the default).
 - `SessionPool.open(name, create=True)`: with `create=False` a missing identity raises
@@ -473,10 +476,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   says so, instead of a `LaunchError` carrying Wayland's log from the headed relaunch; each
   round of the validators gets at most 30 s (`manual_login.VALIDATOR_TIMEOUT`) and within the
   deadline, so a validator that hangs shows the banner again instead of stalling the start.
-- `Session.save()` during a start writes the cookie jar Chrome has now, not the one read at
-  the start: from another thread (`await asyncio.to_thread(session.save)`, as `tellurium mcp`
-  and `tellurium login` do) it waits for Chrome (at most 10 s); on the start's own loop it
-  returns a task to await (the close waits for it). Outside a start it returns `None` as before.
+- `Session.save()` during a start no longer writes the cookie jar read at the start: from
+  another thread (`await asyncio.to_thread(session.save)`) it waits for Chrome's jar (at most
+  10 s); on the loop of the running start, where it cannot wait, it raises `RuntimeError`
+  pointing to `await session.save_now()`. `tellurium mcp` and `tellurium login` use
+  `save_now`.
 - `SessionPool` works across one `asyncio.run` after another: its semaphore is made in the
   loop of the open instead of in `__init__` (it failed with "bound to a different event loop").
 - `SessionPool.open`: an identity deleted (by another process) while its open waited for a slot

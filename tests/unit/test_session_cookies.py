@@ -406,17 +406,30 @@ async def test_save_from_a_thread_during_a_start_writes_the_current_jar(tmp_path
     assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)  # the close's is the last
 
 
-async def test_save_on_the_loop_during_a_start_writes_the_current_jar(tmp_path, fake_launch):
+async def test_save_now_during_a_start_writes_the_current_jar(tmp_path, fake_launch):
     session = Session("s", path=str(tmp_path))
     async with session.start() as browser:
         browser.jar = [_SSO]
-        await session.save()  # on the loop: awaitable, the jar is read from Chrome
+        assert await session.save_now() is None
         assert session_cookies.read(str(tmp_path)) == ([_SSO], False)
+        assert (tmp_path / "session.json").exists()
         browser.jar = [_KEPT]
-        session.save()  # not awaited: the close waits for it, then writes its own
+    assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)  # the close's is the last
+    await session.save_now()  # closed: the jar the close read
     assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)
-    assert session.save() is None  # closed: the jar the close read
-    assert session_cookies.read(str(tmp_path)) == ([_KEPT], True)
+
+
+async def test_save_on_the_loop_of_a_running_start_points_to_save_now(tmp_path, fake_launch):
+    """It cannot wait for Chrome there, and an old snapshot would be wrong."""
+    session = Session("s", path=str(tmp_path))
+    async with session.start() as browser:
+        browser.jar = [_SSO]
+        with pytest.raises(RuntimeError, match=r"await session.save_now\(\)"):
+            session.save()
+        assert not (tmp_path / session_cookies.COOKIES_FILE).exists() or (
+            session_cookies.load(str(tmp_path)) == []
+        )
+    assert session.save() is None  # closed: fine again
 
 
 async def test_a_live_save_keeps_the_cookies_a_failed_restore_left_pending(
@@ -428,7 +441,7 @@ async def test_a_live_save_keeps_the_cookies_a_failed_restore_left_pending(
     session_cookies.save(str(tmp_path), [_SSO])
     session = Session("s", path=str(tmp_path))
     async with session.start():
-        await session.save()
+        await session.save_now()
         assert session_cookies.load(str(tmp_path)) == [_KEPT, _SSO]
 
 
@@ -437,5 +450,5 @@ async def test_a_live_save_with_chrome_gone_keeps_the_file(tmp_path, fake_launch
     session = Session("s", path=str(tmp_path))
     async with session.start() as browser:
         browser.fail_read = True
-        await session.save()
+        await session.save_now()
         assert session_cookies.load(str(tmp_path)) == [_SSO]

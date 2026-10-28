@@ -45,6 +45,9 @@ class _FakeSession:
     def save(self):
         pass
 
+    async def save_now(self):
+        pass
+
 
 @pytest.fixture
 def fake_session(monkeypatch):

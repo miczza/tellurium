@@ -29,7 +29,7 @@ async def write(path: str, base: str) -> None:
         tab = await browser.get(f"{base}/session-cookie")
         await tab.get(f"{base}/session_cookie.html")
         await tab.eval("document.cookie = 'late=1; path=/; max-age=3600'")
-        session.save()
+        await session.save_now()
 
 
 async def read(path: str) -> None:

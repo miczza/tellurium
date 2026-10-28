@@ -1491,7 +1491,7 @@ async with session.start(stealth=True, headless=False) as browser:
     tab = browser.main_tab
     await tab.get("https://example.com/dashboard")
     # ... scraping ...
-    session.save()
+    await session.save_now()  # metadata, seed and the cookies Chrome has now
 ```
 
 ### On-disk layout
@@ -1516,7 +1516,8 @@ Tellurium sets `0600` permissions on POSIX; it does not encrypt the file.
 | `@session.validate` | Register an async `(tab) -> bool` validator. Multiple allowed. |
 | `@session.login` | Register the async `(tab, metadata)` login callback. Only one. |
 | `session.start(**kwargs)` | Async context manager. Launches the browser, runs validators, calls login on failure. Kwargs are forwarded to `Browser.launch()` (except `user_data_dir` and `seed`). |
-| `session.save(full=False)` | Persist state. `full=True` also saves launch params used. |
+| `session.save(full=False)` | Persist state (`session.json`, and the cookie jar of the last start or close to `cookies.json`). `full=True` also saves launch params used. On the loop of a running start it raises `RuntimeError`: use `save_now`. From another thread during a start it waits for Chrome's jar (at most 10 s). |
+| `await session.save_now(full=False)` | The same from async code: during a start, the cookie jar is the one Chrome has now (read within 5 s; a Chrome that does not answer leaves `cookies.json` as it was, with a warning in the log). |
 
 ### Validation modes
 
@@ -1599,7 +1600,8 @@ titles = await asyncio.gather(*(scrape(f"user{i}") for i in range(20)))
 - **Names** are 1-64 letters, digits, `.`, `_` or `-`, starting with a letter or
   digit: anything else is a `ValueError`, so no name escapes the directory.
 - `open()` writes `session.json` only for an identity that has none (so its seed
-  lasts); metadata you change is saved by `session.save()`, as with `Session`.
+  lasts); metadata you change is saved by `await session.save_now()` (or
+  `session.save()` outside the open), as with `Session`.
 
 ## Patched binary (chromium-telluride)
 
