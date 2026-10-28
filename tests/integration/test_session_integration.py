@@ -277,3 +277,18 @@ async def test_full_save_roundtrips_launch_params(tmp_path, local_server):
     # Reopen the same session: launch_hints should now contain headless=True
     s2 = Session("full1", path=str(tmp_path / "s"))
     assert s2._launch_hints.get("headless") is True
+
+
+async def test_a_too_nested_cookies_file_warns_and_the_start_goes_on(tmp_path):
+    """100 000 ``[`` (a RecursionError while parsing): a warning, the file set
+    aside, and the close writes a good one."""
+    import json
+
+    path = tmp_path / "s"
+    path.mkdir()
+    (path / "cookies.json").write_text("[" * 100_000)
+    with pytest.warns(UserWarning, match="cookies.json"):
+        async with Session("s", path=str(path)).start(headless=True) as browser:
+            assert await browser.main_tab.eval("1 + 1") == 2
+    assert json.loads((path / "cookies.json").read_text())["at_close"] is True
+    assert any(p.name.startswith("cookies.json.bad-") for p in path.iterdir())
