@@ -135,7 +135,7 @@ class PatchedEngine(BrowserEngine):
         if not self._chromium_version:
             self._maybe_auto_security_update(stop)
         root = self._cache_root
-        lock = _cache.reading_lock(root) if root.is_dir() else contextlib.nullcontext()
+        lock = _cache.reading_lock(root, stop) if root.is_dir() else contextlib.nullcontext()
         with lock:
             return self._find_binary()
 

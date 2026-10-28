@@ -27,6 +27,8 @@ import os
 import re
 import shutil
 import sys
+import threading
+import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -41,6 +43,13 @@ LOCK_NAME = ".install.lock"
 #: An install moved aside during a swap; one outside the lock is an orphan.
 OLD_PREFIX = ".old-"
 MANIFEST_NAME = "MANIFEST.json"
+#: How long a launch waits for an install in progress to release the cache.
+LOCK_TIMEOUT = 60.0
+_LOCK_POLL = 0.05
+
+
+class LockWaitStopped(RuntimeError):
+    """Raised when the caller's stop event ends a wait for the install lock."""
 
 
 _VERSION_RE = re.compile(r"\d+(?:\.\d+){3}")
@@ -199,31 +208,75 @@ def install_lock(root: Path | None = None) -> Iterator[None]:
 
 
 @contextlib.contextmanager
-def reading_lock(root: Path) -> Iterator[None]:
-    """Hold the install lock *shared* while reading the cache (POSIX).
+def reading_lock(root: Path, stop: threading.Event | None = None) -> Iterator[None]:
+    """Hold the install lock *shared* while reading the cache.
 
-    Installs, which hold it exclusive, are waited for; other readers are
-    not. A lock file that cannot be opened for permissions (a read-only
-    mount, an image, another user's cache) means reading without the lock:
-    this process could not install there either. Windows has no shared
-    lock: there the reader holds :func:`install_lock`.
+    Installs, which hold it exclusive, are waited for (at most
+    :data:`LOCK_TIMEOUT`, then :class:`TimeoutError`; setting *stop* ends the
+    wait with :class:`LockWaitStopped`); other readers are not (POSIX;
+    Windows has no shared lock, there readers exclude each other too). A
+    lock file that cannot be opened for permissions (a read-only mount, an
+    image, another user's cache) means reading without the lock: this
+    process could not install there either.
     """
     fh = _open_lock(root / LOCK_NAME)
     if fh is None:
         yield
         return
     with fh:
-        if sys.platform == "win32":
-            with install_lock(root):
-                yield
-            return
-        import fcntl
-
-        fcntl.flock(fh.fileno(), fcntl.LOCK_SH)
+        _acquire(fh, root, stop)
         try:
             yield
         finally:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            _unlock(fh)
+
+
+def _try_lock(fh: Any) -> None:
+    """Take the lock on *fh* without waiting (shared on POSIX); OSError if held."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fh.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+
+
+def _unlock(fh: Any) -> None:
+    if sys.platform == "win32":
+        import msvcrt
+
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def _acquire(fh: Any, root: Path, stop: threading.Event | None) -> None:
+    """Take the lock on *fh*; give up when *stop* is set or after :data:`LOCK_TIMEOUT`."""
+    deadline = time.monotonic() + LOCK_TIMEOUT
+    while True:
+        try:
+            _try_lock(fh)
+            return
+        except OSError:  # BlockingIOError on POSIX, PermissionError from msvcrt
+            pass
+        if stop is not None and stop.is_set():
+            raise LockWaitStopped(f"Stopped waiting for the install lock of {root}")
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"The patched-browser cache {root} has been held by another install for "
+                f"over {LOCK_TIMEOUT:.0f} s (its install lock): is a "
+                "`tellurium download-browser` suspended or stuck?"
+            )
+        if stop is not None:
+            stop.wait(_LOCK_POLL)
+        else:
+            time.sleep(_LOCK_POLL)
 
 
 def _open_lock(path: Path) -> Any:

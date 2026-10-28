@@ -138,3 +138,53 @@ def test_a_read_only_cache_still_launches(tmp_path, monkeypatch, lock_file):
     finally:
         root.chmod(0o755)
     assert binary.is_file() and binary.resolve().parent == version_dir
+
+
+def _held_lock(root):
+    """A thread holding the install lock (a `download-browser` suspended with Ctrl-Z)."""
+    held, release = threading.Event(), threading.Event()
+
+    def hold() -> None:
+        with _cache.install_lock(root):
+            held.set()
+            release.wait(30)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    assert held.wait(5)
+    return holder, release
+
+
+def test_waiting_for_a_held_lock_has_a_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr("tellurium.browser._update_check.check_for_update", lambda **kw: None)
+    monkeypatch.setattr(_cache, "LOCK_TIMEOUT", 0.3)
+    root = tmp_path / "cache"
+    _install(root, NEW)
+    _cache.set_current(NEW, root)
+    holder, release = _held_lock(root)
+    try:
+        with pytest.raises(TimeoutError, match="install lock"):
+            PatchedEngine(cache_root=root).resolve_binary_path()
+    finally:
+        release.set()
+        holder.join(5)
+
+
+async def test_cancelling_the_launch_stops_waiting_for_the_lock(tmp_path, monkeypatch):
+    monkeypatch.setattr("tellurium.browser._update_check.check_for_update", lambda **kw: None)
+    root = tmp_path / "cache"
+    _install(root, NEW)
+    _cache.set_current(NEW, root)
+    holder, release = _held_lock(root)
+    try:
+        resolving = asyncio.ensure_future(PatchedEngine(cache_root=root).get_executable())
+        await asyncio.sleep(0.2)
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        resolving.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await resolving
+        assert loop.time() - start < 1.0, "the resolving thread kept waiting for the lock"
+    finally:
+        release.set()
+        holder.join(5)

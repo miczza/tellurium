@@ -474,7 +474,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   install lock (shared: launches do not wait for each other), so a forced reinstall
   swapping the version directory no longer makes a concurrent launch fail with "binary not
   found"; a cache whose lock file cannot be opened (read-only mount, image, another user's
-  cache) is read without it.
+  cache) is read without it. A launch waits for an install holding the lock at most 60 s
+  (then `TimeoutError` naming the cache, e.g. behind a suspended `tellurium
+  download-browser`), and stops waiting as soon as it is cancelled.
 - A `Tab.get` (or `new_tab(url)`, `is_allowed`) whose robots.txt cannot be loaded because
   the hidden target it is loaded from cannot be opened (`Target.createTarget` or the
   attach failing or timing out) raises `NavigationError` with the cause chained, instead
