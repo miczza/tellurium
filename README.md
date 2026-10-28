@@ -1532,6 +1532,18 @@ When a login cannot be scripted (2FA, captchas, SSO), let a person do it:
 tellurium login github https://github.com/login   # once; then MCP and scripts reuse it
 ```
 
+Chrome opens two windows: the one to sign in, and a second one, minimized,
+titled "tellurium login: keep this window". Chrome forgets the cookies with no
+expiry (most sign-ins) when its last window closes, so this second window keeps
+its browsing session alive while you close the first: the whole cookie jar is
+then saved, a cookie written an instant before included. Leave it alone; it
+closes with Chrome at the end. A window manager may not honour the minimize
+(some Wayland compositors, a bare X server): it then shows as a normal window,
+and works the same. If you close both, the cookies read while a window was
+open are saved, and one set in the last 0.3 s can be missed. A session saved
+with its own `--user-agent` in its launch args is opened without stealth, and
+`tellurium login` (like the MCP `session-open` reply) says so.
+
 "Done" (like Enter or closing the window) saves the session as it is: it does
 not prove that the sign-in worked, and a hostile page can even trick a click
 onto it (see [its limits](#asking-a-person-for-help)). Where the session is
