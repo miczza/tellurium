@@ -461,6 +461,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `tellurium login` no longer loses a cookie with no expiry written in the last 0.3 s before
+  the person closes the sign-in window: a second, minimized window of Chrome keeps its
+  browsing session open, so the close reads the whole jar. Closing both windows falls back to
+  the jar read while one was open, as before.
 - A session saved with its own `--user-agent` among its launch args opens again from
   `tellurium mcp` and `tellurium login`: they launch it without stealth (with a warning in the
   log) instead of failing with a `ValueError` that suggests a `stealth=False` neither offers.

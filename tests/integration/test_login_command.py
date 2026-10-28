@@ -51,6 +51,20 @@ async def _cookie(browser, name, timeout=15.0):
         await asyncio.sleep(0.1)
 
 
+async def _loaded(tab, page, timeout=15.0):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        try:
+            href = await tab.eval("document.readyState === 'complete' && location.href")
+        except Exception:  # noqa: BLE001 - mid-navigation
+            href = None
+        if href and page in href:
+            return
+        assert loop.time() < deadline, f"{page} never loaded"
+        await asyncio.sleep(0.1)
+
+
 async def _close_windows(browser) -> None:
     """What the person does: close every window (Chrome stays up for the save)."""
     root = browser._router.root
@@ -107,3 +121,27 @@ async def test_done_on_the_banner_ends_the_login_too(tmp_path, local_server, lau
         task.cancel()
     assert (tmp_path / "acct" / "session.json").exists()
     assert (tmp_path / "acct" / "cookies.json").exists()
+
+
+async def test_a_cookie_set_just_before_the_window_closes_is_saved(
+    tmp_path, local_server, launched
+):
+    """A session cookie (no expiry) written 50 ms before the person closes the
+    sign-in window: Chrome drops those with its last window, so it is kept
+    open by another one of its own until the jar has been saved."""
+    task = asyncio.create_task(
+        login_command.login("acct", f"{local_server}/basic.html", directory=str(tmp_path))
+    )
+    try:
+        browser = await _first(launched)
+        tab = browser.main_tab
+        await _loaded(tab, "basic.html")
+        await tab.eval("document.cookie = 'late=1; path=/'")
+        await asyncio.sleep(0.05)
+        root = browser._router.root
+        await root.send("Target.closeTarget", {"targetId": tab._target_id}, timeout=5)
+        await asyncio.wait_for(task, 30)
+    finally:
+        task.cancel()
+    saved = json.loads((tmp_path / "acct" / "cookies.json").read_text())["cookies"]
+    assert any(c["name"] == "late" and c["expires"] == -1 for c in saved)

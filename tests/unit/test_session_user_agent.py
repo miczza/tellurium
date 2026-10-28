@@ -66,10 +66,14 @@ def launched(monkeypatch):
 async def test_tellurium_login_opens_it(tmp_path, launched, monkeypatch):
     _saved(tmp_path / "acct", [_UA])
 
-    async def done_at_once(browser, tab, stdin):
+    async def done_at_once(browser, tab, stdin, keeper=None):
         pass
 
+    async def no_keeper(browser):
+        return None
+
     monkeypatch.setattr(login_command, "_until_done", done_at_once)
+    monkeypatch.setattr(login_command, "_open_keeper", no_keeper)
     await login_command.login("acct", directory=str(tmp_path))
     assert launched[0]["stealth"] is False
     assert _UA in launched[0]["args"]
