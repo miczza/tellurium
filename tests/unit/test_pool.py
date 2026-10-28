@@ -101,9 +101,7 @@ async def test_an_identity_removed_while_waiting_for_a_slot_keeps_its_seed(tmp_p
         assert json.load(f)["seed"] == 77  # the next open has the same fingerprint
 
 
-async def test_without_create_an_identity_removed_while_waiting_is_not_reborn(
-    tmp_path, launched
-):
+async def test_without_create_an_identity_removed_while_waiting_is_not_reborn(tmp_path, launched):
     pool = SessionPool(tmp_path, max_browsers=1)
     await pool.create("b", seed=77)
     with pytest.raises(FileNotFoundError):
