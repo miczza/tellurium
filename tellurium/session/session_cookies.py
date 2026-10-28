@@ -161,7 +161,8 @@ class Reinjection:
         try:
             return await asyncio.wait_for(asyncio.shield(future), TIMEOUT)
         except BaseException:
-            if future.done():
+            if future.done():  # it failed, or answered just as the wait ended
+                self._landed(future, late)
                 raise
             self._calls.add(future)
             future.add_done_callback(lambda f: self._landed(f, late))
