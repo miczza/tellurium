@@ -1,7 +1,8 @@
 """``tellurium login NAME [URL] [--dir D]``: sign in to a named session by hand.
 
 Chrome opens with a window on the session (``~/.tellurium/sessions/NAME`` by
-default, the folder ``tellurium mcp`` uses, with the same stealth launch), on
+default, the folder ``tellurium mcp`` uses, with the same stealth launch; without
+stealth for a session saved with its own ``--user-agent``), on
 *URL* if given. The person signs in (2FA and captchas included), then clicks
 "Done" on the banner, presses Enter in the terminal, or closes the window. The
 session is then saved: ``session.json`` and the cookie jar in ``cookies.json``,
@@ -20,7 +21,7 @@ from typing import IO, Any
 
 from tellurium.browser.navigation import NavigationError
 from tellurium.cdp.types import CDPError
-from tellurium.session import session_cookies
+from tellurium.session import session_cookies, stealth_choice
 from tellurium.session.errors import SessionBusyError
 from tellurium.session.session import Session
 
@@ -75,7 +76,8 @@ async def login(name: str, url: str | None = None, *, directory: str, enter: boo
     session = await asyncio.to_thread(Session, name, path=os.path.join(directory, name))
     hints = session._launch_hints
     args = [*(hints.get("args") or []), KEEP_ALIVE]
-    async with session.start(headless=False, stealth=True, args=args) as browser:
+    stealth = stealth_choice.stealth_for(session)
+    async with session.start(headless=False, stealth=stealth, args=args) as browser:
         await asyncio.to_thread(session.save)  # the seed survives a crash
         tab = browser.main_tab
         if url:

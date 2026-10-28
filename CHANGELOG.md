@@ -461,6 +461,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A session saved with its own `--user-agent` among its launch args opens again from
+  `tellurium mcp` and `tellurium login`: they launch it without stealth (with a warning in the
+  log) instead of failing with a `ValueError` that suggests a `stealth=False` neither offers.
 - `Session.start(on_login_failure="manual")`: without a display (`DISPLAY` and
   `WAYLAND_DISPLAY` unset on Linux) it fails at once with a `SessionLoginFailedError` that
   says so, instead of a `LaunchError` carrying Wayland's log from the headed relaunch; each

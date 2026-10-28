@@ -24,6 +24,7 @@ from tellurium.mcp.limits import SessionBudget
 from tellurium.mcp.results import Reply, ToolError
 from tellurium.mcp.tool import Tool, param
 from tellurium.session import Session, SessionBusyError
+from tellurium.session.stealth_choice import stealth_for
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +152,8 @@ class SessionPool:
         stack.callback(self._claims.release, name, self)  # last out: after the save and close
         try:
             session = await asyncio.to_thread(Session, name, path=path)
-            browser = await stack.enter_async_context(session.start(**self._launch_options()))
+            options = {**self._launch_options(), "stealth": stealth_for(session)}
+            browser = await stack.enter_async_context(session.start(**options))
             await asyncio.to_thread(session.save)  # the seed survives a crash
         except SessionBusyError as exc:  # another process took it after the check
             await stack.aclose()
