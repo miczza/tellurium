@@ -110,3 +110,14 @@ async def test_human_click_sends_nothing_when_another_node_is_on_top():
     with pytest.raises(geometry.ElementNotHittableError, match='<div id="cover"> is on top'):
         await geometry.human_click(element)
     assert [event[0] for event in element._tab.events] == ["move"]
+
+
+def test_frame_chain_climbs_from_an_oopif_to_the_tab():
+    class Session:
+        pass
+
+    tab, outer, inner = Session(), Session(), Session()
+    geometry.link_frame(outer, tab, "F1")
+    geometry.link_frame(inner, outer, "F2")
+    assert geometry.frame_chain(inner) == [(inner, outer, "F2"), (outer, tab, "F1")]
+    assert geometry.frame_chain(tab) == []

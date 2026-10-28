@@ -410,6 +410,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `tellurium.browser.snapshot` to `tellurium.browser.snapshot_text`, next to the
   rendering (no behaviour change; `SnapshotNode`, `build_nodes` and `render` are still
   importable from `snapshot`).
+- `tellurium.browser.geometry.frame_chain(session)` is public (it was `_chain`): the
+  `(session, parent session, frame id)` of each cross-site frame up to the tab; the
+  trap-link check uses it instead of the private name.
 - With `stealth=True` on the stock backend Chrome is launched with
   `--user-agent=<profile User-Agent>` (the profile aligned first with the binary's
   `--version`; no flag when that cannot be read, so flag and override never name two

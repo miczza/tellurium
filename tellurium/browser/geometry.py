@@ -68,7 +68,7 @@ def link_frame(child: Any, parent: Any, frame_id: str) -> None:
     _LINKS[child] = (parent, frame_id)
 
 
-def _chain(session: Any) -> list[tuple[Any, Any, str]]:
+def frame_chain(session: Any) -> list[tuple[Any, Any, str]]:
     """``(session, parent session, frame id)`` of each cross-site frame from *session*
     up to the tab, innermost first; empty for the tab's own session."""
     chain: list[tuple[Any, Any, str]] = []
@@ -170,7 +170,7 @@ async def content_box(element: Element) -> dict[str, float]:
     object_id = await element._resolve()
     quad = await _largest_quad(element._session, {"objectId": object_id}, "Element")
     points = _corners(quad)
-    for link in _chain(element._session):
+    for link in frame_chain(element._session):
         _, affine = await _frame_map(*link)
         points = [affine.apply(*point) for point in points]
     return _box([coordinate for point in points for coordinate in point])
@@ -291,7 +291,7 @@ async def ensure_hit(element: Element, x: float, y: float) -> None:
     labels, or inside them (through frames and shadow roots). Across a cross-site frame
     each document on the way must hit the ``<iframe>`` that leads to the element."""
     top_x, top_y = x, y
-    for link in reversed(_chain(element._session)):  # from the tab down
+    for link in reversed(frame_chain(element._session)):  # from the tab down
         owner, affine = await _frame_map(*link)
         parent = link[1]
         hit = await _hit(parent, x, y)
