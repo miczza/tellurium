@@ -61,6 +61,8 @@ class Session:
         self._cookies_at_close = False
         # The saved cookies the running start puts back (None: no start yet).
         self._reinjection: session_cookies.Reinjection | None = None
+        # Run in a thread once start holds the lock, before Chrome (SessionPool).
+        self._on_lock: Any = None
 
         loaded = storage.load(self._json_path())
         if loaded is None:
@@ -212,6 +214,8 @@ class Session:
         browser = None
         self._reinjection = None
         try:
+            if self._on_lock is not None:
+                await asyncio.to_thread(self._on_lock)
             browser = await self._launch(Browser, chrome_dir, merged)
             # Only record params of a successful launch, so save(full=True)
             # after a failed start() does not persist a bad configuration.

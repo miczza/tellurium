@@ -7,6 +7,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `SessionPool.open(name, create=True)`: with `create=False` a missing identity raises
+  `FileNotFoundError` before any wait, and nothing is created or saved.
 - `tellurium mcp --respect-robots`: `navigate` and `tab-open` to a URL the site's
   robots.txt disallows fail with "Navigation failed: robots.txt of <origin> disallows
   <path>" instead of opening it (stdio and HTTP; the sessions launch with
@@ -457,6 +459,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `SessionPool` works across one `asyncio.run` after another: its semaphore is made in the
+  loop of the open instead of in `__init__` (it failed with "bound to a different event loop").
+- `SessionPool.open`: an identity deleted (by another process) while its open waited for a slot
+  no longer starts empty with a seed that is never saved: under the session lock its
+  `session.json` is written again with the same seed, or `FileNotFoundError` with
+  `create=False`.
 - `Session.start` waiting for a dead holder's Chrome now recognises it on Linux when its
   rewritten title has arguments after `--user-data-dir` (a URL, headed) or the profile path
   holds ` --`: it no longer starts a second Chrome on a profile still in use (exit 21).

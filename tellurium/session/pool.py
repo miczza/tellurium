@@ -5,7 +5,8 @@ directory (its profile, cookies and fingerprint seed). :meth:`SessionPool.open`
 starts it, but never more than ``max_browsers`` at a time across the pool: a
 slot is taken before Chrome starts and given back only after it is closed, on
 error and cancellation too, and an open still waiting for a slot can be
-cancelled. A name is claimed in the pool before the wait, so the same
+cancelled; the slots belong to the event loop of the open, so a pool lives
+across one ``asyncio.run`` after another. A name is claimed in the pool before the wait, so the same
 identity opened twice fails at once (:class:`SessionBusyError`), as does one
 another process holds (its session lock), instead of queueing for a slot.
 """
@@ -13,6 +14,8 @@ another process holds (its session lock), instead of queueing for a slot.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import functools
 import os
 import re
 import shutil
@@ -50,7 +53,9 @@ class SessionPool:
         self.directory = os.path.abspath(os.path.expanduser(os.fspath(directory)))
         self.max_browsers = max_browsers
         self._launch = dict(launch)
-        self._slots = asyncio.Semaphore(max_browsers)
+        # Made in the loop of the first open (a semaphore is bound to one).
+        self._slots: asyncio.Semaphore | None = None
+        self._slots_loop: asyncio.AbstractEventLoop | None = None
         self._claimed: set[str] = set()  # names being opened, open or being deleted
 
     def path(self, name: str) -> str:
@@ -102,14 +107,20 @@ class SessionPool:
             await asyncio.to_thread(shutil.rmtree, grave)
 
     @asynccontextmanager
-    async def open(self, session: str | Session, **launch: Any) -> AsyncIterator[Any]:
-        """Start identity *session* (a name, created if missing, or a
-        :class:`Session` of this pool) and yield its Browser; closed on exit.
+    async def open(
+        self, session: str | Session, *, create: bool = True, **launch: Any
+    ) -> AsyncIterator[Any]:
+        """Start identity *session* (a name, or a :class:`Session` of this
+        pool) and yield its Browser; closed on exit. A missing identity is
+        created (*create*), else :class:`FileNotFoundError`, before any wait.
 
         Waits for a free slot while ``max_browsers`` are open; the slot is
         held from before Chrome starts until it is closed. The session's
-        ``session.json`` is written when it has none (so its seed lasts);
-        otherwise saving it is up to the caller, as with :meth:`Session.start`.
+        ``session.json`` is written when it has none (so its seed lasts),
+        checked again under the session lock once the slot is free (the
+        identity may have been deleted meanwhile: written again with its seed,
+        or :class:`FileNotFoundError` without *create*); otherwise saving it
+        is up to the caller, as with :meth:`Session.start`.
         """
         if isinstance(session, Session):
             name, path = session.name, self.path(session.name)
@@ -119,10 +130,21 @@ class SessionPool:
             name, path, session = session, self.path(session), None
         with self._claim(name, path):
             # Before the wait for a slot: a session busy elsewhere fails now.
-            session = await asyncio.to_thread(_prepare, name, path, session)
-            async with self._slots:
-                async with session.start(**{**self._launch, **launch}) as browser:
-                    yield browser
+            session = await asyncio.to_thread(_prepare, name, path, session, create)
+            async with self._slots_here():
+                session._on_lock = functools.partial(_ensure, name, path, session, create)
+                try:
+                    async with session.start(**{**self._launch, **launch}) as browser:
+                        yield browser
+                finally:
+                    session._on_lock = None
+
+    def _slots_here(self) -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        if self._slots is None or self._slots_loop is not loop:
+            # A loop gone takes its opens with it: the new one starts with all slots.
+            self._slots, self._slots_loop = asyncio.Semaphore(self.max_browsers), loop
+        return self._slots
 
     @contextmanager
     def _claim(self, name: str, path: str) -> Iterator[None]:
@@ -159,15 +181,32 @@ def _load(name: str, path: str) -> Session:
     return Session(name, path=path)
 
 
-def _prepare(name: str, path: str, session: Session | None) -> Session:
+def _prepare(name: str, path: str, session: Session | None, create: bool) -> Session:
     """Under the session lock (:class:`SessionBusyError` if held elsewhere):
-    load the session of a name, and save one that has no ``session.json``."""
+    load the session of a name, and save one that has no ``session.json``
+    (:class:`FileNotFoundError` instead without *create*)."""
+    if not create and not os.path.isdir(path):
+        raise FileNotFoundError(f"no session named {name!r} at {path}")
     with _held(path):
         if session is None:
             session = Session(name, path=path)
-        if not os.path.exists(os.path.join(path, _SESSION_FILE)):
-            session.save()
+        _ensure(name, path, session, create)
         return session
+
+
+def _ensure(name: str, path: str, session: Session, create: bool) -> None:
+    """With the session lock held: *session* has its ``session.json``, saved
+    now if missing and *create*; else :class:`FileNotFoundError`, and the
+    folder the lock made again is removed if it holds nothing else."""
+    if os.path.exists(os.path.join(path, _SESSION_FILE)):
+        return
+    if create:
+        session.save()
+        return
+    with contextlib.suppress(OSError):
+        os.unlink(os.path.join(path, session_lock.LOCK_FILE))
+        os.rmdir(path)
+    raise FileNotFoundError(f"no session named {name!r} at {path}")
 
 
 @contextmanager
