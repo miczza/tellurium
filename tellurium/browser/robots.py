@@ -12,14 +12,22 @@ import asyncio
 import base64
 import json
 import logging
-import re
 import time
 import urllib.parse
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from tellurium.browser.navigation import NavigationError, NavigationTimeoutError
+from tellurium.browser.robots_rules import ALLOW_ALL as ALLOW_ALL  # re-exported
+from tellurium.browser.robots_rules import (
+    DISALLOW_ALL,
+    MAX_BYTES,
+    PRODUCT_TOKEN,
+    RobotsRules,
+    outcome,
+)
+from tellurium.browser.robots_rules import parse as parse  # re-exported
 from tellurium.cdp.types import CDPError
 
 if TYPE_CHECKING:
@@ -27,7 +35,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("tellurium")
 
-MAX_BYTES = 500 * 1024  # RFC 9309 §2.5: parse at least the first 500 KiB
 FETCH_TIMEOUT = 10.0  # the whole download: request, redirects, body
 CACHE_TTL = 24 * 3600.0  # RFC 9309 §2.4
 ERROR_TTL = 60.0  # an unreachable robots.txt is asked again after a minute
@@ -37,10 +44,6 @@ _CLOSE_TIMEOUT = 2.0
 _OPEN_TIMEOUT = 5.0  # creating and attaching the hidden target
 _LATE_REPLY_TIMEOUT = 30.0  # how long a timed-out createTarget is still watched
 
-_AGENT = re.compile(r"[A-Za-z_-]+")
-_UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
-_ESCAPE = re.compile(r"%([0-9A-Fa-f]{2})")
-_STARS = re.compile(r"\*{2,}")
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 _TRIMMED = "".join(map(chr, range(0x21)))  # C0 controls and space, cut off the ends
 _DROPPED = str.maketrans("", "", "\t\n\r")  # removed anywhere by the URL parser
@@ -55,102 +58,6 @@ class RobotsDisallowedError(NavigationError):
         self.path = path
         self.error_text = reason or f"robots.txt of {origin} disallows {path}"
         RuntimeError.__init__(self, self.error_text)
-
-
-_Pattern = tuple[tuple[str, ...], bool]  # the literal runs between ``*``, anchored
-
-
-def _compile(pattern: str) -> _Pattern:
-    """*pattern* (``*`` any run, ``$`` at the end the end) cut at its ``*``,
-    a run of them counted once."""
-    anchored = pattern.endswith("$")
-    return tuple(_STARS.sub("*", pattern[:-1] if anchored else pattern).split("*")), anchored
-
-
-def _matches(pattern: _Pattern, path: str) -> bool:
-    """Whether *pattern* matches the start of *path*: each run found forward
-    from where the previous one ended, the leftmost (no backtracking)."""
-    runs, anchored = pattern
-    if not path.startswith(runs[0]):
-        return False
-    if len(runs) == 1:
-        return not anchored or len(path) == len(runs[0])
-    pos = len(runs[0])
-    for run in runs[1:-1]:
-        if (found := path.find(run, pos)) < 0:
-            return False
-        pos = found + len(run)
-    if anchored:
-        return path.endswith(runs[-1]) and len(path) - len(runs[-1]) >= pos
-    return path.find(runs[-1], pos) >= 0
-
-
-@dataclass(frozen=True)
-class RobotsRules:
-    """The rules of one group: ``(pattern, allow)`` pairs, patterns normalised."""
-
-    rules: tuple[tuple[str, bool], ...]
-    # Longest pattern (as written) first, allow first on a tie: the first match decides.
-    _order: tuple[tuple[bool, _Pattern], ...] = field(init=False, repr=False, compare=False)
-
-    def __post_init__(self) -> None:
-        ranked = sorted(self.rules, key=lambda rule: (-len(rule[0]), not rule[1]))
-        object.__setattr__(self, "_order", tuple((a, _compile(p)) for p, a in ranked))
-
-    def allows(self, target: str) -> bool:
-        """Whether *target* (path and query) may be crawled: the longest matching
-        pattern decides, ``allow`` on a tie; ``/robots.txt`` always may."""
-        path = _normalise(target or "/")
-        if path == "/robots.txt":
-            return True
-        return next((allow for allow, pattern in self._order if _matches(pattern, path)), True)
-
-
-ALLOW_ALL = RobotsRules(())
-DISALLOW_ALL = RobotsRules((("/", False),))
-
-
-def parse(text: str, agent: str = "*") -> RobotsRules:
-    """The rules of *text* (its first 500 KiB) for the product token *agent*: the
-    groups naming it, merged, else the ``*`` groups, else none (everything allowed)."""
-    wanted = agent.lower()
-    if len(text) > MAX_BYTES // 4:  # maybe over the limit once encoded
-        raw = text.encode("utf-8", errors="replace")
-        if len(raw) > MAX_BYTES:  # the last line may be cut: dropped
-            text = raw[:MAX_BYTES].decode("utf-8", errors="ignore").rpartition("\n")[0]
-    groups: dict[str, list[tuple[str, bool]]] = {}
-    current: list[list[tuple[str, bool]]] = []
-    in_rules = False
-    for line in text.lstrip("\ufeff").splitlines():
-        key, sep, value = line.split("#", 1)[0].partition(":")
-        if not sep:
-            continue
-        key, value = key.strip().lower(), value.strip()
-        if key == "user-agent":
-            if in_rules:
-                current, in_rules = [], False
-            token = "*" if value.startswith("*") else _product_token(value)
-            if token:
-                current.append(groups.setdefault(token, []))
-        elif key in ("allow", "disallow"):
-            in_rules = True
-            if value:  # an empty disallow forbids nothing
-                for rules in current:
-                    rules.append((_normalise(value), key == "allow"))
-    chosen = groups.get(wanted) if wanted != "*" else None
-    if chosen is None:
-        chosen = groups.get("*", [])
-    return RobotsRules(tuple(chosen))
-
-
-def outcome(status: int | None, body: bytes, agent: str) -> RobotsRules:
-    """RFC 9309 §2.3.1: 2xx → its rules; 4xx → everything allowed; anything else
-    (5xx, no answer) → everything disallowed."""
-    if status is not None and 200 <= status < 300:
-        return parse(body[: MAX_BYTES + 1].decode("utf-8", errors="replace"), agent)
-    if status is not None and 400 <= status < 500:
-        return ALLOW_ALL
-    return DISALLOW_ALL
 
 
 def split_url(url: str) -> tuple[str, str] | None:
@@ -177,23 +84,6 @@ def web_url(url: str) -> str | None:
     while (bare := url.strip(_TRIMMED).translate(_DROPPED))[:12].lower() == "view-source:":
         url = bare[12:]
     return url if bare[:6].lower().startswith(("http:", "https:")) else None
-
-
-def _product_token(value: str) -> str:
-    match = _AGENT.match(value)
-    return match.group(0).lower() if match else ""
-
-
-def _normalise(path: str) -> str:
-    """RFC 9309 §2.2.2: octets outside US-ASCII percent-encoded, escapes of
-    unreserved characters decoded, the others kept (hex in upper case)."""
-
-    def unescape(m: re.Match) -> str:
-        char = chr(int(m.group(1), 16))
-        return char if char in _UNRESERVED else f"%{m.group(1).upper()}"
-
-    encoded = "".join(c if ord(c) < 128 else "".join(f"%{b:02X}" for b in c.encode()) for c in path)
-    return _ESCAPE.sub(unescape, encoded)
 
 
 def _now() -> float:
@@ -320,7 +210,7 @@ class Robots:
     browser context and origin (a context may have its own proxy)."""
 
     def __init__(self, respect: bool = False, agent: str = "*"):
-        if agent != "*" and (not isinstance(agent, str) or not _AGENT.fullmatch(agent)):
+        if agent != "*" and (not isinstance(agent, str) or not PRODUCT_TOKEN.fullmatch(agent)):
             raise ValueError(
                 f"robots_agent must be '*' or a product token (letters, '-', '_'), got {agent!r}"
             )

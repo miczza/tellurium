@@ -403,6 +403,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The RFC 9309 parser and matcher of robots.txt moved from `tellurium.browser.robots`
+  to `tellurium.browser.robots_rules` (no behaviour change; `parse`, `RobotsRules`,
+  `ALLOW_ALL` and `DISALLOW_ALL` are still importable from `robots`).
 - With `stealth=True` on the stock backend Chrome is launched with
   `--user-agent=<profile User-Agent>` (the profile aligned first with the binary's
   `--version`; no flag when that cannot be read, so flag and override never name two
