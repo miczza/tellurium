@@ -46,7 +46,7 @@ def test_launch_flags_include_accept_lang(monkeypatch):
         captured.update(kw)
         raise RuntimeError("stop-here")
 
-    monkeypatch.setattr(browser_mod, "build_chrome_flags", fake_build_chrome_flags)
+    monkeypatch.setattr("tellurium.browser.launch_plan.build_chrome_flags", fake_build_chrome_flags)
 
     async def fake_exec(self):
         return "/bin/true"

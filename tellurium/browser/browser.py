@@ -4,35 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import dataclasses
 import logging
-import os
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 from tellurium.browser.context import BrowserContext, tab_context
 from tellurium.browser.cookie_jar import CookieJar
 from tellurium.browser.dialog import check_policy
 from tellurium.browser.download import Downloads
-from tellurium.browser.engine import select_engine
-from tellurium.browser.launcher import (
-    _detect_chrome_version,
-    build_chrome_flags,
-    build_load_extension_flag,
-    check_chrome_version_for_extensions,
-    validate_extension_paths,
-)
+from tellurium.browser.launch_plan import LaunchPlan
 from tellurium.browser.process import BrowserProcess
-from tellurium.browser.proxy import forwarder_for, proxy_server_flag
 from tellurium.browser.robots import Robots, close_on_robots
 from tellurium.browser.tab import Tab, url_matches
 from tellurium.cdp.transport._pipeline import CommandPipeline
 from tellurium.cdp.transport._session import SessionRouter
 from tellurium.cdp.types import TargetCrashedError
-from tellurium.stealth._grease import parse_grease_brands, parse_product_version
-from tellurium.stealth._webrtc import resolve_webrtc_ip
-from tellurium.stealth.engine import refuse_user_agent_arg
 
 logger = logging.getLogger("tellurium")
 
@@ -190,224 +176,41 @@ class Browser(CookieJar):
             raise ValueError(
                 f"Unknown mouse_profile {mouse_profile!r}; expected one of {sorted(MOUSE_PROFILES)}"
             )
-        if languages is not None and (not isinstance(languages, (list, tuple)) or not languages):
-            raise ValueError("languages must be a non-empty list, e.g. ['it-IT', 'it']")
-        if viewport is not None:
-            if len(tuple(viewport)) != 2:
-                raise ValueError("viewport must be a (width, height) tuple")
-            if int(viewport[0]) <= 0 or int(viewport[1]) <= 0:
-                raise ValueError("viewport width and height must be positive")
+        plan = LaunchPlan(
+            headless=headless,
+            executable=executable,
+            browser=browser,
+            user_data_dir=user_data_dir,
+            args=args,
+            proxy=proxy,
+            stealth=stealth,
+            seed=seed,
+            extensions=extensions,
+            chromium_version=chromium_version,
+            chromium_sha256=chromium_sha256,
+            auto_security_update=auto_security_update,
+            webrtc_ip=webrtc_ip,
+            timezone=timezone,
+            languages=languages,
+            viewport=viewport,
+        )
 
         self = cls()
         self._dialogs = check_policy(dialogs)
         self._robots = Robots(respect_robots, robots_agent)
         self._stealth_idle = stealth_idle
         self._mouse_profile = mouse_profile
-        languages = list(languages) if languages is not None else None
-
-        # 0. Validate extension paths up-front (before any async work)
-        validate_extension_paths(extensions or [])
-        if stealth:
-            refuse_user_agent_arg(args)
-
-        # 0b. Resolve webrtc_ip up-front: the native patch only understands an
-        # IP literal (or its own 'disable', which drops every candidate), so
-        # 'auto' must reach it already resolved and our 'disable' — no
-        # spoofing — must leave the flag out entirely.
-        resolved_webrtc_ip = (
-            resolve_webrtc_ip(webrtc_ip, proxy=proxy) if webrtc_ip is not None else None
-        )
-
-        # 1. Select engine
-        engine = select_engine(
-            browser,
-            executable,
-            chromium_version=chromium_version,
-            chromium_sha256=chromium_sha256,
-            auto_security_update=auto_security_update,
-            webrtc_ip_flag=resolved_webrtc_ip,
-        )
-        self._engine = engine
-
-        # 2. Get executable (engines resolve it off the event loop)
-        chrome_path = await engine.get_executable()
-
-        # 2a. Chrome 137+ branded check for extensions
-        if extensions:
-            version = await asyncio.to_thread(_detect_chrome_version, chrome_path)
-            p = chrome_path.lower()
-            is_branded_chrome = (
-                "google-chrome" in p  # linux binary name
-                or p.endswith("google chrome")  # macOS .app bundle
-                or "\\google\\chrome\\" in p  # Windows install path
-                or "/google/chrome/" in p  # normalized Windows path
-            )
-            check_chrome_version_for_extensions(
-                executable=chrome_path,
-                version=version,
-                is_branded_chrome=is_branded_chrome,
-                extensions=extensions,
-            )
-            if os.environ.get("TELLURIUM_SUPPRESS_EXTENSION_WARNING") != "1":
-                logger.warning(
-                    "User extensions loaded: %s. "
-                    "Extensions expose 4 fingerprint vectors: "
-                    "(1) chrome.runtime.sendMessage enumeration, "
-                    "(2) DOM signatures (injected elements/stylesheets), "
-                    "(3) Window globals (e.g. window.__extension_*), "
-                    "(4) web_accessible_resources probing via chrome-extension://<id>/.",
-                    ", ".join(extensions),
-                )
-
-        # Validated before any resource exists (scheme, SOCKS credentials).
-        forwarder = forwarder_for(proxy) if proxy else None
-        proxy_flag = proxy_server_flag(proxy) if proxy else None
         try:
-            # 3. Proxy with auth -> start forwarder
-            if forwarder is not None:
-                await self._proc.start_forwarder(forwarder)
-                proxy_flag = f"http://127.0.0.1:{forwarder.port}"
-
-            # 4. User-data dir and downloads folder
-            self._user_data_dir = user_data_dir or self._proc.make_temp_profile()
+            # 1-8. Engine, executable, forwarder, profile, stealth profile, flags
+            await plan.compose(self._proc)
+            self._engine = plan.engine
+            self._user_data_dir = plan.profile_dir
+            stealth_engine = self._stealth_engine = plan.stealth_engine
+            self._stealth_profile = plan.stealth_profile
             downloads = downloads_dir or self._proc.make_downloads_dir()
 
-            # 5. Build stealth profile & engine (if stealth=True)
-            stealth_engine = None
-            stealth_profile = None
-
-            if stealth:
-                from tellurium.stealth.engine import StealthEngine
-                from tellurium.stealth.profile import StealthProfile
-
-                if seed is not None:
-                    stealth_profile = StealthProfile.from_seed(seed)
-                else:
-                    stealth_profile = StealthProfile.auto()
-
-                # GeoIP resolution if proxy — resolve real exit IP
-                if proxy:
-                    try:
-                        from tellurium.stealth.geoip import resolve_exit_ip, resolve_geoip
-
-                        forwarder_port = self._proc.forwarder.port if self._proc.forwarder else None
-                        # Off the loop: the lookup goes through the forwarder on it.
-                        exit_ip = await asyncio.to_thread(resolve_exit_ip, proxy, forwarder_port)
-                        logger.info("Proxy exit IP: %s", exit_ip)
-                        geo = await asyncio.to_thread(resolve_geoip, exit_ip)
-                        stealth_profile = dataclasses.replace(
-                            stealth_profile,
-                            languages=geo.languages,
-                            timezone=geo.timezone,
-                            locale=geo.languages[0],
-                            accept_language=", ".join(
-                                f"{lang};q={1.0 - i * 0.1:.1f}" if i > 0 else lang
-                                for i, lang in enumerate(geo.languages)
-                            ),
-                        )
-                    except Exception as e:  # noqa: BLE001 - GeoIP is best-effort
-                        logger.warning("GeoIP not available: %s. Using default locale.", e)
-
-                # Manual overrides win over both GeoIP and the seeded defaults
-                # (design doc 01 §"Override manuali (ignorano auto-detect)").
-                manual: dict[str, Any] = {}
-                if timezone is not None:
-                    manual["timezone"] = timezone
-                if languages is not None:
-                    from tellurium.stealth.profile import build_accept_language
-
-                    manual["languages"] = languages
-                    manual["locale"] = languages[0]
-                    manual["accept_language"] = build_accept_language(languages)
-                if manual:
-                    stealth_profile = dataclasses.replace(stealth_profile, **manual)
-                # The UA goes on the command line too (step 7): it needs the
-                # binary's version now, before Browser.getVersion can tell.
-                if found := await asyncio.to_thread(_detect_chrome_version, chrome_path):
-                    stealth_profile = stealth_profile.with_browser_version(
-                        ".".join(map(str, found))
-                    )
-
-                stealth_engine = StealthEngine(
-                    engine,
-                    stealth_profile,
-                    headless,
-                    proxy is not None,
-                )
-                self._stealth_engine = stealth_engine
-                self._stealth_profile = stealth_profile
-
-            # 6. Build engine-specific args
-            if stealth and stealth_profile is not None:
-                engine_args = engine.build_args(stealth_profile)
-            else:
-                seeded = SimpleNamespace(seed=seed, timezone=timezone)
-                engine_args = engine.build_args(seeded)
-
-            # 7. Stealth flags (extension + WebRTC)
-            stealth_flags: list[str] = []
-            user_exts: list[str] = extensions or []
-
-            # Languages: let Chrome derive both navigator.languages and the
-            # Accept-Language header (with its native q-values) from the
-            # --accept-lang pref. Overriding acceptLanguage via
-            # Emulation.setUserAgentOverride leaks the raw string into
-            # navigator.languages (["en-US", "en;q=0.9"]) and produces a
-            # malformed header ("en-US, en;q=0.9;q=0.9"). Measured on Chrome 153.
-            # The same flag carries a manual languages= override with stealth off.
-            effective_languages = languages
-            if effective_languages is None and stealth and stealth_profile is not None:
-                effective_languages = stealth_profile.languages
-            if effective_languages:
-                stealth_flags.append("--accept-lang=" + ",".join(effective_languages))
-
-            if viewport is not None:
-                stealth_flags.append(f"--window-size={int(viewport[0])},{int(viewport[1])}")
-
-            if stealth and stealth_engine is not None:
-                # Only with the version read from the binary (step 5): flag and
-                # override then name the same one.
-                ua_flag = stealth_engine.user_agent_flag() if found else None
-                if ua_flag:
-                    stealth_flags.append(ua_flag)
-                ext_path = stealth_engine.build_extension()
-                if ext_path or user_exts:
-                    stealth_flags.append(
-                        build_load_extension_flag(
-                            tellurium_stealth_path=ext_path,
-                            user_extensions=user_exts,
-                        )
-                    )
-                # Note: --disable-blink-features=AutomationControlled is
-                # intentionally NOT added. Chrome shows an "unsupported
-                # command-line flag" warning bar when it is present, which is
-                # itself a detection signal. The stealth extension's
-                # webdriver.js overrides navigator.webdriver via JS injection
-                # because --remote-debugging-pipe makes the native value true.
-                if proxy:
-                    stealth_flags.append(
-                        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
-                    )
-            elif user_exts:
-                # stealth=False but user extensions still need to be loaded
-                stealth_flags.append(
-                    build_load_extension_flag(
-                        tellurium_stealth_path=None,
-                        user_extensions=user_exts,
-                    )
-                )
-
-            # 8. Build flags
-            flags = build_chrome_flags(
-                headless=headless,
-                user_data_dir=self._user_data_dir,
-                proxy=proxy_flag,
-                extra_args=(args or []) + stealth_flags,
-                engine_args=engine_args,
-            )
-
             # 9-10. Launch Chrome, connect its pipe, route sessions
-            transport = await self._proc.spawn(chrome_path, flags, chrome_log)
+            transport = await self._proc.spawn(plan.chrome_path, plan.flags, chrome_log)
             self._router = SessionRouter(transport)
             self._dispatch_task = asyncio.create_task(self._router.run())
             self._proc.reader = self._dispatch_task
@@ -415,41 +218,12 @@ class Browser(CookieJar):
                 self._router.root, downloads, downloads_dir is None, self._dispatch_task
             )
 
-            # 11. Wire stealth engine to router
+            # 11. Wire stealth engine to router; align its profile with the
+            # running binary (real version, GREASE brand, WebRTC IP).
             if stealth_engine is not None:
                 stealth_engine.set_router(self._router)
-
-            # 11a. review 2026-04-15 #5/#9: read the real GREASE brand from the browser
-            # and coalesce with webrtc_public_ip into a single dataclasses.replace() call.
-            if stealth and stealth_engine is not None and stealth_profile is not None:
-                try:
-                    version_info = await self._router.root.send(
-                        "Browser.getVersion", {}, timeout=5.0
-                    )
-                except Exception:  # noqa: BLE001 - best-effort version probe
-                    version_info = {}
-                raw_brands = version_info.get("userAgentData", {}).get("brands") or []
-                # Build a single replace() call for both GREASE and webrtc fields
-                replace_kwargs: dict = {}
-                # Align UA / Client Hints with the version the binary really has
-                # ("Chrome/153.0.8010.36", "HeadlessChrome/..."): the profile's
-                # default browser_version is only a fallback.
-                real_version = parse_product_version(version_info.get("product", ""))
-                if real_version and real_version != stealth_profile.browser_version:
-                    stealth_profile = stealth_profile.with_browser_version(real_version)
-                if raw_brands:
-                    g_brand, g_version = parse_grease_brands(raw_brands)
-                    replace_kwargs["grease_brand"] = g_brand
-                    replace_kwargs["grease_version"] = g_version
-                if resolved_webrtc_ip is not None:
-                    replace_kwargs["webrtc_public_ip"] = resolved_webrtc_ip
-                if replace_kwargs:
-                    stealth_profile = dataclasses.replace(stealth_profile, **replace_kwargs)
-                if stealth_profile is not self._stealth_profile:
-                    stealth_engine.update_profile(stealth_profile)
-                    self._stealth_profile = stealth_profile
-                # else: leave profile.grease_brand = None → engine falls back to "Not_A Brand"/"24"
-                #       and webrtc_public_ip = None → webrtc.js no-op
+                await plan.align_stealth(self._router.root)
+                self._stealth_profile = plan.stealth_profile
 
             # 12. Discover initial page target
             await self._router.root.send("Target.setDiscoverTargets", {"discover": True})
@@ -530,6 +304,7 @@ class Browser(CookieJar):
                     logger.warning("Could not apply viewport %r: %s", viewport, exc)
 
         except BaseException as exc:
+            self._stealth_engine = plan.stealth_engine  # built before the failure
             error = await self._abort_launch(exc)
             if error is not None:
                 raise error from exc

@@ -183,7 +183,7 @@ def _launch_engine_args(monkeypatch, engine_cls, **launch_kwargs) -> list[str]:
 
     monkeypatch.setattr(engine_cls, "build_args", spy_build_args)
     monkeypatch.setattr(engine_cls, "get_executable", fake_exec)
-    monkeypatch.setattr(browser_mod, "build_chrome_flags", stop)
+    monkeypatch.setattr("tellurium.browser.launch_plan.build_chrome_flags", stop)
     with pytest.raises(RuntimeError, match="stop-here"):
         asyncio.run(browser_mod.Browser.launch(headless=True, **launch_kwargs))
     return captured

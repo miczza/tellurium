@@ -24,9 +24,11 @@ def _launch_flags(monkeypatch, version, engine="StockEngine", **kw) -> list[str]
     async def fake_exec(self):
         return "/bin/true"
 
-    monkeypatch.setattr(browser_mod, "build_chrome_flags", fake_build_chrome_flags)
+    monkeypatch.setattr("tellurium.browser.launch_plan.build_chrome_flags", fake_build_chrome_flags)
     monkeypatch.setattr(getattr(engine_mod, engine), "get_executable", fake_exec)
-    monkeypatch.setattr(browser_mod, "_detect_chrome_version", lambda path: version)
+    monkeypatch.setattr(
+        "tellurium.browser.launch_plan._detect_chrome_version", lambda path: version
+    )
     with pytest.raises(RuntimeError, match="stop-here"):
         asyncio.run(browser_mod.Browser.launch(headless=True, seed=1, **kw))
     return captured["extra_args"]

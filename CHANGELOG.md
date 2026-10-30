@@ -422,6 +422,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `Browser.launch` composes Chrome's command line with `tellurium.browser.launch_plan.LaunchPlan`
+  (engine, executable, extensions, proxy forwarder, profile, GeoIP, stealth profile, flags);
+  signature, errors and flags passed to Chrome are unchanged. The plan can also take the
+  proxy's time zone and languages (`geoip=True`) and keep WebRTC's UDP inside the proxy
+  (`proxied_webrtc_only=True`) without the stealth engine.
+
 - `browser.close()` first asks Chrome to close with the CDP command `Browser.close` and
   waits up to 5 s for it to exit, then sends SIGTERM and SIGKILL as before. The orderly exit
   writes the cookie store, so a cookie written right before `close()` is there at the next

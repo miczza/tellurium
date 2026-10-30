@@ -24,7 +24,7 @@ def captured_flags(monkeypatch):
         captured.update(kw)
         raise RuntimeError("stop-here")
 
-    monkeypatch.setattr(browser_mod, "build_chrome_flags", fake_build_chrome_flags)
+    monkeypatch.setattr("tellurium.browser.launch_plan.build_chrome_flags", fake_build_chrome_flags)
 
     async def fake_exec(self):
         return "/bin/true"
@@ -120,7 +120,7 @@ def _profile_from_launch(monkeypatch, **kwargs):
     def fake_build_chrome_flags(**kw):
         raise RuntimeError("stop-here")
 
-    monkeypatch.setattr(browser_mod, "build_chrome_flags", fake_build_chrome_flags)
+    monkeypatch.setattr("tellurium.browser.launch_plan.build_chrome_flags", fake_build_chrome_flags)
 
     async def fake_exec(self):
         return "/bin/true"
