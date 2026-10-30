@@ -7,6 +7,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `tellurium.access`: who may talk to a local tellurium server, without a web framework —
+  the token file (`load_or_create_token(path)`, `TokenFileError`; the file name is the
+  caller's), the bind address (`parse_bind`, `is_loopback`, `allowed_hosts`) and the checks
+  on lowercased headers (`host_ok`, `token_in_url`, `bearer_ok` in constant time,
+  `repeated_header`). `tellurium.mcp.auth` uses it and still exports the same names.
+
 - Patched engine: `--fingerprint-timezone=<IANA>` with the timezone of the stealth profile
   (GeoIP and the manual `timezone=` of `launch` included) or, with stealth off, the manual
   `timezone=`. IANA ids and ICU custom ids (`GMT+05:30`, `GMT-3`) pass, as with
