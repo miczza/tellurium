@@ -7,6 +7,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `tellurium.browser.raw_chrome.RawChrome`: Chrome on its CDP pipe without `Browser`
+  (`await RawChrome.launch(...)` or `async with`), for code that speaks CDP itself.
+  `transport` (`send(bytes)` / `recv() -> dict`), `pid`, `seed`, `proxy`, `alive`,
+  idempotent and time-bounded `close()`. The command line comes from the same plan as
+  `Browser.launch` (engine arguments with the seed, `--accept-lang`, `--window-size`,
+  credential forwarder, WebRTC UDP only through the proxy, time zone and languages of the
+  proxy's exit IP with `geoip=True`), with no stealth engine, extension or User-Agent
+  rewrite, and always a temporary profile. Launch waits for `Browser.getVersion` on the
+  pipe; a failure or cancellation at any step releases Chrome, forwarder and profile.
+
 - Patched engine: `--fingerprint-timezone=<IANA>` with the timezone of the stealth profile
   (GeoIP and the manual `timezone=` of `launch` included) or, with stealth off, the manual
   `timezone=`. IANA ids and ICU custom ids (`GMT+05:30`, `GMT-3`) pass, as with
