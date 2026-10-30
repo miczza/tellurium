@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import sys
 import threading
 import time
 
@@ -186,7 +187,8 @@ async def test_cancelled_after_the_slot_was_given_passes_it_on(woken):
     assert slots.held == 0 and slots.waiting == 0
 
 
-async def test_timeout_around_the_wait():
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="asyncio.timeout")
+async def test_cancelling_timeout_around_the_wait():
     slots = Slots(1)
     async with slots.slot():
         with pytest.raises(TimeoutError):
@@ -195,9 +197,83 @@ async def test_timeout_around_the_wait():
                     pytest.fail("entered a taken slot")
         assert slots.held == 1 and slots.waiting == 0
     assert slots.held == 0
-    async with asyncio.timeout(0.05):
-        async with slots.slot():
-            assert slots.held == 1
+
+
+async def test_timeout_while_waiting_takes_nothing_and_keeps_the_order():
+    slots = Slots(1)
+    order: list[str] = []
+    held = slots.slot()
+    await held.__aenter__()
+    first = asyncio.create_task(_enter(slots, "first", order))
+    await _until(lambda: slots.waiting == 1)
+    with pytest.raises(TimeoutError, match="0.05"):
+        async with slots.slot(timeout=0.05):
+            pytest.fail("entered a taken slot")
+    assert slots.held == 1 and slots.waiting == 1
+    last = asyncio.create_task(_enter(slots, "last", order))
+    await _until(lambda: slots.waiting == 2)
+    await held.__aexit__(None, None, None)
+    await asyncio.wait_for(asyncio.gather(first, last), 1)
+    assert order == ["first", "last"]
+    assert slots.held == 0 and slots.waiting == 0
+
+
+@pytest.mark.parametrize("given_first", [True, False])
+async def test_timeout_in_the_same_round_as_the_slot_loses_nothing(given_first):
+    """The deadline passes while the slot is being handed over: the waiter
+    either keeps it or passes it on, never both, never neither."""
+    slots = Slots(1)
+    order: list[str] = []
+    held = slots.slot()
+    await held.__aenter__()
+
+    async def timed():
+        async with slots.slot(timeout=0.05):
+            order.append("timed")
+
+    waiter = asyncio.create_task(timed())
+    await _until(lambda: slots.waiting == 1)
+    nxt = asyncio.create_task(_enter(slots, "next", order))
+    await _until(lambda: slots.waiting == 2)
+    time.sleep(0.08)  # the loop is blocked: the deadline is due with the next round
+    if given_first:
+        await held.__aexit__(None, None, None)  # wake-up queued before the due timer
+        await asyncio.sleep(0)
+    else:
+        await asyncio.sleep(0)
+        await held.__aexit__(None, None, None)
+    results = await asyncio.wait_for(asyncio.gather(waiter, nxt, return_exceptions=True), 1)
+    assert results[1] is None
+    assert results[0] is None or isinstance(results[0], TimeoutError)
+    assert order == (["timed", "next"] if results[0] is None else ["next"])
+    assert slots.held == 0 and slots.waiting == 0
+
+
+async def test_timeout_does_not_limit_the_block():
+    slots = Slots(1)
+    async with slots.slot(timeout=0.01):
+        await asyncio.sleep(0.05)
+    held = slots.slot()
+    await held.__aenter__()
+    stayed = []
+
+    async def long_block():
+        async with slots.slot(timeout=0.5):
+            await asyncio.sleep(0.6)
+            stayed.append(True)
+
+    task = asyncio.create_task(long_block())
+    await _until(lambda: slots.waiting == 1)
+    await held.__aexit__(None, None, None)
+    await asyncio.wait_for(task, 2)
+    assert stayed == [True]
+    assert slots.held == 0 and slots.waiting == 0
+
+
+async def test_timeout_with_a_free_slot_enters_at_once():
+    slots = Slots(1)
+    async with slots.slot(timeout=0):
+        assert slots.held == 1
 
 
 async def test_waiter_of_a_closed_loop_is_skipped():

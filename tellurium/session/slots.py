@@ -54,17 +54,19 @@ class Slots:
         return len(self._queue)
 
     @asynccontextmanager
-    async def slot(self) -> AsyncIterator[None]:
+    async def slot(self, timeout: float | None = None) -> AsyncIterator[None]:
         """One slot, from when it is this caller's turn until the block ends
-        (on error and cancellation too). A timeout around it (``asyncio.timeout``)
-        gives up the place in the queue."""
-        await self._take()
+        (on error and cancellation too). *timeout* (seconds) limits only the
+        wait: past it, :class:`TimeoutError`, with no slot taken and no place
+        left in the queue; the block itself runs as long as it needs. A
+        cancellation during the wait gives up the place the same way."""
+        await self._take(timeout)
         try:
             yield
         finally:
             self._give_back()
 
-    async def _take(self) -> None:
+    async def _take(self, timeout: float | None) -> None:
         with self._lock:
             if self._held < self.total and not self._queue:
                 self._held += 1
@@ -72,14 +74,19 @@ class Slots:
             waiter = _Waiter(asyncio.get_running_loop())
             self._queue.append(waiter)
         try:
-            await waiter.future
-        except BaseException:
+            if timeout is None:
+                await waiter.future
+            else:
+                await asyncio.wait_for(waiter.future, timeout)
+        except BaseException as exc:
             with self._lock:
                 given = waiter.given
                 if not given and waiter in self._queue:
                     self._queue.remove(waiter)
             if given:  # handed over, but this task will not use it: the next one will
                 self._give_back()
+            if isinstance(exc, asyncio.TimeoutError):  # a distinct class before 3.11
+                raise TimeoutError(f"no slot free within {timeout} s") from None
             raise
 
     def _give_back(self) -> None:
