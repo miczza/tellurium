@@ -507,6 +507,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `SessionPool`: the browser slots are handed out first come, first served, with no polling.
+  Whoever releases a slot gives it to the oldest waiter (in any loop or thread) instead of
+  freeing it for whoever polls first, so a task that closes and opens again in a loop no
+  longer starves the others (with `max_browsers=1` and three such tasks a waiter could wait
+  over a second). A waiter cancelled in the queue leaves it; one cancelled after the slot was
+  given to it passes the slot on; `asyncio.timeout` around the wait gives up the place.
+
 - Patched backend: cancelling `Browser.launch` while the binary is being resolved stops a
   security download in flight (between release lookup, `SHA256SUMS`, each 64 KiB chunk,
   each extracted file and the swap; network waits of such a download are 5 s) and waits up
