@@ -49,7 +49,7 @@ MAX_UNCHECKED = 64
 _VERSION_PATHS = frozenset({"/json/version", "/json/version/"})
 _BROWSER_PATH = re.compile(r"/devtools/browser/[^/?#]*")
 _WEBKIT = re.compile(r"AppleWebKit/([\d.]+)")
-_INSTALL = "the multiplexer needs websockets>=13: pip install 'tellurium[multiplex]'"
+_INSTALL = "the multiplexer needs websockets>=17: pip install 'tellurium[multiplex]'"
 
 
 def require_websockets() -> Any:
@@ -114,7 +114,7 @@ class Server:
             server.close()
             try:
                 await asyncio.wait_for(server.wait_closed(), CLOSE_TIMEOUT * 3)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 for connection in list(self._open):
                     connection.transport.abort()
                 await server.wait_closed()
@@ -174,8 +174,7 @@ class Server:
         if refusal is not None:
             return _reply(connection, *refusal)
         path = request.path.partition("?")[0]
-        # websockets < 17 refuses any method but GET before this point.
-        method = getattr(request, "method", "GET")
+        method = request.method
         if is_admin(path):
             if self._admin is None:
                 return _reply(connection, 404, "Not found: no administration here")

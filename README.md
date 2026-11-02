@@ -1537,7 +1537,7 @@ in [`docs/RELEASE.md`](docs/RELEASE.md).
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+
 - Chrome, Chromium, or Chrome for Testing (auto-downloaded if not found)
 - Zero Python dependencies (stdlib only)
 

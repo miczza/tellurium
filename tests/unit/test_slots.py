@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import gc
-import sys
 import threading
 import time
 
@@ -187,7 +186,6 @@ async def test_cancelled_after_the_slot_was_given_passes_it_on(woken):
     assert slots.held == 0 and slots.waiting == 0
 
 
-@pytest.mark.skipif(sys.version_info < (3, 11), reason="asyncio.timeout")
 async def test_cancelling_timeout_around_the_wait():
     slots = Slots(1)
     async with slots.slot():
