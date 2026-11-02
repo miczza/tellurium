@@ -51,8 +51,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (blank lines and `#` comments skipped); a bad line is named by its number, never shown.
   Without the patched Chrome it points to `tellurium download-browser --browser patched`
   or `--browser stock`; without the extra, to `pip install 'tellurium[multiplex]'`.
-  SIGINT and SIGTERM close every client (1001), Chrome, forwarder and profile, then it
-  exits with 0.
+  SIGINT, SIGTERM and SIGHUP (the terminal or ssh going away) close every client (1001),
+  Chrome, forwarder and profile, then it exits with 0.
 - Playwright (the Python package only, no browsers) in the `dev` extra: a test drives the
   multiplexer with `connect_over_cdp`, two clients at once getting two Chromes.
 

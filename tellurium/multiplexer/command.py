@@ -3,7 +3,7 @@ and a clear message when the ``multiplex`` extra or the patched Chrome is
 missing. Imports no ``websockets`` until the command runs.
 
 It prints where it listens and where the token is, never the token itself
-nor a proxy's credentials; SIGINT (Ctrl-C) and SIGTERM close every Chrome,
+nor a proxy's credentials; SIGINT (Ctrl-C), SIGTERM and SIGHUP close every Chrome,
 forwarder and profile, then it exits with 0.
 """
 
@@ -20,6 +20,8 @@ from typing import Any
 
 INSTALL_HINT = "tellurium multiplex needs websockets: pip install 'tellurium[multiplex]'"
 DEFAULT_LISTEN = "127.0.0.1:9339"
+#: Signals that stop the command cleanly: Ctrl-C, kill, and the terminal (or ssh) going away.
+_STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 _SHAPE = "scheme://[user:password@]host:port, or host:port"
 
 
@@ -103,7 +105,7 @@ def read_proxies(path: Path) -> list[str]:
 
 
 def main(args: argparse.Namespace) -> None:
-    """Serve until SIGINT or SIGTERM, then close everything and exit with 0."""
+    """Serve until SIGINT, SIGTERM or SIGHUP, then close everything and exit with 0."""
     try:
         from tellurium.multiplexer.server import require_websockets
 
@@ -160,7 +162,7 @@ def main(args: argparse.Namespace) -> None:
 async def _serve(mux: Any, host: str, port: int, proxies: int) -> None:
     serving = asyncio.ensure_future(mux.serve(host, port))
     loop = asyncio.get_running_loop()
-    for signum in (signal.SIGINT, signal.SIGTERM):
+    for signum in _STOP_SIGNALS:
         loop.add_signal_handler(signum, serving.cancel)
     try:
         while mux.url is None and not serving.done():
@@ -177,7 +179,7 @@ async def _serve(mux: Any, host: str, port: int, proxies: int) -> None:
         with contextlib.suppress(asyncio.CancelledError):
             await serving
     finally:
-        for signum in (signal.SIGINT, signal.SIGTERM):
+        for signum in _STOP_SIGNALS:
             loop.remove_signal_handler(signum)
         if not serving.done():
             serving.cancel()
@@ -193,7 +195,9 @@ def _patched_installed() -> bool:
 
 
 def _say(message: str) -> None:
-    print(f"tellurium multiplex: {message}", file=sys.stderr, flush=True)
+    # After SIGHUP the terminal may be gone: nothing to tell, nothing to fail on.
+    with contextlib.suppress(OSError, ValueError):
+        print(f"tellurium multiplex: {message}", file=sys.stderr, flush=True)
 
 
 def _fail(message: str) -> None:

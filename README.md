@@ -354,7 +354,7 @@ asyncio.run(main())
   queue, connections, crashes, hangs) and `POST /admin/slots/<id>/restart`.
 - **Engine.** `--browser patched` (the default) needs `tellurium download-browser
   --browser patched`; `--browser stock` uses the Chrome found on the system.
-  `--headed` shows the windows. Ctrl-C or SIGTERM closes every Chrome,
+  `--headed` shows the windows. Ctrl-C, SIGTERM or SIGHUP closes every Chrome,
   forwarder and profile.
 
 Limits: the stealth is the binary's and its flags' only. The multiplexer relays

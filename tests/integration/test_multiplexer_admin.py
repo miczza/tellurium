@@ -305,11 +305,20 @@ async def _run_cli(tmp_path: Path, *args: str, prelude: str = "") -> tuple[int, 
     return proc.returncode, out.decode(), err.decode()
 
 
-@pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM], ids=["SIGINT", "SIGTERM"])
+@pytest.mark.parametrize(
+    "signum, group",
+    [
+        (signal.SIGINT, False),
+        (signal.SIGTERM, False),
+        (signal.SIGHUP, True),  # the terminal (or ssh) went away: its whole group gets it
+    ],
+    ids=["SIGINT", "SIGTERM", "SIGHUP-group"],
+)
 async def test_the_command_serves_then_a_signal_closes_everything(
     tmp_path,
     private_tempdir,  # noqa: F811
     signum,
+    group,
 ):
     env = _cli_env(tmp_path)
     proc = await asyncio.create_subprocess_exec(
@@ -328,6 +337,7 @@ async def test_the_command_serves_then_a_signal_closes_everything(
         env=env,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,  # as setsid: a group of its own, Chromes included
     )
     try:
         first = (await asyncio.wait_for(proc.stdout.readline(), 90)).decode()
@@ -361,9 +371,13 @@ async def test_the_command_serves_then_a_signal_closes_everything(
                 await asyncio.sleep(0.1)
             family = _descendants(proc.pid)
             assert pids <= family
-            proc.send_signal(signum)
+            if group:
+                os.killpg(proc.pid, signum)
+            else:
+                proc.send_signal(signum)
             code, _ = await _closed(ws)
-            assert code == 1001
+            # With the group signalled, Chrome may go first (1011) or be closed (1001).
+            assert code == 1001 or (group and code == 1011)
         assert await asyncio.wait_for(proc.wait(), 60) == 0
         rest = (await proc.stdout.read()).decode() + (await proc.stderr.read()).decode()
         assert token not in first + rest
@@ -371,7 +385,7 @@ async def test_the_command_serves_then_a_signal_closes_everything(
         assert _profiles(private_tempdir) == []
     finally:
         if proc.returncode is None:
-            proc.kill()
+            os.killpg(proc.pid, signal.SIGKILL)
             await proc.wait()
 
 
