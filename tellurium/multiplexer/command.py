@@ -25,6 +25,10 @@ _STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 _SHAPE = "scheme://[user:password@]host:port, or host:port"
 
 
+class _CannotListen(Exception):
+    """The server could not take its address (port in use, not allowed, ...)."""
+
+
 class ProxiesFileError(ValueError):
     """A proxies file that cannot be used; the message never quotes a line."""
 
@@ -89,7 +93,9 @@ def read_proxies(path: Path) -> list[str]:
         if not line or line.startswith("#"):
             continue
         try:
-            if any(c.isspace() for c in line):
+            # No spaces nor control characters (NUL included): Chrome's argv and
+            # the forwarder's headers could not carry them.
+            if any(c.isspace() or not c.isprintable() for c in line):
                 raise ValueError
             info = parse_proxy_url(line)
             if not info["host"]:
@@ -112,7 +118,7 @@ def main(args: argparse.Namespace) -> None:
         require_websockets()
     except ImportError:
         _fail(INSTALL_HINT)
-    from tellurium.access import TokenFileError, is_loopback, parse_bind
+    from tellurium.access import TokenFileError, load_or_create_token, parse_bind
     from tellurium.multiplexer import Multiplexer
 
     try:
@@ -144,19 +150,35 @@ def main(args: argparse.Namespace) -> None:
         headless=not args.headed,
         browser=args.browser,
     )
-    if not is_loopback(host):
-        _say(
-            f"WARNING: listening on {host}, reachable from the network; "
-            "anyone with the token drives your browsers"
-        )
+    try:  # here, so that its errors are not taken for the address's
+        load_or_create_token(mux.token_file)
+    except (OSError, TokenFileError) as exc:
+        reason = exc.strerror if isinstance(exc, OSError) and exc.strerror else exc
+        _fail(f"cannot use the token file {mux.token_file}: {reason}")
+    warning = listen_warning(host)
+    if warning is not None:
+        _say(warning)
     try:
         asyncio.run(_serve(mux, host, port, len(proxies)))
     except KeyboardInterrupt:  # before the signal handlers were in place
         _say("stopped")
-    except OSError as exc:
-        _fail(f"cannot listen on {args.listen}: {exc.strerror or exc}")
-    except TokenFileError as exc:
-        _fail(str(exc))
+    except _CannotListen as exc:
+        _fail(f"cannot listen on {args.listen}: {exc}")
+
+
+def listen_warning(host: str) -> str | None:
+    """What a bind on *host* exposes, or None on loopback."""
+    from tellurium.access import allowed_hosts, is_loopback
+
+    if is_loopback(host):
+        return None
+    warning = (
+        f"WARNING: listening on {host}, reachable from the network: the token and the CDP "
+        "traffic travel in plain text (no TLS), and anyone with the token drives your browsers"
+    )
+    if allowed_hosts(host) is None:
+        warning += "; on a wildcard address the Host check is off (any name reaches it)"
+    return warning
 
 
 async def _serve(mux: Any, host: str, port: int, proxies: int) -> None:
@@ -167,6 +189,10 @@ async def _serve(mux: Any, host: str, port: int, proxies: int) -> None:
     try:
         while mux.url is None and not serving.done():
             await asyncio.wait([serving], timeout=0.05)
+        if mux.url is None and not serving.cancelled():
+            failure = serving.exception()
+            if isinstance(failure, OSError):  # the token was read before: the address
+                raise _CannotListen(failure.strerror or str(failure)) from failure
         if mux.url is not None:
             via = f", {proxies} prox{'y' if proxies == 1 else 'ies'} in turn" if proxies else ""
             print(f"tellurium multiplex: {mux.url} ({mux.status()['size']} Chromes{via})")

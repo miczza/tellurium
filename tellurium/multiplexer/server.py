@@ -7,8 +7,8 @@ pool (in the queue up to its timeout, else HTTP 503) and relays the client to
 a Chrome of its own. Every request, upgrade included, passes the same checks
 first: no repeated access header, a ``Host`` naming the bind address, no
 ``Origin`` (CDP clients send none, web pages always do), no token in the URL
-(query or path, even percent-encoded twice), then ``Authorization: Bearer``. The ``/admin`` routes (:mod:`.admin`) come
-after the same checks.
+(query or path, even percent-encoded twice), then ``Authorization: Bearer``.
+The ``/admin`` routes (:mod:`.admin`) come after the same checks.
 """
 
 from __future__ import annotations
@@ -232,12 +232,13 @@ class Server:
         host = request.headers.get("Host") or f"{self._host}:{self.port}"
         agent = version.get("userAgent", "")
         webkit = _WEBKIT.search(agent)
+        revision = version.get("revision", "")
         body = {
             "Browser": version.get("product", ""),
             "Protocol-Version": version.get("protocolVersion", ""),
             "User-Agent": agent,
             "V8-Version": version.get("jsVersion", ""),
-            "WebKit-Version": f"{webkit.group(1) if webkit else ''} ({version.get('revision', '')})",
+            "WebKit-Version": f"{webkit.group(1) if webkit else ''} ({revision})",
             "webSocketDebuggerUrl": f"ws://{host}/devtools/browser/{self._browser_id}",
         }
         return _reply(connection, 200, json.dumps(body, indent=3), json_body=True)

@@ -10,6 +10,7 @@ import json
 import os
 import re
 import signal
+import socket
 import sys
 from pathlib import Path
 
@@ -277,6 +278,11 @@ def test_proxies_file_skips_blank_lines_and_comments(tmp_path):
         "http://user:S3cretPW@",
         "http://user:S3cretPW@127.0.0.1:99999",
         "http://user:S3cretPW@127.0.0.1:8080 trailing",
+        "http://u:S3cretPW@a\x00a",
+        "http://user:S3cret\x01PW@127.0.0.1:8080",
+        "http://us\x00er:S3cretPW@127.0.0.1:8080",
+        "http://user:S3cretPW@127.0.0.1\x7f:8080",
+        "socks5://user:S3cretPW@127.0.0.1\x1b[2J:1080",
     ],
 )
 def test_a_bad_proxy_line_names_its_number_but_never_its_text(tmp_path, line):
@@ -457,6 +463,40 @@ async def test_without_the_extra_the_command_says_what_to_install(tmp_path):
         tmp_path, "--pool", "1", "--browser", "stock", prelude="sys.modules['websockets'] = None; "
     )
     assert code == 2 and "pip install 'tellurium[multiplex]'" in err
+
+
+def test_the_warning_for_a_network_address_says_what_is_exposed():
+    assert command.listen_warning("127.0.0.1") is None
+    assert command.listen_warning("::1") is None
+    named = command.listen_warning("192.0.2.7")
+    assert "192.0.2.7" in named and "plain text" in named and "Host" not in named
+    for wildcard in ("0.0.0.0", "::"):
+        warning = command.listen_warning(wildcard)
+        assert "plain text" in warning and "Host check is off" in warning
+
+
+async def test_a_token_home_that_cannot_be_written_is_named_as_such(tmp_path):
+    _cli_env(tmp_path)
+    home = tmp_path / "cli-home" / ".tellurium"
+    home.chmod(0o555)
+    try:
+        code, _, err = await _run_cli(
+            tmp_path, "--pool", "1", "--browser", "stock", "--listen", "127.0.0.1:0"
+        )
+    finally:
+        home.chmod(0o755)
+    assert code == 2 and "token file" in err and "cannot listen" not in err
+
+
+async def test_a_port_in_use_is_named_as_such(tmp_path):
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        port = taken.getsockname()[1]
+        code, _, err = await _run_cli(
+            tmp_path, "--pool", "1", "--browser", "stock", "--listen", f"127.0.0.1:{port}"
+        )
+    assert code == 2 and f"cannot listen on 127.0.0.1:{port}" in err and "token" not in err
 
 
 @pytest.mark.parametrize(

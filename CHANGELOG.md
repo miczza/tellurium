@@ -49,7 +49,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   [--acquire-timeout S] [--browser stock|patched] [--headed]`: serves a `Multiplexer`
   (default `127.0.0.1:9339`, `--browser patched`). It prints the URL and the token file,
   never the token nor a proxy's credentials. The proxies file holds one URL per line
-  (blank lines and `#` comments skipped); a bad line is named by its number, never shown.
+  (blank lines and `#` comments skipped); a bad line (spaces or control characters, NUL
+  included, count as bad) is named by its number, never shown. A token file that cannot
+  be used and an address that cannot be taken get messages of their own; on a
+  non-loopback `--listen` it warns that token and CDP travel in plain text, and on a
+  wildcard address that the `Host` check is off.
   Without the patched Chrome it points to `tellurium download-browser --browser patched`
   or `--browser stock`; without the extra, to `pip install 'tellurium[multiplex]'`.
   SIGINT, SIGTERM and SIGHUP (the terminal or ssh going away) close every client (1001),

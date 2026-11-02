@@ -56,7 +56,10 @@ async def test_connect_over_cdp_opens_a_page_and_gives_the_chrome_back(
     assert _profiles(private_tempdir) == []
 
 
-async def test_two_playwright_clients_get_two_chromes(local_server):
+async def test_two_playwright_clients_get_two_chromes(
+    local_server,
+    private_tempdir,  # noqa: F811
+):
     """Patched engine flags on the stock binary, so each Chrome shows its seed."""
     stock = await find_chrome()
     async with serving(2, browser="patched", executable=stock) as mux:
@@ -79,6 +82,8 @@ async def test_two_playwright_clients_get_two_chromes(local_server):
             finally:
                 await asyncio.gather(*(b.close() for b in browsers))
         assert await _wait_until(lambda: not any(_alive(s["pid"]) for s in busy), 30)
+        # Each client's temporary profile went with its Chrome.
+        assert await _wait_until(lambda: len(_profiles(private_tempdir)) == 0, 30)
 
 
 async def test_connect_over_cdp_without_the_token_is_refused():
