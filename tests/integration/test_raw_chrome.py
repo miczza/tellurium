@@ -295,3 +295,84 @@ async def test_stock_chrome_takes_the_time_zone_of_the_exit_ip(private_tempdir, 
     async with RawChrome.launch(headless=True, proxy="http://127.0.0.1:9") as raw:
         assert await _page_time_zone(raw) == "Asia/Tokyo"
         assert "--accept-lang=ja-JP,en" in _cmdline(raw.pid)
+
+
+@pytest.fixture
+def stopped_forwarders(monkeypatch) -> list:
+    from tellurium.browser import proxy as proxy_mod
+
+    stopped: list[object] = []
+    real_stop = proxy_mod.ProxyForwarder.stop
+
+    async def spy_stop(self):
+        stopped.append(self)
+        await real_stop(self)
+
+    monkeypatch.setattr(proxy_mod.ProxyForwarder, "stop", spy_stop)
+    return stopped
+
+
+async def _cancel(task: asyncio.Future) -> float:
+    """Cancel *task*; seconds until it is over."""
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 30)
+    return loop.time() - started
+
+
+async def test_launch_cancelled_while_the_forwarder_starts(
+    private_tempdir, monkeypatch, stopped_forwarders
+):
+    from tellurium.browser import proxy as proxy_mod
+
+    real_start = proxy_mod.ProxyForwarder.start
+    started: list[int] = []
+
+    async def start_then_hang(self):
+        await real_start(self)
+        started.append(self.port)
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(proxy_mod.ProxyForwarder, "start", start_then_hang)
+    before = _children(os.getpid())
+    task = asyncio.ensure_future(
+        RawChrome.launch(proxy="http://user:secret@127.0.0.1:9", geoip=False)
+    )
+    assert await _wait_until(lambda: started), "the forwarder never started"
+    assert await _cancel(task) < 5
+    assert stopped_forwarders, "the proxy forwarder was left running"
+    with pytest.raises(OSError):
+        await asyncio.open_connection("127.0.0.1", started[0])
+    assert _children(os.getpid()) <= before
+    assert not _profiles(private_tempdir)
+
+
+async def test_launch_cancelled_during_geoip(private_tempdir, stopped_forwarders):
+    from tests.unit.test_launch_plan import SilentProxy
+
+    before = _children(os.getpid())
+    async with SilentProxy() as proxy:
+        url = f"http://{USER}:{PASSWORD}@127.0.0.1:{proxy.port}"
+        task = asyncio.ensure_future(RawChrome.launch(proxy=url))
+        assert await _wait_until(lambda: proxy.accepted), "the lookup never started"
+        assert _profiles(private_tempdir)
+        assert await _cancel(task) < 5
+    assert stopped_forwarders, "the proxy forwarder was left running"
+    assert _children(os.getpid()) <= before, "Chrome was started anyway"
+    assert not _profiles(private_tempdir)
+
+
+async def test_launch_cancelled_while_waiting_for_chrome_to_answer(private_tempdir, tmp_path):
+    script = tmp_path / "mute-chrome"
+    script.write_text("#!/bin/sh\nexec sleep 60\n")
+    script.chmod(0o755)
+    before = _children(os.getpid())
+    task = asyncio.ensure_future(RawChrome.launch(executable=str(script)))
+    assert await _wait_until(lambda: _children(os.getpid()) - before), "Chrome never started"
+    (chrome,) = _children(os.getpid()) - before
+    await asyncio.sleep(0.2)  # into the wait for Browser.getVersion
+    assert await _cancel(task) < 15
+    assert await _wait_until(lambda: not _alive(chrome)), "not reaped"
+    assert not _profiles(private_tempdir)
