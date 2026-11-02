@@ -566,7 +566,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   percent-encoded twice.
 - A proxy URL that cannot be parsed (unknown scheme, bad port) no longer quotes its
   user name and password in the error, for `Browser.launch` too. A password may hold
-  unencoded `/`, `@`, `:`, `#` or `?`: the user info ends at the last `@`, so such a
+  unencoded `/`, `@`, `:`, `#`, `?` or `://`: the user info ends at the last `@`, and only
+  a well-formed scheme counts as one before `://`, so such a
   proxy now works and its password never shows in messages or the multiplexer's status.
 - `webrtc_ip='auto'`: the DNS lookup of the proxy host runs on a thread of its own, bounded
   by `launch_plan.DNS_TIMEOUT` (10 s, then `ValueError`), no longer in the event loop; a

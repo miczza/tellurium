@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import re
 import ssl
 from urllib.parse import unquote, urlparse
 
@@ -12,6 +13,8 @@ logger = logging.getLogger("tellurium")
 
 #: Proxy schemes Chrome understands in ``--proxy-server``.
 _SCHEMES = ("http", "https", "socks4", "socks5")
+#: What a URL scheme may look like (RFC 3986): anything else before "://" is user info.
+_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*")
 _CHUNK = 65536
 _MAX_HEADER_LINES = 200
 _MAX_HEAD_BYTES = 64 * 1024
@@ -25,7 +28,7 @@ def _split(url: str) -> tuple[str, str | None, str]:
     ends at the *last* ``@``: a password may hold ``/``, ``@``, ``:``, ``#`` or
     ``?`` unencoded, and whatever follows that ``@`` is never a credential."""
     scheme, sep, rest = url.partition("://")
-    if not sep:
+    if not sep or not _SCHEME.fullmatch(scheme):  # "://" inside a password, no scheme
         scheme, rest = "", url
     userinfo, at, host = rest.rpartition("@")
     return scheme, (userinfo if at else None), host

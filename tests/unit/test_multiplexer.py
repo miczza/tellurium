@@ -113,3 +113,15 @@ async def test_browser_launch_errors_never_quote_the_password(password):
     with pytest.raises(ValueError) as error:
         await Browser.launch(proxy=f"htp://alice:{password}@127.0.0.1:18084")
     assert "PW" not in str(error.value) and "alice" not in str(error.value)
+
+
+def test_a_password_with_scheme_separator_and_no_scheme_never_shows():
+    url = "alice:pa://ss@127.0.0.1:18084"
+    info = parse_proxy_url(url)
+    assert (info["scheme"], info["username"], info["password"]) == ("http", "alice", "pa://ss")
+    assert redact_proxy_url(url) == "127.0.0.1:18084"
+    assert "pa:" not in hide_credentials(f"bad {url}", url)
+    for bad in ("alice:pa://ss@127.0.0.1:port", "htp://alice:pa://ss@h:1"):
+        with pytest.raises(ValueError) as error:
+            parse_proxy_url(bad)
+        assert "alice" not in str(error.value) and "pa:" not in str(error.value)
