@@ -41,7 +41,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Multiplexer administration, behind the same checks as CDP (Bearer, `Host`, no
   `Origin`, no token in the URL): `GET /admin/status` answers `status()` as JSON (proxies
   without credentials, never the token); `POST /admin/slots/<id>/restart` replaces that
-  place's Chrome (its client gets 1012) and answers 202, or 404 for no such place. Another
+  place's Chrome (its client gets 1012) and answers 202, 409 when the place has no Chrome
+  (idle, launching or closing), 404 for no such place. Another
   method on these routes is 405 with `Allow`, as is any method but `GET` elsewhere;
   requests carry no body.
 - `tellurium multiplex --pool N [--proxies FILE] [--warm K] [--listen HOST:PORT]

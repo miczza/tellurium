@@ -351,7 +351,8 @@ asyncio.run(main())
   reach it.
 - **Administration.** With the same token: `GET /admin/status` (per place:
   state, pid, proxy without credentials, age, restarts; in total: clients,
-  queue, connections, crashes, hangs) and `POST /admin/slots/<id>/restart`.
+  queue, connections, crashes, hangs) and `POST /admin/slots/<id>/restart`
+  (202; 409 if that place has no Chrome right now).
 - **Engine.** `--browser patched` (the default) needs `tellurium download-browser
   --browser patched`; `--browser stock` uses the Chrome found on the system.
   `--headed` shows the windows. Ctrl-C, SIGTERM or SIGHUP closes every Chrome,

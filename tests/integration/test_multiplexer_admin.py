@@ -19,6 +19,7 @@ pytest.importorskip("websockets")
 
 from websockets.asyncio.client import connect  # noqa: E402
 
+from tellurium.browser.raw_chrome import RawChrome  # noqa: E402
 from tellurium.multiplexer import command  # noqa: E402
 from tests.integration.test_multiplexer import (  # noqa: E402, F401 - autouse fixtures
     _cdp,
@@ -125,11 +126,37 @@ async def test_restart_replaces_the_chrome_and_closes_its_client_with_1012():
         assert mux.status()["crashes"] == 0
 
 
-async def test_restart_of_an_idle_place_is_accepted():
+async def test_restart_of_a_place_without_chrome_is_409():
     async with serving(1) as mux:
-        status, _, _ = await _call(_port(mux), "POST", "/admin/slots/0/restart", _good(mux))
-        assert status == 202
+        status, _, body = await _call(_port(mux), "POST", "/admin/slots/0/restart", _good(mux))
+        assert status == 409 and b"no Chrome" in body
         assert mux.status()["slots"][0]["launches"] == 0
+
+
+async def test_restart_while_launching_is_409_then_a_warm_chrome_is_replaced(monkeypatch):
+    launch, go = RawChrome.launch, asyncio.Event()
+
+    async def held(**options):
+        await go.wait()
+        return await launch(**options)
+
+    monkeypatch.setattr(RawChrome, "launch", held)
+    async with serving(1, warm=1) as mux:
+        port = _port(mux)
+        assert await _wait_until(lambda: mux.status()["slots"][0]["state"] == "launching", 30)
+        status, _, _ = await _call(port, "POST", "/admin/slots/0/restart", _good(mux))
+        assert status == 409
+        go.set()
+        assert await _wait_until(lambda: mux.status()["slots"][0]["state"] == "ready", 60)
+        warm = mux.status()["slots"][0]
+        assert warm["restarts"] == 0 and warm["launches"] == 1
+        status, _, body = await _call(port, "POST", "/admin/slots/0/restart", _good(mux))
+        assert status == 202 and json.loads(body) == {"id": 0, "restarting": True}
+        assert await _wait_until(lambda: not _alive(warm["pid"]), 30)
+        assert await _wait_until(lambda: mux.status()["slots"][0]["state"] == "ready", 60)
+        after = mux.status()["slots"][0]
+        assert after["pid"] != warm["pid"] and after["restarts"] == 1 and after["launches"] == 2
+        assert mux.status()["crashes"] == 0
 
 
 @pytest.mark.parametrize(

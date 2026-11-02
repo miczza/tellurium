@@ -2,9 +2,10 @@
 
 ``GET /admin/status`` answers the pool's status as JSON (proxies without
 credentials, never the token); ``POST /admin/slots/<id>/restart`` replaces the
-Chrome of that place (its client gets 1012) and answers 202, or 404 when there
-is no such place. Another method on these routes is 405 with ``Allow``; any
-other ``/admin`` path is 404. Requests carry no body (``Content-Length: 0``).
+Chrome of that place (its client gets 1012) and answers 202; 409 when the
+place has no Chrome (idle, launching or closing), 404 when there is no such
+place. Another method on these routes is 405 with ``Allow``; any other
+``/admin`` path is 404. Requests carry no body (``Content-Length: 0``).
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
 PREFIX = "/admin"
 _STATUS = frozenset({"/admin/status", "/admin/status/"})
@@ -34,12 +35,13 @@ def is_admin(path: str) -> bool:
 
 
 class Admin:
-    """The admin routes of one multiplexer: *status* gives its status, *places*
-    its places (each with ``id``, ``chrome`` and ``restart()``)."""
+    """The admin routes of one multiplexer: *status* gives its status (with
+    ``slots``, each with its ``id``), *restart* replaces the Chrome of a place
+    and says whether there was one (:meth:`Multiplexer.restart`)."""
 
-    def __init__(self, status: Callable[[], dict], places: Callable[[], list[Any]]) -> None:
+    def __init__(self, status: Callable[[], dict], restart: Callable[[int], bool]) -> None:
         self._status = status
-        self._places = places
+        self._restart_place = restart
 
     def answer(self, method: str, path: str) -> Answer:
         if path in _STATUS:
@@ -54,13 +56,14 @@ class Admin:
         return Answer(404, "Not found: GET /admin/status or POST /admin/slots/<id>/restart", {})
 
     def _restart(self, slot_id: int) -> Answer:
-        for place in self._places():
-            if place.id == slot_id:
-                restarting = place.chrome is not None
-                place.restart()
-                body = {"id": slot_id, "restarting": restarting}
-                return Answer(202, json.dumps(body), {}, json_body=True)
-        return Answer(404, f"Not found: there is no place {slot_id}", {})
+        if slot_id not in {slot["id"] for slot in self._status()["slots"]}:
+            return Answer(404, f"Not found: there is no place {slot_id}", {})
+        if not self._restart_place(slot_id):
+            return Answer(
+                409, f"Conflict: place {slot_id} has no Chrome to restart (idle or launching)", {}
+            )
+        body = {"id": slot_id, "restarting": True}
+        return Answer(202, json.dumps(body), {}, json_body=True)
 
 
 def _not_allowed(allow: str) -> Answer:

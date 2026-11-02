@@ -118,7 +118,7 @@ class Multiplexer:
             raise RuntimeError("this Multiplexer is already serving")
         self._serving = asyncio.current_task()
         self._token = await asyncio.to_thread(load_or_create_token, self.token_file)
-        admin = Admin(self.status, lambda: self._pool.places)
+        admin = Admin(self.status, self.restart)
         server = Server(self._pool, self._token, host, port, admin)
         self._server = server
         self._pool.start()
