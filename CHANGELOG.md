@@ -53,6 +53,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   or `--browser stock`; without the extra, to `pip install 'tellurium[multiplex]'`.
   SIGINT and SIGTERM close every client (1001), Chrome, forwarder and profile, then it
   exits with 0.
+- Playwright (the Python package only, no browsers) in the `dev` extra: a test drives the
+  multiplexer with `connect_over_cdp`, two clients at once getting two Chromes.
 
 - `tellurium.browser.raw_chrome.RawChrome`: Chrome on its CDP pipe without `Browser`
   (`await RawChrome.launch(...)` or `async with`), for code that speaks CDP itself.
