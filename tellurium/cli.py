@@ -10,6 +10,7 @@ from pathlib import Path
 from tellurium.browser import _cache
 from tellurium.cdp import update_command
 from tellurium.mcp import command as mcp_command
+from tellurium.multiplexer import command as multiplex_command
 from tellurium.session import login_command
 
 
@@ -84,6 +85,7 @@ def main():
     for p in (dl_parser, upd_parser, verify_parser):
         p.add_argument("--allow-unverified", action="store_true", help="Skip SHA256SUMS")
     mcp_command.register(sub)
+    multiplex_command.register(sub)
     login_command.register(sub)
 
     args = parser.parse_args()

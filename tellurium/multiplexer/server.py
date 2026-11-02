@@ -7,7 +7,8 @@ pool (in the queue up to its timeout, else HTTP 503) and relays the client to
 a Chrome of its own. Every request, upgrade included, passes the same checks
 first: no repeated access header, a ``Host`` naming the bind address, no
 ``Origin`` (CDP clients send none, web pages always do), no token in the URL
-(query or path, even percent-encoded twice), then ``Authorization: Bearer``.
+(query or path, even percent-encoded twice), then ``Authorization: Bearer``. The ``/admin`` routes (:mod:`.admin`) come
+after the same checks.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from tellurium.access import (
     token_leaked,
 )
 from tellurium.multiplexer import pool as pool_module
+from tellurium.multiplexer.admin import Admin, is_admin
 from tellurium.multiplexer.pool import ClientGone, NoChrome, Pool, PoolClosed, QueueTimeout
 from tellurium.multiplexer.relay import close_client
 
@@ -62,8 +64,11 @@ def require_websockets() -> Any:
 class Server:
     """The listening socket and its connections, for one :class:`Pool`."""
 
-    def __init__(self, pool: Pool, token: str, host: str, port: int) -> None:
+    def __init__(
+        self, pool: Pool, token: str, host: str, port: int, admin: Admin | None = None
+    ) -> None:
         self._pool = pool
+        self._admin = admin
         self._token = token
         self._host = host
         self._port = port
@@ -169,6 +174,17 @@ class Server:
         if refusal is not None:
             return _reply(connection, *refusal)
         path = request.path.partition("?")[0]
+        # websockets < 17 refuses any method but GET before this point.
+        method = getattr(request, "method", "GET")
+        if is_admin(path):
+            if self._admin is None:
+                return _reply(connection, 404, "Not found: no administration here")
+            answer = self._admin.answer(method, path)
+            return _reply(
+                connection, answer.status, answer.body, answer.headers, json_body=answer.json_body
+            )
+        if method != "GET":
+            return _reply(connection, 405, "Method Not Allowed: use GET", {"Allow": "GET"})
         if path in _VERSION_PATHS:
             return await self._version(connection, request)
         if not _BROWSER_PATH.fullmatch(path):

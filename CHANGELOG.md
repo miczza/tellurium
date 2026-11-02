@@ -38,6 +38,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   socket is cut: a client that reads nothing cannot keep a place or the shutdown waiting.
 - Extra `tellurium[multiplex]` (`websockets>=13`); without it `Multiplexer()` raises
   `ImportError` with the install line.
+- Multiplexer administration, behind the same checks as CDP (Bearer, `Host`, no
+  `Origin`, no token in the URL): `GET /admin/status` answers `status()` as JSON (proxies
+  without credentials, never the token); `POST /admin/slots/<id>/restart` replaces that
+  place's Chrome (its client gets 1012) and answers 202, or 404 for no such place. Another
+  method on these routes is 405 with `Allow`, as is any method but `GET` elsewhere;
+  requests carry no body.
+- `tellurium multiplex --pool N [--proxies FILE] [--warm K] [--listen HOST:PORT]
+  [--acquire-timeout S] [--browser stock|patched] [--headed]`: serves a `Multiplexer`
+  (default `127.0.0.1:9339`, `--browser patched`). It prints the URL and the token file,
+  never the token nor a proxy's credentials. The proxies file holds one URL per line
+  (blank lines and `#` comments skipped); a bad line is named by its number, never shown.
+  Without the patched Chrome it points to `tellurium download-browser --browser patched`
+  or `--browser stock`; without the extra, to `pip install 'tellurium[multiplex]'`.
+  SIGINT and SIGTERM close every client (1001), Chrome, forwarder and profile, then it
+  exits with 0.
 
 - `tellurium.browser.raw_chrome.RawChrome`: Chrome on its CDP pipe without `Browser`
   (`await RawChrome.launch(...)` or `async with`), for code that speaks CDP itself.
