@@ -7,7 +7,9 @@ the proxied-only WebRTC policy without the stealth engine.
 
 from __future__ import annotations
 
+import asyncio
 import os
+import time
 
 import pytest
 
@@ -42,6 +44,29 @@ def exit_geo(monkeypatch):
     monkeypatch.setattr(geoip, "resolve_exit_ip", fake_exit_ip)
     monkeypatch.setattr(geoip, "resolve_geoip", lambda ip, **_kw: ROME)
     return lookups
+
+
+class SilentProxy:
+    """Accepts connections and never answers: a dead proxy that does not refuse."""
+
+    def __init__(self) -> None:
+        self.accepted = 0
+        self._writers: list = []
+
+    async def __aenter__(self) -> SilentProxy:
+        self._server = await asyncio.start_server(self._hold, "127.0.0.1", 0)
+        self.port = self._server.sockets[0].getsockname()[1]
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        self._server.close()
+        for writer in self._writers:
+            writer.close()
+        await self._server.wait_closed()
+
+    async def _hold(self, reader, writer) -> None:
+        self.accepted += 1
+        self._writers.append(writer)
 
 
 async def _flags(**kwargs) -> list[str]:
@@ -134,3 +159,37 @@ async def test_the_forwarder_hides_the_credentials():
 def test_invalid_options_are_refused_before_anything_starts(kwargs, match):
     with pytest.raises(ValueError, match=match):
         LaunchPlan(**kwargs)
+
+
+async def test_a_silent_proxy_costs_at_most_the_geoip_ceiling(monkeypatch, caplog):
+    from tellurium.browser import launch_plan
+
+    monkeypatch.setattr(launch_plan, "GEOIP_TIMEOUT", 0.5)
+    async with SilentProxy() as proxy:
+        started = time.monotonic()
+        flags = await _flags(browser="patched", proxy=f"http://127.0.0.1:{proxy.port}", geoip=True)
+        elapsed = time.monotonic() - started
+    assert proxy.accepted >= 1
+    assert elapsed < 3, f"GeoIP took {elapsed:.1f}s"
+    assert not [f for f in flags if f.startswith(("--accept-lang", "--fingerprint-timezone"))]
+    assert "GeoIP not available" in caplog.text
+
+
+async def test_a_cancelled_lookup_returns_at_once_and_uses_no_default_executor_thread():
+    import threading
+
+    async with SilentProxy() as proxy:
+        proc = BrowserProcess()
+        plan = LaunchPlan(headless=True, proxy=f"http://user:pw@127.0.0.1:{proxy.port}", geoip=True)
+        task = asyncio.ensure_future(plan.compose(proc))
+        while not proxy.accepted:
+            await asyncio.sleep(0.01)
+        lookups = [t for t in threading.enumerate() if t.name == "tellurium-geoip"]
+        assert lookups and all(t.daemon for t in lookups)
+        started = time.monotonic()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert time.monotonic() - started < 0.5
+        await asyncio.wait_for(proc.close(), 10)
+        assert not os.path.exists(plan.profile_dir)

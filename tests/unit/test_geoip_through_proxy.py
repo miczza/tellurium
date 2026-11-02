@@ -55,8 +55,11 @@ class TunnelProxy:
             status = b"200 OK" if body is not None else b"404 Not Found"
             data = (body or "").encode()
             writer.write(
-                b"HTTP/1.1 " + status + b"\r\nContent-Length: %d\r\n" % len(data)
-                + b"Connection: close\r\n\r\n" + data
+                b"HTTP/1.1 "
+                + status
+                + b"\r\nContent-Length: %d\r\n" % len(data)
+                + b"Connection: close\r\n\r\n"
+                + data
             )
             await writer.drain()
         except (asyncio.IncompleteReadError, ConnectionError):
@@ -88,7 +91,9 @@ def connections(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", connect)
     monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)
     yield seen
-    direct = [a for a in seen if isinstance(a, tuple) and not ipaddress.ip_address(a[0]).is_loopback]
+    direct = [
+        a for a in seen if isinstance(a, tuple) and not ipaddress.ip_address(a[0]).is_loopback
+    ]
     assert not direct, f"direct connections: {direct}"
 
 

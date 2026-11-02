@@ -229,3 +229,33 @@ async def test_credentials_stay_in_the_forwarder(private_tempdir):
             await _call(raw, "Target.createTarget", {"url": "http://site.test/"})
             assert await _wait_until(lambda: proxy.requests), "nothing reached the proxy"
             assert proxy.requests[0][1] == GOOD_AUTH
+
+
+async def test_cancelled_geoip_lookups_do_not_starve_close(private_tempdir):
+    """A dead proxy that does not refuse, many launches cancelled during GeoIP:
+    each returns at once, and another Chrome still closes in time."""
+    from tests.unit.test_launch_plan import SilentProxy
+
+    launches = 40
+    async with SilentProxy() as proxy:
+        # Without credentials: no forwarder whose closing would end the lookups.
+        url = f"http://127.0.0.1:{proxy.port}"
+        tasks = [asyncio.ensure_future(RawChrome.launch(proxy=url)) for _ in range(launches)]
+        # All at once: none waits for a thread another lookup holds.
+        assert await _wait_until(lambda: proxy.accepted >= launches, 4), proxy.accepted
+        started = asyncio.get_running_loop().time()
+        for task in tasks:
+            task.cancel()
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        assert all(isinstance(r, asyncio.CancelledError) for r in results), results
+        assert asyncio.get_running_loop().time() - started < 5
+        assert not _profiles(private_tempdir)
+        # The lookups given up on run on, but not on the executor close() needs.
+        await asyncio.wait_for(asyncio.to_thread(lambda: None), 1)
+
+        raw = await asyncio.wait_for(RawChrome.launch(headless=True), 30)
+        started = asyncio.get_running_loop().time()
+        await raw.close()
+        assert asyncio.get_running_loop().time() - started < 10
+        assert not raw.alive
+    assert not _profiles(private_tempdir)

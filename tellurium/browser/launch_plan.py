@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import functools
 import logging
 import os
+import threading
+from collections.abc import Callable
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, TypeVar
 
 from tellurium.browser.engine import BrowserEngine, select_engine
 from tellurium.browser.launcher import (
@@ -35,6 +38,11 @@ logger = logging.getLogger("tellurium")
 
 #: Keeps WebRTC's UDP inside the proxy: no direct candidate leaks the real IP.
 PROXIED_WEBRTC_FLAG = "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
+
+#: Seconds the whole GeoIP step (exit IP and country) may take; then Chrome's defaults.
+GEOIP_TIMEOUT = 10.0
+
+_T = TypeVar("_T")
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -307,14 +315,52 @@ class LaunchPlan:
 async def _exit_geo(proxy: str, forwarder: Any) -> Any:
     """Time zone and languages of the proxy's exit IP, or None (best effort).
 
-    Every lookup request goes through the proxy (its forwarder, if any).
+    Every lookup request goes through the proxy (its forwarder, if any); the
+    whole step is bounded by :data:`GEOIP_TIMEOUT`.
     """
-    try:
-        from tellurium.stealth.geoip import exit_geo
+    from tellurium.stealth.geoip import exit_geo
 
-        port = forwarder.port if forwarder is not None else None
-        # Off the loop: the lookup goes through the forwarder on it.
-        return await asyncio.to_thread(exit_geo, proxy, port)
+    port = forwarder.port if forwarder is not None else None
+    # Off the loop: the lookup goes through the forwarder on it.
+    lookup = functools.partial(exit_geo, proxy, port, timeout=GEOIP_TIMEOUT)
+    try:
+        return await _on_own_thread(lookup, timeout=GEOIP_TIMEOUT, name="tellurium-geoip")
     except Exception as e:  # noqa: BLE001 - GeoIP is best-effort
+        if isinstance(e, asyncio.TimeoutError):
+            e = f"no answer within {GEOIP_TIMEOUT:g} s"
         logger.warning("GeoIP not available: %s. Using default locale.", e)
         return None
+
+
+async def _on_own_thread(call: Callable[[], _T], *, timeout: float, name: str) -> _T:
+    """Run the blocking *call* on a daemon thread of its own, for at most *timeout* s.
+
+    Not on asyncio's default executor: a call given up on (timed out or
+    cancelled) runs on until its own timeouts end it, and a few of those there
+    would starve the off-loop steps of ``BrowserProcess.close()``. Cancellation
+    and :class:`asyncio.TimeoutError` return at once.
+    """
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future = loop.create_future()
+
+    def deliver(result: Any, error: BaseException | None) -> None:
+        if future.done():
+            return
+        if error is not None:
+            future.set_exception(error)
+        else:
+            future.set_result(result)
+
+    def run() -> None:
+        result, error = None, None
+        try:
+            result = call()
+        except Exception as e:  # noqa: BLE001 - handed to the awaiting task
+            error = e
+        try:
+            loop.call_soon_threadsafe(deliver, result, error)
+        except RuntimeError:  # the loop is closed: nobody is waiting any more
+            pass
+
+    threading.Thread(target=run, name=name, daemon=True).start()
+    return await asyncio.wait_for(future, timeout)

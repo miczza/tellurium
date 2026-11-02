@@ -127,7 +127,10 @@ def test_no_online_lookup_without_a_proxy_to_tunnel_through(via, proxy):
 def test_online_country_parses_text_and_json():
     from tellurium.stealth import geoip
 
-    assert geoip._online_country("1.1.1.1", FakeVia({"https://ipapi.co/1.1.1.1/country/": "it"})) == "IT"
+    assert (
+        geoip._online_country("1.1.1.1", FakeVia({"https://ipapi.co/1.1.1.1/country/": "it"}))
+        == "IT"
+    )
     fake = FakeVia({"https://api.country.is/1.1.1.1": '{"ip":"1.1.1.1","country":"fr"}'})
     assert geoip._online_country("1.1.1.1", fake) == "FR"
 

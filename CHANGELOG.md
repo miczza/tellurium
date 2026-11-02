@@ -525,6 +525,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The GeoIP step of a launch (`Browser.launch(stealth=True)` or `geoip=True` with a proxy)
+  is bounded as a whole by `launch_plan.GEOIP_TIMEOUT` (10 s; then Chrome's default locale,
+  with a warning): a proxy that accepts and never answers cost up to 40 s per launch. It
+  runs on a daemon thread of its own, not on asyncio's default executor, and a cancelled
+  launch returns at once: lookups given up on no longer starve the executor that `close()`
+  uses to stop Chrome and remove the profile.
+
 - GeoIP never asks a third party from the host's own address: with a proxy and no local
   database, the online country lookup (`ipapi.co`, `api.country.is`) used to be sent
   directly, with the proxy's exit IP in the URL. Every lookup request (exit IP and country)
