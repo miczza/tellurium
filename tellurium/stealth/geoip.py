@@ -123,82 +123,136 @@ _EXIT_IP_SERVICES = [
     "https://icanhazip.com",
 ]
 
+_ONLINE_COUNTRY_SERVICES = [
+    "https://ipapi.co/{ip}/country/",
+    "https://api.country.is/{ip}",
+]
 
-def resolve_exit_ip(proxy_url: str, forwarder_port: int | None = None) -> str:
-    """Determine the real exit IP by making an HTTP request through the proxy.
+#: Seconds one lookup request may take (and the whole lookup, by default).
+_REQUEST_TIMEOUT = 5.0
+_LOOKUP_TIMEOUT = 10.0
+_MAX_BODY = 4096
 
-    If a local ProxyForwarder is running (for authenticated proxies), uses
-    ``localhost:<forwarder_port>`` as the HTTP proxy.  Otherwise builds a
-    proxy handler from *proxy_url* directly (HTTP/HTTPS proxies only —
-    SOCKS5 without auth falls back to DNS resolution of the proxy hostname).
 
-    Tries multiple IP-echo services for reliability.
-    """
-    import socket
-    import urllib.request
+@dataclass(frozen=True)
+class _HttpProxy:
+    """The HTTP proxy every online lookup is tunnelled through (``CONNECT``)."""
 
-    # Build the opener with the right proxy
-    if forwarder_port is not None:
-        handler = urllib.request.ProxyHandler(
-            {
-                "http": f"http://localhost:{forwarder_port}",
-                "https": f"http://localhost:{forwarder_port}",
-            }
-        )
-    else:
-        from urllib.parse import urlparse
+    host: str
+    port: int
+    authorization: str | None = None
 
-        parsed = urlparse(proxy_url)
-        if parsed.scheme in ("http", "https"):
-            handler = urllib.request.ProxyHandler(
-                {
-                    "http": proxy_url,
-                    "https": proxy_url,
-                }
+    @classmethod
+    def of(cls, proxy_url: str | None, forwarder_port: int | None) -> _HttpProxy | None:
+        """The forwarder, or a plain HTTP proxy; None when lookups cannot use the proxy.
+
+        SOCKS and HTTPS proxies are spoken to only through the forwarder: the
+        lookups never fall back to a direct connection.
+        """
+        if forwarder_port is not None:
+            return cls("127.0.0.1", forwarder_port)
+        if not proxy_url:
+            return None
+        from tellurium.browser.proxy import parse_proxy_url
+
+        info = parse_proxy_url(proxy_url)
+        if info["scheme"] != "http" or not info["host"]:
+            return None
+        authorization = None
+        if info["username"] or info["password"]:
+            import base64
+
+            pair = f"{info['username'] or ''}:{info['password'] or ''}"
+            authorization = "Basic " + base64.b64encode(pair.encode()).decode("ascii")
+        return cls(info["host"], info["port"], authorization)
+
+    def get(self, url: str, timeout: float) -> str:
+        """GET *url* through a ``CONNECT`` tunnel of this proxy; the body, stripped."""
+        import http.client
+        import ssl
+        from urllib.parse import urlsplit
+
+        target = urlsplit(url)
+        if target.scheme == "https":
+            conn: http.client.HTTPConnection = http.client.HTTPSConnection(
+                self.host, self.port, timeout=timeout, context=ssl.create_default_context()
             )
         else:
-            # SOCKS5 without auth: urllib doesn't support SOCKS natively.
-            # Fallback: resolve proxy hostname via DNS.
-            hostname = parsed.hostname or ""
-            try:
-                return socket.gethostbyname(hostname)
-            except socket.gaierror:
-                return hostname
+            conn = http.client.HTTPConnection(self.host, self.port, timeout=timeout)
+        headers = {"Proxy-Authorization": self.authorization} if self.authorization else None
+        try:
+            conn.set_tunnel(target.hostname or "", target.port, headers=headers)
+            path = (target.path or "/") + (f"?{target.query}" if target.query else "")
+            conn.request("GET", path, headers={"User-Agent": "curl/8.0"})
+            resp = conn.getresponse()
+            body = resp.read(_MAX_BODY)
+            if resp.status != 200:
+                raise OSError(f"HTTP {resp.status} from {target.hostname}")
+            return body.decode(errors="replace").strip()
+        finally:
+            conn.close()
 
-    opener = urllib.request.build_opener(handler)
+
+def _remaining(deadline: float | None) -> float:
+    """Timeout of the next request: :data:`_REQUEST_TIMEOUT`, cut to the deadline."""
+    import time
+
+    if deadline is None:
+        return _REQUEST_TIMEOUT
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError("GeoIP lookup ran out of time")
+    return min(_REQUEST_TIMEOUT, left)
+
+
+def resolve_exit_ip(
+    proxy_url: str, forwarder_port: int | None = None, *, deadline: float | None = None
+) -> str:
+    """Determine the real exit IP by making an HTTPS request through the proxy.
+
+    The request is tunnelled through the local forwarder (``forwarder_port``,
+    authenticated proxies) or through *proxy_url* itself when it is a plain
+    HTTP proxy; never sent directly. A proxy the lookup cannot tunnel through
+    (SOCKS, or HTTPS without the forwarder) falls back to the DNS resolution of
+    its host name. *deadline* (``time.monotonic()``)
+    bounds every request. Tries several IP-echo services.
+    """
+    import socket
+
+    via = _HttpProxy.of(proxy_url, forwarder_port)
+    if via is None:
+        from urllib.parse import urlparse
+
+        hostname = urlparse(proxy_url).hostname or ""
+        try:
+            return socket.gethostbyname(hostname)
+        except socket.gaierror:
+            return hostname
 
     for service_url in _EXIT_IP_SERVICES:
+        timeout = _remaining(deadline)
         try:
-            req = urllib.request.Request(service_url, headers={"User-Agent": "curl/8.0"})
-            with opener.open(req, timeout=10) as resp:
-                ip = resp.read().decode().strip()
-                if ip and all(c.isdigit() or c == "." for c in ip):
-                    return ip
-        except Exception:  # noqa: BLE001 - try next service
+            ip = via.get(service_url, timeout)
+        except Exception as e:  # noqa: BLE001 - try next service
+            logger.debug("exit IP via %s failed: %s", service_url, e)
             continue
+        if ip and all(c.isdigit() or c == "." for c in ip):
+            return ip
 
     raise RuntimeError(
         "Could not determine exit IP through proxy. Tried: " + ", ".join(_EXIT_IP_SERVICES)
     )
 
 
-_ONLINE_COUNTRY_SERVICES = [
-    "https://ipapi.co/{ip}/country/",
-    "https://api.country.is/{ip}",
-]
-
-
-def _online_country(ip: str, timeout: float = 5) -> str | None:
-    """Best-effort online IP -> ISO country lookup (no DB required)."""
+def _online_country(ip: str, via: _HttpProxy, deadline: float | None = None) -> str | None:
+    """Best-effort IP -> ISO country lookup through the proxy (no DB required)."""
     import json
-    import urllib.request
 
     for template in _ONLINE_COUNTRY_SERVICES:
         url = template.format(ip=ip)
+        timeout = _remaining(deadline)
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                body = resp.read().decode().strip()
+            body = via.get(url, timeout)
         except Exception as e:  # noqa: BLE001 - try next service
             logger.debug("online geoip %s failed: %s", url, e)
             continue
@@ -222,13 +276,22 @@ def _geo_from_country(country: str) -> GeoResult:
     )
 
 
-def resolve_geoip(ip: str, *, online_fallback: bool = True) -> GeoResult:
+def resolve_geoip(
+    ip: str,
+    *,
+    online_fallback: bool = True,
+    proxy: str | None = None,
+    forwarder_port: int | None = None,
+    deadline: float | None = None,
+) -> GeoResult:
     """Resolve IP -> country -> timezone/languages.
 
     Uses a local MMDB database (``tellurium download-geoip``, MaxMind GeoLite2
-    or DB-IP Lite) via ``maxminddb``. When neither the module nor a database is
-    available and *online_fallback* is true, falls back to a public IP-to-country
-    web service (one HTTPS request; same trust class as the exit-IP echo).
+    or DB-IP Lite) via ``maxminddb``. Without one, and with *online_fallback*,
+    asks a public IP-to-country web service — only through *proxy* (or its
+    forwarder, *forwarder_port*), as :func:`resolve_exit_ip` does: the IP never
+    goes to a third party from the host's own address. Without a usable proxy
+    there is no online lookup.
     """
     try:
         import maxminddb
@@ -247,11 +310,12 @@ def resolve_geoip(ip: str, *, online_fallback: bool = True) -> GeoResult:
                     raise ValueError(f"Could not resolve IP: {ip}")
                 return _geo_from_country(result["country"]["iso_code"])
 
-    if online_fallback:
-        code = _online_country(ip)
+    via = _HttpProxy.of(proxy, forwarder_port) if online_fallback else None
+    if via is not None:
+        code = _online_country(ip, via, deadline)
         if code:
             logger.warning(
-                "GeoIP: no local database, resolved %s -> %s online. "
+                "GeoIP: no local database, resolved %s -> %s online through the proxy. "
                 "Run `tellurium download-geoip` for offline lookups.",
                 ip,
                 code,
@@ -262,6 +326,21 @@ def resolve_geoip(ip: str, *, online_fallback: bool = True) -> GeoResult:
         raise ImportError("GeoIP requires maxminddb. Install with: pip install tellurium[geoip]")
     _ensure_geolite2_db()  # raises FileNotFoundError with instructions
     raise ValueError(f"Could not resolve IP: {ip}")
+
+
+def exit_geo(
+    proxy_url: str, forwarder_port: int | None = None, *, timeout: float = _LOOKUP_TIMEOUT
+) -> GeoResult:
+    """Time zone and languages of the proxy's exit IP; every request goes through the proxy.
+
+    Blocking: run it off the event loop. *timeout* bounds the whole lookup.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    exit_ip = resolve_exit_ip(proxy_url, forwarder_port, deadline=deadline)
+    logger.info("Proxy exit IP: %s", exit_ip)
+    return resolve_geoip(exit_ip, proxy=proxy_url, forwarder_port=forwarder_port, deadline=deadline)
 
 
 _DB_DIR_NAME = "geolite2"

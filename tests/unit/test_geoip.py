@@ -74,36 +74,75 @@ def test_resolve_geoip_missing_maxminddb():
             resolve_geoip("8.8.8.8", online_fallback=False)
 
 
-def test_resolve_geoip_online_fallback_without_db(monkeypatch):
-    """No maxminddb: fall back to an online country lookup."""
-    monkeypatch.setattr("tellurium.stealth.geoip._online_country", lambda ip, timeout=5: "DE")
-    with patch.dict("sys.modules", {"maxminddb": None}):
-        geo = resolve_geoip("8.8.8.8")
-    assert geo.country == "DE" and geo.timezone == "Europe/Berlin"
+class FakeVia:
+    """Stands for the proxy tunnel: answers by URL, records the requests."""
+
+    def __init__(self, answers: dict[str, object]):
+        self.answers = answers
+        self.urls: list[str] = []
+
+    def get(self, url, timeout):
+        self.urls.append(url)
+        answer = self.answers.get(url, OSError("unreachable"))
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
 
 
-def test_online_country_parses_text_and_json(monkeypatch):
+@pytest.fixture
+def via(monkeypatch):
+    """Every tunnel built by the module is this fake one."""
     from tellurium.stealth import geoip
 
-    bodies = iter([b"  it\n"])
+    fake = FakeVia({})
+    built: list[tuple] = []
+    real_of = geoip._HttpProxy.of
 
-    class R:
-        def __init__(self, b):
-            self.b = b
+    def of(proxy_url, forwarder_port):
+        built.append((real_of(proxy_url, forwarder_port), proxy_url, forwarder_port))
+        return fake if built[-1][0] is not None else None
 
-        def read(self):
-            return self.b
+    monkeypatch.setattr(geoip._HttpProxy, "of", staticmethod(of))
+    fake.built = built
+    return fake
 
-        def __enter__(self):
-            return self
 
-        def __exit__(self, *a):
-            return None
+def test_resolve_geoip_online_fallback_goes_through_the_proxy(via):
+    """No maxminddb: the online country lookup is tunnelled through the proxy."""
+    via.answers = {"https://ipapi.co/8.8.8.8/country/": "DE"}
+    with patch.dict("sys.modules", {"maxminddb": None}):
+        geo = resolve_geoip("8.8.8.8", proxy="http://127.0.0.1:3128")
+    assert geo.country == "DE" and geo.timezone == "Europe/Berlin"
+    assert via.urls == ["https://ipapi.co/8.8.8.8/country/"]
 
-    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=5: R(next(bodies)))
-    assert geoip._online_country("1.1.1.1") == "IT"
-    bodies = iter([b'{"ip":"1.1.1.1","country":"fr"}'])
-    assert geoip._online_country("1.1.1.1") == "FR"
+
+@pytest.mark.parametrize("proxy", [None, "socks5://127.0.0.1:1080", "https://127.0.0.1:3128"])
+def test_no_online_lookup_without_a_proxy_to_tunnel_through(via, proxy):
+    with patch.dict("sys.modules", {"maxminddb": None}):
+        with pytest.raises(ImportError):
+            resolve_geoip("8.8.8.8", proxy=proxy)
+    assert via.urls == []
+
+
+def test_online_country_parses_text_and_json():
+    from tellurium.stealth import geoip
+
+    assert geoip._online_country("1.1.1.1", FakeVia({"https://ipapi.co/1.1.1.1/country/": "it"})) == "IT"
+    fake = FakeVia({"https://api.country.is/1.1.1.1": '{"ip":"1.1.1.1","country":"fr"}'})
+    assert geoip._online_country("1.1.1.1", fake) == "FR"
+
+
+def test_http_proxy_of_picks_forwarder_or_plain_http_proxy():
+    from tellurium.stealth.geoip import _HttpProxy
+
+    assert _HttpProxy.of("http://u:p@proxy:8080", 9999) == _HttpProxy("127.0.0.1", 9999)
+    assert _HttpProxy.of("http://proxy.example.com:3128", None) == _HttpProxy(
+        "proxy.example.com", 3128
+    )
+    with_auth = _HttpProxy.of("http://u:p@proxy:8080", None)
+    assert with_auth.authorization == "Basic dTpw"
+    assert _HttpProxy.of("socks5://proxy:1080", None) is None
+    assert _HttpProxy.of(None, None) is None
 
 
 def test_resolve_geoip_success():
@@ -193,77 +232,40 @@ def test_resolve_geoip_none_result():
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_exit_ip_with_forwarder():
-    """When a forwarder port is given, it should use localhost as HTTP proxy."""
-    mock_response = MagicMock()
-    mock_response.read.return_value = b"203.0.113.42"
-    mock_response.__enter__ = MagicMock(return_value=mock_response)
-    mock_response.__exit__ = MagicMock(return_value=False)
-
-    mock_opener = MagicMock()
-    mock_opener.open.return_value = mock_response
-
-    with patch("urllib.request.build_opener", return_value=mock_opener) as mock_build:
-        ip = resolve_exit_ip("http://user:pass@proxy:8080", forwarder_port=9999)
-
+def test_resolve_exit_ip_goes_through_the_proxy(via):
+    via.answers = {"https://api.ipify.org": "203.0.113.42"}
+    ip = resolve_exit_ip("http://user:pass@proxy:8080", forwarder_port=9999)
     assert ip == "203.0.113.42"
-    # Verify ProxyHandler was created with localhost
-    handler_arg = mock_build.call_args[0][0]
-    assert "localhost:9999" in str(handler_arg.proxies)
+    assert via.built[0][2] == 9999
 
 
-def test_resolve_exit_ip_http_no_forwarder():
-    """HTTP proxy without auth should use proxy URL directly."""
-    mock_response = MagicMock()
-    mock_response.read.return_value = b"198.51.100.10\n"
-    mock_response.__enter__ = MagicMock(return_value=mock_response)
-    mock_response.__exit__ = MagicMock(return_value=False)
-
-    mock_opener = MagicMock()
-    mock_opener.open.return_value = mock_response
-
-    with patch("urllib.request.build_opener", return_value=mock_opener):
-        ip = resolve_exit_ip("http://proxy.example.com:3128")
-
-    assert ip == "198.51.100.10"
-
-
-def test_resolve_exit_ip_socks5_no_forwarder_fallback():
-    """SOCKS5 without forwarder should fall back to DNS resolution."""
+def test_resolve_exit_ip_socks5_no_forwarder_fallback(via):
+    """SOCKS5 without forwarder: DNS of the proxy host, no request at all."""
     with patch("socket.gethostbyname", return_value="192.0.2.1"):
         ip = resolve_exit_ip("socks5://socks.example.com:1080")
-
     assert ip == "192.0.2.1"
+    assert via.urls == []
 
 
-def test_resolve_exit_ip_all_services_fail():
-    """Should raise RuntimeError when all IP services fail."""
-    mock_opener = MagicMock()
-    mock_opener.open.side_effect = Exception("connection refused")
-
-    with patch("urllib.request.build_opener", return_value=mock_opener):
-        with pytest.raises(RuntimeError, match="Could not determine exit IP"):
-            resolve_exit_ip("http://proxy:8080", forwarder_port=9999)
+def test_resolve_exit_ip_all_services_fail(via):
+    with pytest.raises(RuntimeError, match="Could not determine exit IP"):
+        resolve_exit_ip("http://proxy:8080", forwarder_port=9999)
+    assert len(via.urls) == 4
 
 
-def test_resolve_exit_ip_tries_next_service_on_failure():
-    """Should try the next service when one fails."""
-    mock_response = MagicMock()
-    mock_response.read.return_value = b"203.0.113.1"
-    mock_response.__enter__ = MagicMock(return_value=mock_response)
-    mock_response.__exit__ = MagicMock(return_value=False)
-
-    mock_opener = MagicMock()
-    mock_opener.open.side_effect = [
-        Exception("timeout"),  # first service fails
-        mock_response,  # second service succeeds
-    ]
-
-    with patch("urllib.request.build_opener", return_value=mock_opener):
-        ip = resolve_exit_ip("http://proxy:8080", forwarder_port=9999)
-
+def test_resolve_exit_ip_tries_next_service_on_failure(via):
+    via.answers = {"https://checkip.amazonaws.com": "203.0.113.1\n".strip()}
+    ip = resolve_exit_ip("http://proxy:8080", forwarder_port=9999)
     assert ip == "203.0.113.1"
-    assert mock_opener.open.call_count == 2
+    assert len(via.urls) == 2
+
+
+def test_resolve_exit_ip_stops_at_the_deadline(via):
+    import time
+
+    with pytest.raises(TimeoutError):
+        resolve_exit_ip("http://proxy:8080", 9999, deadline=time.monotonic() - 1)
+    assert via.urls == []
 
 
 # ---------------------------------------------------------------------------

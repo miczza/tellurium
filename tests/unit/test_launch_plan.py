@@ -35,12 +35,12 @@ def exit_geo(monkeypatch):
     """The proxy's exit IP is in Rome; records the lookups."""
     lookups: list[tuple] = []
 
-    def fake_exit_ip(proxy, forwarder_port=None):
+    def fake_exit_ip(proxy, forwarder_port=None, **_kw):
         lookups.append((proxy, forwarder_port))
         return "203.0.113.5"
 
     monkeypatch.setattr(geoip, "resolve_exit_ip", fake_exit_ip)
-    monkeypatch.setattr(geoip, "resolve_geoip", lambda ip: ROME)
+    monkeypatch.setattr(geoip, "resolve_geoip", lambda ip, **_kw: ROME)
     return lookups
 
 

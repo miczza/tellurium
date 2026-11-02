@@ -305,15 +305,16 @@ class LaunchPlan:
 
 
 async def _exit_geo(proxy: str, forwarder: Any) -> Any:
-    """Time zone and languages of the proxy's exit IP, or None (best effort)."""
+    """Time zone and languages of the proxy's exit IP, or None (best effort).
+
+    Every lookup request goes through the proxy (its forwarder, if any).
+    """
     try:
-        from tellurium.stealth.geoip import resolve_exit_ip, resolve_geoip
+        from tellurium.stealth.geoip import exit_geo
 
         port = forwarder.port if forwarder is not None else None
         # Off the loop: the lookup goes through the forwarder on it.
-        exit_ip = await asyncio.to_thread(resolve_exit_ip, proxy, port)
-        logger.info("Proxy exit IP: %s", exit_ip)
-        return await asyncio.to_thread(resolve_geoip, exit_ip)
+        return await asyncio.to_thread(exit_geo, proxy, port)
     except Exception as e:  # noqa: BLE001 - GeoIP is best-effort
         logger.warning("GeoIP not available: %s. Using default locale.", e)
         return None

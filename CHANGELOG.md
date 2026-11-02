@@ -525,6 +525,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- GeoIP never asks a third party from the host's own address: with a proxy and no local
+  database, the online country lookup (`ipapi.co`, `api.country.is`) used to be sent
+  directly, with the proxy's exit IP in the URL. Every lookup request (exit IP and country)
+  now goes through a `CONNECT` tunnel of the proxy's credential forwarder or of the plain
+  HTTP proxy; a proxy it cannot tunnel through (SOCKS, HTTPS without credentials) and no
+  proxy at all mean no online request, only the local database. `resolve_geoip()` takes
+  `proxy=` and `forwarder_port=` for that; new `exit_geo(proxy, forwarder_port)` does both
+  steps. Affects `Browser.launch(stealth=True, proxy=...)` too.
+
 - `SessionPool`: the browser slots are handed out first come, first served, with no polling.
   Whoever releases a slot gives it to the oldest waiter (in any loop or thread) instead of
   freeing it for whoever polls first, so a task that closes and opens again in a loop no
