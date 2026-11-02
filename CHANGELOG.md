@@ -58,7 +58,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   or `--browser stock`; without the extra, to `pip install 'tellurium[multiplex]'`.
   SIGINT, SIGTERM and SIGHUP (the terminal or ssh going away) close every client (1001),
   Chrome, forwarder and profile, then it exits with 0; more signals while it closes do
-  not cut the closing short nor change the exit status.
+  not cut the closing short nor change the exit status. Only the signals the platform has
+  are used, and without `loop.add_signal_handler` (Windows) Ctrl-C closes the same way:
+  importing the CLI no longer needs SIGHUP.
 - Playwright (the Python package only, no browsers) in the `dev` extra: a test drives the
   multiplexer with `connect_over_cdp`, two clients at once getting two Chromes.
 

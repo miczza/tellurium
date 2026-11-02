@@ -20,8 +20,9 @@ from typing import Any
 
 INSTALL_HINT = "tellurium multiplex needs websockets: pip install 'tellurium[multiplex]'"
 DEFAULT_LISTEN = "127.0.0.1:9339"
-#: Signals that stop the command cleanly: Ctrl-C, kill, and the terminal (or ssh) going away.
-_STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+#: Signals that stop the command cleanly: Ctrl-C, kill, and the terminal (or ssh)
+#: going away; those the platform has (Windows has no SIGHUP).
+_STOP_NAMES = ("SIGINT", "SIGTERM", "SIGHUP")
 _SHAPE = "scheme://[user:password@]host:port, or host:port"
 
 
@@ -183,9 +184,7 @@ def listen_warning(host: str) -> str | None:
 
 async def _serve(mux: Any, host: str, port: int, proxies: int) -> None:
     serving = asyncio.ensure_future(mux.serve(host, port))
-    loop = asyncio.get_running_loop()
-    for signum in _STOP_SIGNALS:
-        loop.add_signal_handler(signum, serving.cancel)
+    release = _catch_stop_signals(asyncio.get_running_loop(), serving.cancel)
     try:
         while mux.url is None and not serving.done():
             await asyncio.wait([serving], timeout=0.05)
@@ -211,12 +210,49 @@ async def _serve(mux: Any, host: str, port: int, proxies: int) -> None:
             serving.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await serving
-        # Closed: blocked, not back to their defaults, so a signal that comes
-        # while the process exits cannot kill it (nor turn its 0 into -2).
-        signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)
-        for signum in _STOP_SIGNALS:
-            loop.remove_signal_handler(signum)
+        release()
     _say("stopped")
+
+
+def _stop_signals() -> tuple[int, ...]:
+    return tuple(getattr(signal, name) for name in _STOP_NAMES if hasattr(signal, name))
+
+
+def _catch_stop_signals(loop: asyncio.AbstractEventLoop, stop: Any) -> Any:
+    """Call *stop* on each stop signal, until the returned function is called;
+    after that those signals are ignored (blocked where the platform can), not
+    back to their defaults: one that comes while the process exits cannot kill
+    it nor turn its 0 into -2. Without ``loop.add_signal_handler`` (Windows) the
+    handlers are plain ``signal.signal`` ones that hand *stop* to the loop."""
+    signals = _stop_signals()
+    native: list[int] = []
+    try:
+        for signum in signals:
+            loop.add_signal_handler(signum, stop)
+            native.append(signum)
+    except (NotImplementedError, AttributeError):
+        for signum in native:
+            loop.remove_signal_handler(signum)
+        native = []
+
+        def handler(*_: Any) -> None:
+            loop.call_soon_threadsafe(stop)
+
+        for signum in signals:
+            signal.signal(signum, handler)
+
+    def release() -> None:
+        if hasattr(signal, "pthread_sigmask"):
+            signal.pthread_sigmask(signal.SIG_BLOCK, signals)
+            for signum in native:
+                loop.remove_signal_handler(signum)
+            return
+        for signum in native:
+            loop.remove_signal_handler(signum)
+        for signum in signals:
+            signal.signal(signum, signal.SIG_IGN)
+
+    return release
 
 
 def _patched_installed() -> bool:
