@@ -73,7 +73,9 @@ class RawChrome:
         The launch is all-or-nothing: on failure or cancellation Chrome, the
         forwarder and the profile are released, and a Chrome that exits on its
         own raises :class:`~tellurium.browser.launcher.LaunchError` with its
-        output. Options are checked right away (``ValueError``).
+        output. A Chrome that does not answer ``Browser.getVersion`` within
+        :data:`READY_TIMEOUT` seconds raises :class:`asyncio.TimeoutError`.
+        Options are checked right away (``ValueError``).
         """
         plan = LaunchPlan(
             headless=headless,
@@ -125,7 +127,8 @@ class RawChrome:
 
     @property
     def seed(self) -> int | None:
-        """The fingerprint seed Chrome got (drawn by the patched engine when none was given)."""
+        """The fingerprint seed Chrome got (drawn by the patched engine when none was
+        given); None with stock Chrome, which takes none."""
         return self._seed
 
     @property

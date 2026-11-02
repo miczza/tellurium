@@ -221,7 +221,7 @@ async def test_credentials_stay_in_the_forwarder(private_tempdir):
         url = f"http://{USER}:{PASSWORD}@127.0.0.1:{proxy.port}"
         async with RawChrome.launch(headless=True, proxy=url, geoip=False, seed=5) as raw:
             assert raw.proxy == url
-            assert raw.seed == 5
+            assert raw.seed is None  # stock Chrome takes no seed
             line = _cmdline(raw.pid)
             servers = [a for a in line if a.startswith("--proxy-server=")]
             assert len(servers) == 1

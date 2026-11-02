@@ -235,3 +235,19 @@ async def test_webrtc_ip_ignored_by_stock_chrome_is_said(caplog):
     caplog.clear()
     await _flags(browser="patched", webrtc_ip="203.0.113.4")
     assert "webrtc_ip" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "browser, stealth, expected",
+    [("stock", False, None), ("patched", False, 5), ("stock", True, 5)],
+)
+async def test_seed_used_is_the_seed_something_applies(browser, stealth, expected):
+    proc = BrowserProcess()
+    plan = LaunchPlan(headless=True, browser=browser, stealth=stealth, seed=5)
+    try:
+        await plan.compose(proc)
+    finally:
+        await proc.close()
+        if plan.stealth_engine is not None:
+            plan.stealth_engine.close()
+    assert plan.seed_used == expected

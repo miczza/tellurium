@@ -101,8 +101,15 @@ class LaunchPlan:
 
     @property
     def seed_used(self) -> int | None:
-        """The fingerprint seed Chrome got: the patched engine draws one when none is given."""
-        return getattr(self.engine, "seed", None) or self.seed
+        """The fingerprint seed something applies, or None.
+
+        The patched engine draws one when none is given; with the stock engine
+        only the stealth profile uses it.
+        """
+        engine_seed = getattr(self.engine, "seed", None)
+        if engine_seed is not None:
+            return engine_seed
+        return self.seed if self.stealth else None
 
     async def compose(self, proc: BrowserProcess) -> None:
         """Resolve everything up to Chrome's command line (:attr:`flags`).
