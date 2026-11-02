@@ -681,3 +681,58 @@ async def test_a_client_that_reads_nothing_cannot_hold_a_close_up(monkeypatch, a
         ws.transport.abort()
         task.cancel()
         await asyncio.wait([task])
+
+
+async def test_a_client_pausing_just_short_of_the_stall_does_not_get_chrome_killed(monkeypatch):
+    """Production timings scaled down (probe every 1 s, 1 s timeout, two misses,
+    stall at 6 s): a page that logs without pause, a client that stops reading for
+    5 s and then reads fast. Chrome talks all along: no 1011. A Chrome in SIGSTOP
+    is still caught."""
+    from tellurium.multiplexer import relay as relay_module
+
+    monkeypatch.setattr(health, "INTERVAL", 1.0)
+    monkeypatch.setattr(health, "TIMEOUT", 1.0)
+    monkeypatch.setattr(relay_module, "STALL_LIMIT", 6.0)
+    monkeypatch.setattr(relay_module, "HIGH_WATER", 64 * 1024)
+    async with serving() as mux:
+        async with connect(
+            f"ws://127.0.0.1:{_port(mux)}/devtools/browser/x",
+            additional_headers={"Authorization": f"Bearer {mux.token}"},
+            max_queue=1,  # not reading stops the socket at once; reading is fast
+            max_size=None,
+        ) as ws:
+            created = await _cdp(ws, 1, "Target.createTarget", {"url": "about:blank"})
+            target = created["result"]["targetId"]
+            attached = await _cdp(
+                ws, 2, "Target.attachToTarget", {"targetId": target, "flatten": True}
+            )
+            session = attached["result"]["sessionId"]
+            await _cdp(ws, 3, "Runtime.enable", session=session)
+            chatter = 'setInterval(() => console.log("x".repeat(200000)), 1)'
+            await _cdp(ws, 4, "Runtime.evaluate", {"expression": chatter}, session=session)
+            relay = mux._pool.places[0].relay
+            loop = asyncio.get_running_loop()
+
+            async def read_for(seconds: float) -> int:
+                count, end = 0, loop.time() + seconds
+                while loop.time() < end:
+                    await asyncio.wait_for(ws.recv(), 10)
+                    count += 1
+                return count
+
+            assert await read_for(1.0) > 0
+            await asyncio.sleep(5.0)  # just short of the stall limit
+            assert relay.pauses > 0
+            assert await read_for(6.0) > 0
+            status = mux.status()
+            assert status["hangs"] == 0 and status["crashes"] == 0, status
+            (pid,) = _pids(mux)
+
+            os.kill(pid, signal.SIGSTOP)  # now a real hang
+            try:
+                code, reason = await _closed(ws, 20)
+            finally:
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(pid, signal.SIGCONT)
+            assert code == 1011 and "health probes" in reason
+            assert mux.status()["hangs"] == 1

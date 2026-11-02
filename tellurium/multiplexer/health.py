@@ -6,8 +6,10 @@ client), every :data:`INTERVAL` seconds, with or without a client. A Chrome
 whose pipe breaks or whose process exits has crashed; one that misses
 :data:`MISSES` probes in a row (each :data:`TIMEOUT` seconds long) hangs. A
 renderer crash is not the Chrome's: the client gets ``Target.targetCrashed``
-and the browser process keeps answering. A probe whose reply waited in the
-pipe while the relay held it for a slow client is not a miss.
+and the browser process keeps answering. A probe is missed only if nothing
+at all came from the pipe while it waited, and the relay was not holding the
+pipe for a slow client: a Chrome that keeps talking is alive, even when the
+reply sits behind what it piled up during a client's pause.
 """
 
 from __future__ import annotations
@@ -37,13 +39,16 @@ async def watch(relay: Any, chrome: Any) -> tuple[str, str]:
         if not chrome.alive:
             return CRASH, "the Chrome process exited"
         wait = INTERVAL
-        pauses = relay.pauses
+        pauses, received = relay.pauses, relay.received
         try:
             await relay.probe(TIMEOUT)
             missed = 0
         except TimeoutError:
-            if relay.paused or relay.pauses != pauses:
-                continue  # the reply sat in the pipe while the client caught up
+            if relay.paused or relay.pauses != pauses or relay.received != received:
+                # Chrome spoke meanwhile, or the relay held the pipe for a slow
+                # client: the reply is queued behind the rest, not missing.
+                missed = 0
+                continue
             missed += 1
             if missed >= MISSES:
                 return HANG, f"Chrome did not answer {missed} health probes in a row"

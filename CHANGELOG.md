@@ -31,7 +31,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   dropped): silent sockets cannot use up the descriptors. Both directions of the relay
   are bounded in bytes by back-pressure: past 16 MiB waiting for a slow client the pipe
   is no longer read (Chrome keeps the rest) and health probes are not counted as missed
-  meanwhile; past 64 MiB of commands Chrome has not answered the client is no longer
+  meanwhile (a probe is missed only if nothing at all came from the pipe while it
+  waited: a Chrome that keeps talking is alive); past 64 MiB of commands Chrome has not answered the client is no longer
   read. Only a client that takes nothing for 60 s is closed (1008). Every close toward a
   client (restart, lost Chrome, stall, shutdown with 1001) takes at most 5 s, then its
   socket is cut: a client that reads nothing cannot keep a place or the shutdown waiting.

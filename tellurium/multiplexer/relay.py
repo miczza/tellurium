@@ -73,6 +73,8 @@ class Relay:
         #: counts those spells, so a probe that spans one is not a hang.
         self.paused = False
         self.pauses = 0
+        #: Messages read from the pipe so far: Chrome that speaks is alive.
+        self.received = 0
         self._client: _Client | None = None
         self._reader: asyncio.Task | None = None
         self.ended: asyncio.Future[str] = asyncio.get_running_loop().create_future()
@@ -93,6 +95,7 @@ class Relay:
                 if client is not None and client.queued > HIGH_WATER:
                     await self._wait_for(client)
                 message = await self._transport.recv()
+                self.received += 1
                 self._dispatch(message)
         except (EOFError, ConnectionError, OSError, ValueError) as exc:
             self._end(f"Chrome closed its pipe ({type(exc).__name__})")
