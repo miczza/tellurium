@@ -23,6 +23,7 @@ from tellurium import Multiplexer  # noqa: E402
 from tellurium.browser.launcher import find_chrome  # noqa: E402
 from tellurium.multiplexer import health  # noqa: E402
 from tellurium.multiplexer import multiplexer as multiplexer_module  # noqa: E402
+from tellurium.multiplexer import pool as pool_module  # noqa: E402
 from tests.integration.test_raw_chrome import (  # noqa: E402, F401 - private_tempdir is autouse
     _alive,
     _cmdline,
@@ -339,6 +340,10 @@ async def test_browser_close_from_the_client_ends_it_normally():
             code, _ = await _closed(ws)
             assert code == 1000
         assert await _wait_until(lambda: not _alive(pid))
+        # Asked for by the client: neither a crash nor a restart; the place is idle again.
+        assert await _wait_until(lambda: mux.status()["slots"][0]["state"] == "idle", 10)
+        status = mux.status()
+        assert status["crashes"] == 0 and status["slots"][0]["restarts"] == 0
         async with _client(mux) as ws:
             assert (await _cdp(ws, 2, "Browser.getVersion"))["result"]
 
@@ -418,3 +423,48 @@ async def test_a_handshake_that_fails_after_the_place_was_taken_gives_it_back():
         assert pids == [None]
         async with _client(mux) as ws:
             assert (await _cdp(ws, 1, "Browser.getVersion"))["result"]
+
+
+async def test_a_chrome_that_will_not_start_is_retried_and_reported_without_secrets(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(pool_module, "LAUNCH_WAIT", 3.0)
+    fake = tmp_path / "chrome"
+    fake.write_text('#!/bin/sh\necho "no display for you: $*" >&2\nexit 3\n')
+    fake.chmod(0o755)
+    proxies = ["http://alice:S3cretPW@127.0.0.1:18083"]
+    async with serving(1, executable=str(fake), proxies=proxies) as mux:
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        with pytest.raises(InvalidStatus) as refused:
+            async with _client(mux):
+                pass
+        assert refused.value.response.status_code == 503
+        assert 2.5 < loop.time() - start < 20
+        body = refused.value.response.body.decode()
+        assert "Chrome exited during launch" in body and "S3cretPW" not in body
+        slot = mux.status()["slots"][0]
+        assert slot["launch_failures"] >= 2  # retried, with a pause in between
+        assert "exit code 3" in slot["error"]
+        assert mux.status()["launch_failures"] == slot["launch_failures"]
+        assert "S3cretPW" not in json.dumps(mux.status())
+        # No retry once nobody wants the place; and the place is not lost.
+        failures = slot["launch_failures"]
+        await asyncio.sleep(1.5)
+        assert mux.status()["slots"][0]["launch_failures"] == failures
+        mux._pool.launch["executable"] = await find_chrome()
+        async with _client(mux) as ws:
+            assert (await _cdp(ws, 1, "Browser.getVersion"))["result"]
+            assert mux.status()["slots"][0]["error"] is None
+
+
+async def test_a_bad_proxy_url_never_shows_its_password(monkeypatch):
+    monkeypatch.setattr(pool_module, "LAUNCH_WAIT", 2.0)
+    async with serving(1, proxies=["htp://alice:S3cretPW@127.0.0.1:18084"]) as mux:
+        with pytest.raises(InvalidStatus) as refused:
+            async with _client(mux):
+                pass
+        body = refused.value.response.body.decode()
+        assert refused.value.response.status_code == 503 and "scheme" in body
+        assert "S3cretPW" not in body and "alice" not in body
+        assert "S3cretPW" not in json.dumps(mux.status())

@@ -20,16 +20,49 @@ _BAD_GATEWAY = b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: cl
 _GATEWAY_TIMEOUT = b"HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 
 
+def redact_proxy_url(url: str | None) -> str | None:
+    """*url* without its credentials (``user:password@``), for messages and status."""
+    if not url:
+        return url
+    scheme, sep, rest = url.rpartition("://")
+    authority, slash, path = rest.partition("/")
+    return f"{scheme}{sep}{authority.rpartition('@')[2]}{slash}{path}"
+
+
+def hide_credentials(text: str, url: str | None) -> str:
+    """*text* with the user name and password of the proxy *url* masked, raw or
+    percent-decoded: for error messages that may quote the URL."""
+    if not url:
+        return text
+    _, _, rest = url.rpartition("://")
+    userinfo, at, _ = rest.partition("/")[0].rpartition("@")
+    if not at:
+        return text
+    user, _, password = userinfo.partition(":")
+    for secret in sorted({password, unquote(password), user, unquote(user)}, key=len, reverse=True):
+        if secret:
+            text = text.replace(secret, "***")
+    return text
+
+
 def parse_proxy_url(url: str) -> dict:
-    """Split a proxy URL; a bare ``host:port`` is an HTTP proxy."""
+    """Split a proxy URL; a bare ``host:port`` is an HTTP proxy. Errors never
+    quote the credentials."""
     parsed = urlparse(url if "://" in url else f"http://{url}")
     scheme = (parsed.scheme or "http").lower()
     if scheme not in _SCHEMES:
-        raise ValueError(f"Unsupported proxy scheme {scheme!r} in {url!r}; use one of {_SCHEMES}")
+        raise ValueError(
+            f"Unsupported proxy scheme {scheme!r} in {redact_proxy_url(url)!r}; "
+            f"use one of {_SCHEMES}"
+        )
+    try:
+        port = parsed.port
+    except ValueError:
+        raise ValueError(f"Bad proxy port in {redact_proxy_url(url)!r}") from None
     return {
         "scheme": scheme,
         "host": parsed.hostname or "",
-        "port": parsed.port or (1080 if scheme.startswith("socks") else 8080),
+        "port": port or (1080 if scheme.startswith("socks") else 8080),
         "username": unquote(parsed.username) if parsed.username is not None else None,
         "password": unquote(parsed.password) if parsed.password is not None else None,
     }

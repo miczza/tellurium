@@ -21,6 +21,7 @@ import signal
 import time
 from typing import TYPE_CHECKING, Any
 
+from tellurium.browser.proxy import hide_credentials, redact_proxy_url
 from tellurium.browser.raw_chrome import RawChrome
 from tellurium.multiplexer import health
 from tellurium.multiplexer.relay import (
@@ -177,7 +178,7 @@ class Place:
                 chrome = await RawChrome.launch(**self._pool.launch, proxy=proxy, seed=seed)
             except Exception as exc:  # noqa: BLE001 - reported in the status, then retried
                 self.failures += 1
-                self.error = f"{type(exc).__name__}: {exc}"[:500]
+                self.error = hide_credentials(f"{type(exc).__name__}: {exc}", proxy)[:500]
                 self._pool.launch_failures += 1
                 self.state = "failing"
                 await self._wait(lambda: not self._wanted_now(), pause)
@@ -199,7 +200,9 @@ class Place:
             self._pool.learn_version(await relay.probe(health.TIMEOUT))
         except (TimeoutError, RelayClosed) as exc:
             self.failures += 1
-            self.error = f"Chrome did not answer after its launch: {exc}"
+            self.error = hide_credentials(
+                f"Chrome did not answer after its launch: {exc}", chrome.proxy
+            )
             self._pool.launch_failures += 1
             await self._shut(CLOSE_ERROR, "Chrome failed", kill=True)
             return None
@@ -239,11 +242,12 @@ class Place:
                 gone = watch.done()
             if gone:
                 kind, reason = watch.result()
-                self.restarts += 1
-                self._pool.count_loss(kind)
-                code, kill = CLOSE_ERROR, kind == health.HANG
-                if relay.closed_by_client:
+                if relay.closed_by_client and kind == health.CRASH:
                     code, reason = CLOSE_NORMAL, "Chrome closed by the client"
+                else:
+                    self.restarts += 1
+                    self._pool.count_loss(kind)
+                    code, kill = CLOSE_ERROR, kind == health.HANG
         finally:
             watch.cancel()
             await asyncio.wait([watch])
@@ -268,6 +272,7 @@ class Place:
                 finally:
                     if relay is not None:
                         await relay.close(code, reason)
+            self.state = "idle"
 
     # ------------------------------------------------------------------ #
     # Status
@@ -280,7 +285,7 @@ class Place:
             "id": self.id,
             "state": self.state,
             "pid": chrome.pid if chrome is not None else None,
-            "proxy": _public(chrome.proxy) if chrome is not None else None,
+            "proxy": redact_proxy_url(chrome.proxy) if chrome is not None else None,
             "seed": chrome.seed if chrome is not None else None,
             "age": age,
             "launches": self.launches,
@@ -288,11 +293,3 @@ class Place:
             "launch_failures": self.failures,
             "error": self.error,
         }
-
-
-def _public(proxy: str | None) -> str | None:
-    """*proxy* without its credentials."""
-    if not proxy:
-        return None
-    scheme, sep, rest = proxy.rpartition("://")
-    return f"{scheme}{sep}{rest.rpartition('@')[2]}"

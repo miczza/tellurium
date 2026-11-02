@@ -549,6 +549,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A proxy URL that cannot be parsed (unknown scheme, bad port) no longer quotes its
+  user name and password in the error, for `Browser.launch` too.
 - `webrtc_ip='auto'`: the DNS lookup of the proxy host runs on a thread of its own, bounded
   by `launch_plan.DNS_TIMEOUT` (10 s, then `ValueError`), no longer in the event loop; a
   proxy URL without a host no longer puts the URL (and its password) in the `ValueError`.

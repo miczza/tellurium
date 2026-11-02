@@ -10,8 +10,8 @@ import pytest
 pytest.importorskip("websockets")
 
 from tellurium import Multiplexer  # noqa: E402
+from tellurium.browser.proxy import hide_credentials, parse_proxy_url, redact_proxy_url  # noqa: E402
 from tellurium.multiplexer.multiplexer import _url_host  # noqa: E402
-from tellurium.multiplexer.place import _public  # noqa: E402
 from tellurium.multiplexer.server import host_names, token_leaked  # noqa: E402
 
 TOKEN = "A" * 20 + "b-_" + "9" * 20
@@ -96,9 +96,27 @@ def test_clean_targets_pass(target):
 
 
 def test_proxy_credentials_never_reach_the_status():
-    assert _public("http://user:p@ss@127.0.0.1:8080") == "http://127.0.0.1:8080"
-    assert _public("socks5://127.0.0.1:1080") == "socks5://127.0.0.1:1080"
-    assert _public(None) is None
+    assert redact_proxy_url("http://user:p@ss@127.0.0.1:8080") == "http://127.0.0.1:8080"
+    assert redact_proxy_url("socks5://127.0.0.1:1080") == "socks5://127.0.0.1:1080"
+    assert redact_proxy_url("alice:pw@h:1/x") == "h:1/x"
+    assert redact_proxy_url(None) is None
+
+
+@pytest.mark.parametrize(
+    "url", ["htp://alice:S3cretPW@h:8080", "http://alice:S3cretPW@h:notaport", "ftp://S3cretPW@h"]
+)
+def test_proxy_parse_errors_do_not_quote_the_password(url):
+    with pytest.raises(ValueError) as error:
+        parse_proxy_url(url)
+    assert "S3cretPW" not in str(error.value) and "alice" not in str(error.value)
+
+
+def test_credentials_are_masked_in_any_message():
+    url = "http://al%69ce:S3cret%2FPW@h:8080"
+    text = "failed: http://alice:S3cret/PW@h and al%69ce:S3cret%2FPW"
+    masked = hide_credentials(text, url)
+    assert "S3cret" not in masked and "alice" not in masked and "al%69ce" not in masked
+    assert hide_credentials("nothing", "http://h:1") == "nothing"
 
 
 @pytest.mark.parametrize(
