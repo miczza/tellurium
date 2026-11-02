@@ -87,3 +87,29 @@ def test_credentials_are_masked_in_any_message():
 )
 def test_the_url_names_a_reachable_host(bind, url_host):
     assert _url_host(bind) == url_host
+
+
+SPECIAL = ["S3cret/PW", "S3cret@PW", "S3cret:PW", "S3cret#PW", "S3cret?PW", "S3/c@r:e#t?PW"]
+
+
+@pytest.mark.parametrize("password", SPECIAL)
+def test_a_password_with_url_characters_never_shows(password):
+    url = f"http://alice:{password}@127.0.0.1:18084"
+    assert redact_proxy_url(url) == "http://127.0.0.1:18084"
+    assert "PW" not in hide_credentials(f"could not reach {url} ({password})", url)
+    info = parse_proxy_url(url)
+    assert (info["username"], info["password"]) == ("alice", password)
+    assert (info["host"], info["port"]) == ("127.0.0.1", 18084)
+    for bad in (f"htp://alice:{password}@h:1", f"http://alice:{password}@h:port"):
+        with pytest.raises(ValueError) as error:
+            parse_proxy_url(bad)
+        assert "PW" not in str(error.value) and "alice" not in str(error.value)
+
+
+@pytest.mark.parametrize("password", SPECIAL)
+async def test_browser_launch_errors_never_quote_the_password(password):
+    from tellurium import Browser
+
+    with pytest.raises(ValueError) as error:
+        await Browser.launch(proxy=f"htp://alice:{password}@127.0.0.1:18084")
+    assert "PW" not in str(error.value) and "alice" not in str(error.value)

@@ -433,14 +433,15 @@ async def test_a_handshake_that_fails_after_the_place_was_taken_gives_it_back():
             assert (await _cdp(ws, 1, "Browser.getVersion"))["result"]
 
 
+@pytest.mark.parametrize("password", ["S3cretPW", "S3cret/PW", "S3/c@r:e#t?PW"])
 async def test_a_chrome_that_will_not_start_is_retried_and_reported_without_secrets(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, password
 ):
     monkeypatch.setattr(pool_module, "LAUNCH_WAIT", 3.0)
     fake = tmp_path / "chrome"
     fake.write_text('#!/bin/sh\necho "no display for you: $*" >&2\nexit 3\n')
     fake.chmod(0o755)
-    proxies = ["http://alice:S3cretPW@127.0.0.1:18083"]
+    proxies = [f"http://alice:{password}@127.0.0.1:18083"]
     async with serving(1, executable=str(fake), proxies=proxies) as mux:
         loop = asyncio.get_running_loop()
         start = loop.time()
@@ -450,12 +451,12 @@ async def test_a_chrome_that_will_not_start_is_retried_and_reported_without_secr
         assert refused.value.response.status_code == 503
         assert 2.5 < loop.time() - start < 20
         body = refused.value.response.body.decode()
-        assert "Chrome exited during launch" in body and "S3cretPW" not in body
+        assert "Chrome exited during launch" in body and "PW" not in body
         slot = mux.status()["slots"][0]
         assert slot["launch_failures"] >= 2  # retried, with a pause in between
         assert "exit code 3" in slot["error"]
         assert mux.status()["launch_failures"] == slot["launch_failures"]
-        assert "S3cretPW" not in json.dumps(mux.status())
+        assert "PW" not in json.dumps(mux.status())
         # No retry once nobody wants the place; and the place is not lost.
         failures = slot["launch_failures"]
         await asyncio.sleep(1.5)

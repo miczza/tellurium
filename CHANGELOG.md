@@ -563,7 +563,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `access.token_leaked(target, token)` finds the token in a request's path or query, even
   percent-encoded twice.
 - A proxy URL that cannot be parsed (unknown scheme, bad port) no longer quotes its
-  user name and password in the error, for `Browser.launch` too.
+  user name and password in the error, for `Browser.launch` too. A password may hold
+  unencoded `/`, `@`, `:`, `#` or `?`: the user info ends at the last `@`, so such a
+  proxy now works and its password never shows in messages or the multiplexer's status.
 - `webrtc_ip='auto'`: the DNS lookup of the proxy host runs on a thread of its own, bounded
   by `launch_plan.DNS_TIMEOUT` (10 s, then `ValueError`), no longer in the event loop; a
   proxy URL without a host no longer puts the URL (and its password) in the `ValueError`.
