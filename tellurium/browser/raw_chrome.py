@@ -6,7 +6,9 @@ scripts, no stealth extension, no rewritten User-Agent. The command line comes
 from the same :class:`~tellurium.browser.launch_plan.LaunchPlan` as
 :meth:`Browser.launch`: engine arguments with the seed, ``--accept-lang``,
 ``--window-size``, the proxy behind the credential forwarder, WebRTC's UDP kept
-inside the proxy, and the time zone and languages of the proxy's exit IP.
+inside the proxy, and the time zone and languages of the proxy's exit IP. The
+time zone (manual or the exit IP's) also goes in Chrome's ``TZ`` environment
+variable: stock Chrome has no flag for it, and nothing here sets it over CDP.
 """
 
 from __future__ import annotations
@@ -66,6 +68,8 @@ class RawChrome:
 
         *geoip* (with a *proxy*) takes the time zone and languages from the
         proxy's exit IP, best effort; *timezone* and *languages* win over it.
+        The time zone reaches Chrome as ``TZ`` in its environment (and as
+        ``--fingerprint-timezone`` with the patched engine).
         The launch is all-or-nothing: on failure or cancellation Chrome, the
         forwarder and the profile are released, and a Chrome that exits on its
         own raises :class:`~tellurium.browser.launcher.LaunchError` with its
@@ -95,7 +99,10 @@ class RawChrome:
         try:
             await plan.compose(proc)
             log = Path(chrome_log) if chrome_log is not None else None
-            transport = await proc.spawn(plan.chrome_path, plan.flags, log)
+            # Stock Chrome has no time zone flag; ICU reads TZ (the patched one gets both).
+            tz = plan.effective_timezone
+            env = {"TZ": tz} if tz else None
+            transport = await proc.spawn(plan.chrome_path, plan.flags, log, env)
             await _wait_ready(transport)
         except BaseException as exc:
             try:

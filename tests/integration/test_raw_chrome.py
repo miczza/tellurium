@@ -90,9 +90,13 @@ async def _wait_until(predicate, timeout: float = 15.0) -> bool:
     return predicate()
 
 
-async def _call(raw: RawChrome, method: str, params: dict | None = None, id: int = 1) -> dict:
+async def _call(
+    raw: RawChrome, method: str, params: dict | None = None, id: int = 1, session: str = ""
+) -> dict:
     """One CDP command straight on the pipe; events in between are dropped."""
     message = {"id": id, "method": method, "params": params or {}}
+    if session:
+        message["sessionId"] = session
     await raw.transport.send(json.dumps(message).encode() + b"\0")
 
     async def reply() -> dict:
@@ -161,8 +165,8 @@ async def test_cancelled_launch_leaves_nothing_behind(private_tempdir, monkeypat
     spawned: list[int] = []
     real_spawn = BrowserProcess.spawn
 
-    async def spawn_then_hang(self, *args):
-        transport = await real_spawn(self, *args)
+    async def spawn_then_hang(self, *args, **kwargs):
+        transport = await real_spawn(self, *args, **kwargs)
         spawned.append(self.process.pid)
         await asyncio.sleep(3600)
         return transport
@@ -259,3 +263,35 @@ async def test_cancelled_geoip_lookups_do_not_starve_close(private_tempdir):
         assert asyncio.get_running_loop().time() - started < 10
         assert not raw.alive
     assert not _profiles(private_tempdir)
+
+
+async def _page_time_zone(raw: RawChrome) -> str:
+    target = await _call(raw, "Target.createTarget", {"url": "about:blank"}, id=11)
+    attached = await _call(
+        raw,
+        "Target.attachToTarget",
+        {"targetId": target["result"]["targetId"], "flatten": True},
+        id=12,
+    )
+    session = attached["result"]["sessionId"]
+    expression = "Intl.DateTimeFormat().resolvedOptions().timeZone"
+    answer = await _call(
+        raw, "Runtime.evaluate", {"expression": expression}, id=13, session=session
+    )
+    return answer["result"]["result"]["value"]
+
+
+async def test_stock_chrome_takes_the_manual_time_zone(private_tempdir):
+    async with RawChrome.launch(headless=True, timezone="Pacific/Chatham") as raw:
+        assert await _page_time_zone(raw) == "Pacific/Chatham"
+
+
+async def test_stock_chrome_takes_the_time_zone_of_the_exit_ip(private_tempdir, monkeypatch):
+    from tellurium.stealth import geoip
+    from tellurium.stealth.geoip import GeoResult
+
+    japan = GeoResult(country="JP", timezone="Asia/Tokyo", languages=["ja-JP", "en"])
+    monkeypatch.setattr(geoip, "exit_geo", lambda *a, **kw: japan)
+    async with RawChrome.launch(headless=True, proxy="http://127.0.0.1:9") as raw:
+        assert await _page_time_zone(raw) == "Asia/Tokyo"
+        assert "--accept-lang=ja-JP,en" in _cmdline(raw.pid)

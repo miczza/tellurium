@@ -78,6 +78,8 @@ class LaunchPlan:
     chrome_path: str = dataclasses.field(init=False, default="")
     profile_dir: str = dataclasses.field(init=False, default="")
     flags: list[str] = dataclasses.field(init=False, default_factory=list)
+    #: The time zone Chrome is meant to have (manual, exit IP or stealth profile), or None.
+    effective_timezone: str | None = dataclasses.field(init=False, default=None)
     #: ``webrtc_ip`` as the native patch understands it (an IP literal), or None.
     resolved_webrtc_ip: str | None = dataclasses.field(init=False, default=None)
     #: Set as soon as it exists: whoever owns the launch closes it on failure.
@@ -144,11 +146,13 @@ class LaunchPlan:
         if self.stealth:
             found = await self._build_stealth(geo)
             engine_args = self.engine.build_args(self.stealth_profile)
+            self.effective_timezone = self.stealth_profile.timezone
         else:
             found = None
             timezone = self.timezone
             if timezone is None and geo is not None:
                 timezone = geo.timezone
+            self.effective_timezone = timezone
             seeded = SimpleNamespace(seed=self.seed, timezone=timezone)
             engine_args = self.engine.build_args(seeded)
 

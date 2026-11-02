@@ -192,9 +192,13 @@ class BrowserProcess:
         return self.downloads_tmp
 
     async def spawn(
-        self, chrome_path: str, flags: list[str], chrome_log: Path | None
+        self,
+        chrome_path: str,
+        flags: list[str],
+        chrome_log: Path | None,
+        env: dict[str, str] | None = None,
     ) -> CDPTransport:
-        """Start Chrome and connect its CDP pipe.
+        """Start Chrome and connect its CDP pipe; *env* is added to its environment.
 
         Chrome's output goes to *chrome_log* when given; otherwise it is
         drained and only its tail is kept, to explain a failed launch.
@@ -203,7 +207,7 @@ class BrowserProcess:
         """
         self.headless = any(f == "--headless" or f.startswith("--headless=") for f in flags)
         self.chrome_tmp = tempfile.mkdtemp(prefix="tellurium_tmp_")
-        env = {**os.environ, "TMPDIR": self.chrome_tmp}
+        env = {**os.environ, **(env or {}), "TMPDIR": self.chrome_tmp}
         output, tail_fd = subprocess.DEVNULL, None
         if chrome_log is not None:
             if sys.platform == "win32":

@@ -14,7 +14,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `Browser.launch` (engine arguments with the seed, `--accept-lang`, `--window-size`,
   credential forwarder, WebRTC UDP only through the proxy, time zone and languages of the
   proxy's exit IP with `geoip=True`), with no stealth engine, extension or User-Agent
-  rewrite, and always a temporary profile. Launch waits for `Browser.getVersion` on the
+  rewrite, and always a temporary profile. The time zone (`timezone=` or the exit IP's)
+  reaches Chrome as `TZ` in its environment, so stock Chrome gets it too. Launch waits for `Browser.getVersion` on the
   pipe; a failure or cancellation at any step releases Chrome, forwarder and profile.
 - `Slots.slot(timeout=None)` (the browser slots of `SessionPool`): *timeout* limits only the
   wait for a slot; past it `TimeoutError`, with no slot taken and no place left in the queue.
