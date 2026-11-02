@@ -4,7 +4,6 @@ working without the ``mcp`` extra."""
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 import sys
 import textwrap
@@ -112,7 +111,7 @@ def test_unknown_ref_and_tool_errors_and_timeouts():
     assert unknown.lower().count("snapshot") == 1
     assert explain(ToolError("Unknown targetId 't9'")) == "Unknown targetId 't9'"
     assert "timed out" in explain(TimeoutError("waited 5s")).lower()
-    assert "timed out" in explain(asyncio.TimeoutError()).lower()
+    assert "timed out" in explain(TimeoutError()).lower()
     assert explain(ValueError("boom")) == "ValueError: boom"
 
 

@@ -109,7 +109,7 @@ class Server:
             server.close()
             try:
                 await asyncio.wait_for(server.wait_closed(), CLOSE_TIMEOUT * 3)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 for connection in list(self._open):
                     connection.transport.abort()
                 await server.wait_closed()

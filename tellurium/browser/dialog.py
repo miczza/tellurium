@@ -127,7 +127,7 @@ class DialogGuard:
                 result = handler(dialog)
                 if inspect.isawaitable(result):
                     await asyncio.wait_for(result, timeout=self.handler_timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     "on_dialog handler undecided after %ss: %r", self.handler_timeout, dialog
                 )

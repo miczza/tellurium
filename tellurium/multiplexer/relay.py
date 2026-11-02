@@ -183,7 +183,7 @@ class Relay:
         try:
             await self._send({"id": own, "method": "Browser.getVersion"})
             reply = await asyncio.wait_for(future, timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise TimeoutError(f"Chrome did not answer within {timeout:g} s") from None
         finally:
             if self._pending.get(own) is future:

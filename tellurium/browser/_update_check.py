@@ -12,7 +12,7 @@ import json
 import logging
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -60,7 +60,7 @@ def check_for_update(
     """
     if check_file is None:
         check_file = _cache.update_check_file(cache_root)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     if not force and check_file.exists():
         try:

@@ -83,7 +83,7 @@ class Download:
     async def _wait(self, timeout: float) -> None:
         try:
             await asyncio.wait_for(self._done.wait(), timeout)
-        except asyncio.TimeoutError:  # not the builtin TimeoutError on Python 3.10
+        except TimeoutError:
             raise TimeoutError(
                 f"Download of {self.url} did not finish within {timeout:g}s"
             ) from None
@@ -198,7 +198,7 @@ class DownloadWaiter:
         remaining = max(0.0, self._deadline - asyncio.get_running_loop().time())
         try:
             return await asyncio.wait_for(asyncio.shield(self._future), remaining)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise TimeoutError(f"No download began within {self._timeout:g}s") from None
 
     def _resolve(self, download: Download) -> None:

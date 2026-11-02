@@ -187,7 +187,7 @@ async def _wait_ready(transport: CDPTransport) -> None:
 
     try:
         await asyncio.wait_for(reply(), READY_TIMEOUT)
-    except asyncio.TimeoutError:
-        raise asyncio.TimeoutError(
+    except TimeoutError:
+        raise TimeoutError(
             f"Browser.getVersion got no reply from Chrome within {READY_TIMEOUT:g} s"
         ) from None

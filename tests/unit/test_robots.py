@@ -464,7 +464,7 @@ async def test_check_raises_for_a_disallowed_path(frames, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "error", [CDPError("No browser context with given id", -32602), asyncio.TimeoutError("late")]
+    "error", [CDPError("No browser context with given id", -32602), TimeoutError("late")]
 )
 async def test_a_hidden_target_that_cannot_open_is_a_navigation_error(monkeypatch, error):
     async def open_frame(browser, context_id):

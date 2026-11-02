@@ -322,7 +322,7 @@ class BrowserProcess:
             return
         try:
             await asyncio.wait_for(self.transport.send(_BROWSER_CLOSE), 1.0)
-        except (OSError, ConnectionError, asyncio.TimeoutError) as exc:
+        except (TimeoutError, OSError, ConnectionError) as exc:
             logger.debug("Could not send Browser.close: %s", exc)
             return
         try:

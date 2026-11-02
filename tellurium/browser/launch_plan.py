@@ -362,7 +362,7 @@ async def _webrtc_public_ip(setting: str, proxy: str | None) -> str | None:
     lookup = functools.partial(resolve_webrtc_ip, setting, proxy=proxy)
     try:
         return await _on_own_thread(lookup, timeout=DNS_TIMEOUT, name="tellurium-dns")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise ValueError(
             f"Could not resolve the proxy host for webrtc_ip='auto' within {DNS_TIMEOUT:g} s"
         ) from None

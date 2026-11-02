@@ -36,7 +36,7 @@ class CommandPipeline:
             results = await asyncio.wait_for(
                 asyncio.gather(*self._pending, return_exceptions=True), timeout=timeout
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Tab %s did not acknowledge its setup commands", target_id)
             return
         for result in results:

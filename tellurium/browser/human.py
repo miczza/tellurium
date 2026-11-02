@@ -236,7 +236,7 @@ async def _main_frame(tab: Tab) -> dict | None:
     """The main frame as Chrome reports it; ``None`` if the page is too busy to say."""
     try:
         tree = await tab._session.send("Page.getFrameTree", {}, timeout=CALL_TIMEOUT)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return None
     return tree["frameTree"]["frame"]
 
@@ -248,7 +248,7 @@ async def _bounded(awaitable: Awaitable[bool], deadline: float, reason: str) -> 
         return await awaitable
     try:
         return await asyncio.wait_for(awaitable, max(left, 0))
-    except asyncio.TimeoutError:
+    except TimeoutError:
         if asyncio.get_running_loop().time() >= deadline:
             raise _timeout(reason, None) from None
         raise
@@ -257,7 +257,7 @@ async def _bounded(awaitable: Awaitable[bool], deadline: float, reason: str) -> 
 async def _clicked(done: asyncio.Event, seconds: float) -> bool:
     try:
         await asyncio.wait_for(done.wait(), seconds)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return False
     return True
 
@@ -341,7 +341,7 @@ class _Banner:
                 self._context, self._loader = world["executionContextId"], frame.get("loaderId")
             if await self._evaluate(self._expression) == "unbound":
                 self._context = None  # world and binding again next round
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass  # a busy page: the same world next round (a new one would show a second banner)
         except (CDPError, KeyError):
             self._context = None  # the document went meanwhile: a new world next round

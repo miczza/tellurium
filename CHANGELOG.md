@@ -475,6 +475,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Internal: code written for Python 3.11+ (`TimeoutError` instead of `asyncio.TimeoutError`,
+  `datetime.UTC`); `NavigationTimeoutError` subclasses `TimeoutError` directly. CI drops 3.10.
+
 - `Browser.launch` composes Chrome's command line with `tellurium.browser.launch_plan.LaunchPlan`
   (engine, executable, extensions, proxy forwarder, profile, GeoIP, stealth profile, flags);
   signature, errors and flags passed to Chrome are unchanged. The plan can also take the

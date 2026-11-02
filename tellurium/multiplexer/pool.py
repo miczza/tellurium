@@ -145,7 +145,7 @@ class Pool:
                 relay = await self._unless_closing(
                     asyncio.wait_for(asyncio.shield(ready), LAUNCH_WAIT), gone
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 raise NoChrome(
                     f"no Chrome could be launched in {LAUNCH_WAIT:g} s: {place.error or 'no error'}"
                 ) from None
@@ -229,7 +229,7 @@ class Pool:
         self.rebalance()
         try:
             await self._unless_closing(asyncio.wait_for(self._version_known.wait(), timeout))
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise TimeoutError("no Chrome could be launched to read its version") from None
         assert self.version is not None
         return self.version

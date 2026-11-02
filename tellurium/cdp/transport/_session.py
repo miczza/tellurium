@@ -81,7 +81,7 @@ class Session:
             if method == "Target.setAutoAttach":
                 self._auto_attach = bool((params or {}).get("autoAttach"))
             return result
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # asyncio.wait_for cancels its internal waiter but leaves the
             # future pending. Remove msg_id from _pending so a late reply
             # from Chrome lands on a removed entry in _handle_message
@@ -89,7 +89,7 @@ class Session:
             # If the reply races the timeout, set_result may still fire
             # on the now-orphan future — benign: no awaiter, no leak.
             self._pending.pop(msg_id, None)
-            raise asyncio.TimeoutError(f"{method} got no reply within {limit:g}s") from None
+            raise TimeoutError(f"{method} got no reply within {limit:g}s") from None
 
     def on(self, event_name: str, handler: callable) -> None:
         self._event_handlers.setdefault(event_name, []).append(handler)
@@ -192,7 +192,7 @@ class SessionRouter:
         waiters.append(future)
         try:
             return await asyncio.wait_for(future, timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
         finally:
             waiters.remove(future)
@@ -214,7 +214,7 @@ class SessionRouter:
             request = asyncio.ensure_future(via.send("Target.attachToTarget", params))
             try:
                 result = await asyncio.wait_for(asyncio.shield(request), timeout)
-            except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            except (TimeoutError, asyncio.CancelledError) as exc:
                 request.add_done_callback(functools.partial(self._drop_late_attach, via))
                 if isinstance(exc, asyncio.CancelledError):
                     raise
