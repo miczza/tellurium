@@ -5,6 +5,7 @@ its proxies file, its messages, and Ctrl-C or SIGTERM leaving nothing behind."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -306,19 +307,22 @@ async def _run_cli(tmp_path: Path, *args: str, prelude: str = "") -> tuple[int, 
 
 
 @pytest.mark.parametrize(
-    "signum, group",
+    "signum, group, again",
     [
-        (signal.SIGINT, False),
-        (signal.SIGTERM, False),
-        (signal.SIGHUP, True),  # the terminal (or ssh) went away: its whole group gets it
+        (signal.SIGINT, False, False),
+        (signal.SIGTERM, False, False),
+        (signal.SIGHUP, True, False),  # the terminal (or ssh) went away: its whole group
+        (signal.SIGINT, False, True),  # Ctrl-C pressed again and again while it closes
+        (signal.SIGINT, True, True),
     ],
-    ids=["SIGINT", "SIGTERM", "SIGHUP-group"],
+    ids=["SIGINT", "SIGTERM", "SIGHUP-group", "SIGINT-again", "SIGINT-group-again"],
 )
 async def test_the_command_serves_then_a_signal_closes_everything(
     tmp_path,
     private_tempdir,  # noqa: F811
     signum,
     group,
+    again,
 ):
     env = _cli_env(tmp_path)
     proc = await asyncio.create_subprocess_exec(
@@ -371,14 +375,25 @@ async def test_the_command_serves_then_a_signal_closes_everything(
                 await asyncio.sleep(0.1)
             family = _descendants(proc.pid)
             assert pids <= family
-            if group:
-                os.killpg(proc.pid, signum)
-            else:
-                proc.send_signal(signum)
-            code, _ = await _closed(ws)
-            # With the group signalled, Chrome may go first (1011) or be closed (1001).
-            assert code == 1001 or (group and code == 1011)
-        assert await asyncio.wait_for(proc.wait(), 60) == 0
+
+            def send() -> None:
+                with contextlib.suppress(ProcessLookupError):
+                    if group:
+                        os.killpg(proc.pid, signum)
+                    else:
+                        proc.send_signal(signum)
+
+            send()
+            # A signal every 0.05 s until it exits: one lands at every stage of the closing.
+            repeat = asyncio.ensure_future(_every(0.05, send)) if again else None
+            try:
+                code, _ = await _closed(ws)
+                # With the group signalled, Chrome may go first (1011) or be closed (1001).
+                assert code == 1001 or (group and code == 1011)
+                assert await asyncio.wait_for(proc.wait(), 60) == 0
+            finally:
+                if repeat is not None:
+                    repeat.cancel()
         rest = (await proc.stdout.read()).decode() + (await proc.stderr.read()).decode()
         assert token not in first + rest
         assert await _wait_until(lambda: not any(_alive(p) for p in family), 15)
@@ -387,6 +402,12 @@ async def test_the_command_serves_then_a_signal_closes_everything(
         if proc.returncode is None:
             os.killpg(proc.pid, signal.SIGKILL)
             await proc.wait()
+
+
+async def _every(interval: float, action) -> None:
+    while True:
+        await asyncio.sleep(interval)
+        action()
 
 
 async def test_a_bad_proxies_file_stops_the_command_before_any_chrome(tmp_path):

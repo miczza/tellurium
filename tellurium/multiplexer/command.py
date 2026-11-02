@@ -179,12 +179,17 @@ async def _serve(mux: Any, host: str, port: int, proxies: int) -> None:
         with contextlib.suppress(asyncio.CancelledError):
             await serving
     finally:
-        for signum in _STOP_SIGNALS:
-            loop.remove_signal_handler(signum)
+        # The handlers stay while it closes: another signal only cancels again,
+        # and the closing goes on (Multiplexer.serve finishes it).
         if not serving.done():
             serving.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await serving
+        # Closed: blocked, not back to their defaults, so a signal that comes
+        # while the process exits cannot kill it (nor turn its 0 into -2).
+        signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)
+        for signum in _STOP_SIGNALS:
+            loop.remove_signal_handler(signum)
     _say("stopped")
 
 
