@@ -30,6 +30,12 @@ Optional MCP server for LLM agents (`tellurium mcp`, see [MCP server](#mcp-serve
 pip install tellurium[mcp]
 ```
 
+Optional CDP multiplexer for Playwright and Puppeteer (`tellurium multiplex`, see [Multiplexer](#multiplexer-tellurium-multiplex)):
+
+```bash
+pip install tellurium[multiplex]
+```
+
 Optional GeoIP support (auto-detect timezone/locale from proxy exit IP):
 
 ```bash
@@ -288,6 +294,76 @@ Only protocol versions that open an MCP session are served (up to
 2025-11-25), because the session is what ties a client to its browsers. A
 2026-07-28 client is told so and falls back to the `initialize` handshake;
 the official SDK does this by itself.
+
+---
+
+## Multiplexer (`tellurium multiplex`)
+
+One CDP endpoint for Playwright, Puppeteer or any CDP client, in front of a pool
+of Chromes: each connection gets a Chrome of its own, launched for it with a
+fresh seed and the next proxy, and closed with its profile when the client
+leaves. Needs `pip install 'tellurium[multiplex]'`.
+
+```bash
+tellurium multiplex --pool 4 --proxies proxies.txt --warm 2
+# tellurium multiplex: http://127.0.0.1:9339 (4 Chromes, 3 proxies in turn)
+# tellurium multiplex: token in /home/you/.tellurium/multiplex-token
+```
+
+```python
+import asyncio
+from pathlib import Path
+
+from playwright.async_api import async_playwright
+
+TOKEN = (Path.home() / ".tellurium" / "multiplex-token").read_text().strip()
+
+
+async def main():
+    async with async_playwright() as p:
+        browser = await p.chromium.connect_over_cdp(
+            "http://127.0.0.1:9339", headers={"Authorization": f"Bearer {TOKEN}"}
+        )
+        page = await browser.new_page()
+        await page.goto("https://example.com")
+        print(await page.title())
+        await browser.close()  # this Chrome and its profile are gone
+
+
+asyncio.run(main())
+```
+
+- **Pool.** `--pool N` Chromes at most; the next client waits in a first come,
+  first served queue up to `--acquire-timeout` seconds (30), then gets HTTP 503.
+  `--warm K` keeps K Chromes ready so a client connects at once. A Chrome that
+  crashes or hangs closes its client with 1011 and the place starts a new one.
+- **Proxies file.** One URL per line (`http://`, `https://`, `socks5://`, with
+  `user:password@` if needed, or a bare `host:port`); blank lines and `#`
+  comments are skipped. They are used in turn, one per launched Chrome. A bad
+  line stops the command with its number, never its text.
+- **Security.** Chrome itself stays on its pipe: no Chrome opens a debugging
+  port. The only listening socket is the multiplexer's, on loopback
+  (`127.0.0.1:9339`; not 9222, which pages probe) unless `--listen` says
+  otherwise. Every request needs `Authorization: Bearer <token>`; the token is
+  written once to `~/.tellurium/multiplex-token` (mode 0600) and never printed
+  nor accepted in the URL. A request with an `Origin` (any web page) or a
+  `Host` other than the bind address is refused, so a page in a browser cannot
+  reach it.
+- **Administration.** With the same token: `GET /admin/status` (per place:
+  state, pid, proxy without credentials, age, restarts; in total: clients,
+  queue, connections, crashes, hangs) and `POST /admin/slots/<id>/restart`.
+- **Engine.** `--browser patched` (the default) needs `tellurium download-browser
+  --browser patched`; `--browser stock` uses the Chrome found on the system.
+  `--headed` shows the windows. Ctrl-C or SIGTERM closes every Chrome,
+  forwarder and profile.
+
+Limits: the stealth is the binary's and its flags' only. The multiplexer relays
+the client's CDP untouched, so whatever the client does (`Runtime.enable`
+included, which Playwright and Puppeteer send) is visible to the page as it
+would be without tellurium; no stealth script is injected. Use the patched
+engine for the fingerprint, and `Browser.launch` for tellurium's own stealth.
+The same is available from Python: `tellurium.Multiplexer(4, proxies=[...])`,
+then `await mux.serve("127.0.0.1", 9339)`.
 
 ---
 
@@ -1407,6 +1483,7 @@ tellurium update-browser [--check] [--security-only]
 tellurium prune-browsers [--keep N]
 tellurium verify-browser [--reinstall]
 tellurium mcp [--headed] [--allow-local-urls]              # MCP server on stdio (tellurium[mcp])
+tellurium multiplex --pool N [--proxies F] [--warm K] [--listen H:P]   # CDP endpoint (tellurium[multiplex])
 tellurium login NAME [URL] [--dir D]                        # sign in to a session by hand
 ```
 
@@ -1422,6 +1499,7 @@ tellurium login NAME [URL] [--dir D]                        # sign in to a sessi
 | `prune-browsers` | Delete old cached versions, keeping the `--keep N` most recent. The version behind `current` is never pruned. |
 | `verify-browser` | Re-hash the installed binary and compare with `binary_sha256` in `MANIFEST.json`. `--reinstall` re-downloads when the check fails. |
 | `mcp` | Serve tellurium's browser tools over MCP on stdio for an LLM agent. `--headed` shows the windows, `--allow-local-urls` lets the agent open `file:` and browser pages. Needs `pip install tellurium[mcp]`. |
+| `multiplex` | Serve one CDP endpoint (default `127.0.0.1:9339`, Bearer token in `~/.tellurium/multiplex-token`) in front of `--pool N` Chromes, one per connection, for Playwright's `connect_over_cdp` or Puppeteer. `--proxies FILE` (one URL per line), `--warm K`, `--acquire-timeout S`, `--browser {patched,stock}` (patched by default), `--headed`. See [Multiplexer](#multiplexer-tellurium-multiplex). Needs `pip install tellurium[multiplex]`. |
 | `login` | Open Chrome with a window on the named session (`~/.tellurium/sessions/NAME`, the folder `tellurium mcp` uses; `--dir` picks another), on `URL` if given. Sign in (2FA and captchas included), then click "Done" on the banner, press Enter in the terminal or close the window: `session.json` and `cookies.json` are saved, and the MCP server and scripts find the session signed in. A session open elsewhere is an error naming its PID. |
 
 ---
