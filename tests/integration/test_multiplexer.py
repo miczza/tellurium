@@ -24,6 +24,7 @@ from tellurium.browser.launcher import find_chrome  # noqa: E402
 from tellurium.multiplexer import health  # noqa: E402
 from tellurium.multiplexer import multiplexer as multiplexer_module  # noqa: E402
 from tellurium.multiplexer import pool as pool_module  # noqa: E402
+from tellurium.multiplexer import server as server_module  # noqa: E402
 from tests.integration.test_raw_chrome import (  # noqa: E402, F401 - private_tempdir is autouse
     _alive,
     _cmdline,
@@ -114,15 +115,7 @@ async def _http(
     """A raw HTTP/1.1 GET with exactly *headers*: status, headers, body."""
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     try:
-        lines = [f"GET {target} HTTP/1.1", *(f"{k}: {v}" for k, v in headers or [])]
-        if upgrade:
-            lines += [
-                "Upgrade: websocket",
-                "Connection: Upgrade",
-                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
-                "Sec-WebSocket-Version: 13",
-            ]
-        writer.write(("\r\n".join(lines) + "\r\n\r\n").encode())
+        writer.write(_request(target, headers, upgrade))
         status = await asyncio.wait_for(reader.readline(), 90)
         found = {}
         while (line := await reader.readline()) not in (b"\r\n", b""):
@@ -132,6 +125,18 @@ async def _http(
         return int(status.split()[1]), found, body
     finally:
         writer.close()
+
+
+def _request(target: str, headers: list[tuple[str, str]] | None, upgrade: bool) -> bytes:
+    lines = [f"GET {target} HTTP/1.1", *(f"{k}: {v}" for k, v in headers or [])]
+    if upgrade:
+        lines += [
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            "Sec-WebSocket-Version: 13",
+        ]
+    return ("\r\n".join(lines) + "\r\n\r\n").encode()
 
 
 def _good(mux: Multiplexer) -> list[tuple[str, str]]:
@@ -217,7 +222,9 @@ async def test_client_ids_are_remapped_and_probes_stay_invisible(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "message", ["not json", '{"method": "Browser.getVersion"}', '{"id": true}', "[1]"]
+    "message",
+    ["not json", '{"method": "Browser.getVersion"}', '{"id": true}', "[1]", "[" * 200_000],
+    ids=["text", "no-id", "bool-id", "list", "nested"],
 )
 async def test_a_message_without_an_integer_id_closes_with_1007(message):
     async with serving() as mux, _client(mux) as ws:
@@ -403,6 +410,7 @@ async def test_access_is_refused_before_anything_starts(upgrade):
             ([host, bearer, ("Origin", "http://127.0.0.1")], path, 403),
             ([("Host", f"evil.example:{port}"), bearer], path, 403),
             ([host, bearer, bearer], path, 400),
+            ([host, bearer, ("Upgrade", "websocket"), ("Upgrade", "h2c")], path, 400),
         ]
         for headers, target, expected in cases:
             status, found, _ = await _http(port, target, headers, upgrade=upgrade)
@@ -468,3 +476,85 @@ async def test_a_bad_proxy_url_never_shows_its_password(monkeypatch):
         assert refused.value.response.status_code == 503 and "scheme" in body
         assert "S3cretPW" not in body and "alice" not in body
         assert "S3cretPW" not in json.dumps(mux.status())
+
+
+async def test_clients_that_hang_up_in_the_queue_leave_it_at_once():
+    async with serving(1) as mux:
+        port = _port(mux)
+        async with _client(mux):
+            ghosts = []
+            for _ in range(3):
+                _, writer = await asyncio.open_connection("127.0.0.1", port)
+                writer.write(_request("/devtools/browser/x", _good(mux), upgrade=True))
+                ghosts.append(writer)
+            assert await _wait_until(lambda: mux.status()["queue"] == 3, 5)
+            for writer in ghosts:
+                writer.close()
+            assert await _wait_until(lambda: mux.status()["queue"] == 0, 5)
+            real = asyncio.ensure_future(_client(mux).__aenter__())
+            assert await _wait_until(lambda: mux.status()["queue"] == 1, 5)
+        ws = await asyncio.wait_for(real, 30)
+        try:
+            assert (await _cdp(ws, 1, "Browser.getVersion"))["result"]
+        finally:
+            await ws.close()
+        status = mux.status()
+        assert status["connections"] == 2
+        assert status["slots"][0]["launches"] == 2  # none for the ghosts
+
+
+async def test_silent_sockets_are_dropped_and_do_not_crowd_out_a_client(monkeypatch):
+    monkeypatch.setattr(server_module, "MAX_UNCHECKED", 8)
+    monkeypatch.setattr(server_module, "REQUEST_TIMEOUT", 1.0)
+    async with serving() as mux:
+        mute = [await asyncio.open_connection("127.0.0.1", _port(mux)) for _ in range(40)]
+        try:
+            async with _client(mux) as ws:
+                assert (await _cdp(ws, 1, "Browser.getVersion"))["result"]
+
+            async def dropped(reader) -> bool:
+                return await asyncio.wait_for(reader.read(), 5) == b""
+
+            assert all(await asyncio.gather(*(dropped(r) for r, _ in mute)))
+        finally:
+            for _, writer in mute:
+                writer.close()
+
+
+async def test_waiting_clients_are_served_first_come_first_served():
+    async with serving(1, acquire_timeout=60) as mux:
+        order: list[int] = []
+        first = await _client(mux).__aenter__()
+        waiting = []
+
+        async def wait(n: int):
+            ws = await _client(mux).__aenter__()
+            order.append(n)
+            return ws
+
+        for n in range(3):
+            waiting.append(asyncio.ensure_future(wait(n)))
+            assert await _wait_until(lambda n=n: mux.status()["queue"] == n + 1, 5)
+        current = first
+        for n in range(3):
+            await current.close()
+            current = await asyncio.wait_for(waiting[n], 30)
+            assert order == list(range(n + 1))
+        await current.close()
+
+
+async def test_a_warm_chrome_takes_the_client_at_once_and_is_replaced():
+    async with serving(1, warm=1) as mux:
+        assert await _wait_until(lambda: mux.status()["slots"][0]["state"] == "ready", 30)
+        (warm_pid,) = _pids(mux)
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        async with _client(mux) as ws:
+            assert loop.time() - start < 0.5
+            assert _pids(mux) == [warm_pid] and mux.status()["slots"][0]["launches"] == 1
+            assert (await _cdp(ws, 1, "Browser.getVersion"))["result"]
+        ready = await _wait_until(lambda: mux.status()["slots"][0]["state"] == "ready", 30)
+        assert ready, json.dumps(mux.status())
+        assert _pids(mux) != [warm_pid]
+        await asyncio.sleep(1)  # and it stays: no launch loop
+        assert mux.status()["slots"][0]["launches"] == 2

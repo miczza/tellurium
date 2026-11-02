@@ -22,6 +22,8 @@ from tellurium.session.slots import Slots
 
 #: Seconds a client that got its place waits for a Chrome to be ready there.
 LAUNCH_WAIT = 60.0
+#: Clients that may wait in the queue; past it a new one is turned away at once.
+MAX_QUEUE = 64
 
 _PREFERENCE = {"ready": 0, "launching": 1, "failing": 2, "idle": 3}
 
@@ -36,6 +38,10 @@ class NoChrome(Exception):
 
 class PoolClosed(Exception):
     """The pool is shutting down."""
+
+
+class ClientGone(Exception):
+    """The client went away while it waited."""
 
 
 class Lease:
@@ -108,18 +114,22 @@ class Pool:
     # Clients
     # ------------------------------------------------------------------ #
 
-    async def acquire(self) -> Lease:
+    async def acquire(self, gone: asyncio.Future | None = None) -> Lease:
         """A place and a ready Chrome for one client.
 
-        Raises :class:`QueueTimeout` past *acquire_timeout* in the queue,
-        :class:`NoChrome` when no Chrome could be launched within
-        :data:`LAUNCH_WAIT`, and :class:`PoolClosed` on shutdown.
+        Raises :class:`QueueTimeout` past *acquire_timeout* in the queue (or at
+        once with :data:`MAX_QUEUE` clients waiting), :class:`NoChrome` when no
+        Chrome could be launched within :data:`LAUNCH_WAIT`, :class:`PoolClosed`
+        on shutdown, and :class:`ClientGone` as soon as *gone* resolves (the
+        client hung up): it leaves the queue, and no Chrome is launched for it.
         """
+        if self._slots.held >= self.size and self._slots.waiting >= MAX_QUEUE:
+            raise QueueTimeout(f"{MAX_QUEUE} clients are already waiting")
         stack = AsyncExitStack()
         try:
             try:
                 slot = self._slots.slot(timeout=self.acquire_timeout)
-                await self._unless_closing(stack.enter_async_context(slot))
+                await self._unless_closing(stack.enter_async_context(slot), gone)
             except TimeoutError:
                 raise QueueTimeout(
                     f"all {self.size} Chromes stayed busy for {self.acquire_timeout:g} s"
@@ -133,7 +143,7 @@ class Pool:
             self.rebalance()
             try:
                 relay = await self._unless_closing(
-                    asyncio.wait_for(asyncio.shield(ready), LAUNCH_WAIT)
+                    asyncio.wait_for(asyncio.shield(ready), LAUNCH_WAIT), gone
                 )
             except asyncio.TimeoutError:
                 raise NoChrome(
@@ -147,20 +157,26 @@ class Pool:
         self.connections += 1
         return Lease(stack, place, relay)
 
-    async def _unless_closing(self, awaitable: Any) -> Any:
-        """*awaitable*'s result, unless the pool starts closing first."""
-        if self._closing is None or self._closing.done():
+    async def _unless_closing(self, awaitable: Any, gone: asyncio.Future | None = None) -> Any:
+        """*awaitable*'s result, unless the pool starts closing or *gone*
+        resolves first."""
+        if self._closing is None or self._closing.done() or (gone is not None and gone.done()):
             if asyncio.iscoroutine(awaitable):
                 awaitable.close()
+            if gone is not None and gone.done():
+                raise ClientGone("the client hung up")
             raise PoolClosed("the multiplexer is shutting down")
         task = asyncio.ensure_future(awaitable)
+        stops = [self._closing] if gone is None else [self._closing, gone]
         try:
-            await asyncio.wait([task, self._closing], return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait([task, *stops], return_when=asyncio.FIRST_COMPLETED)
         finally:
             if not task.done():
                 task.cancel()
                 await asyncio.wait([task])
         if task.cancelled():
+            if gone is not None and gone.done():
+                raise ClientGone("the client hung up")
             raise PoolClosed("the multiplexer is shutting down")
         return task.result()
 

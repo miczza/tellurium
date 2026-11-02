@@ -143,7 +143,7 @@ class Place:
             self.state = "closed"
 
     def _unclaim(self) -> None:
-        self.claimed = self._attached = False
+        self.claimed = self._attached = self._left = False
         self._ready = None
         self._idle.set()
 

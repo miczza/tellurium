@@ -216,7 +216,7 @@ def _command(raw: str | bytes) -> dict | None:
     """The client's message as a dict with an integer id, or None."""
     try:
         command = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):  # RecursionError: nested beyond Python's stack
         return None
     if not isinstance(command, dict) or type(command.get("id")) is not int:
         return None

@@ -31,7 +31,8 @@ from tellurium.access import (
     repeated_header,
     token_in_url,
 )
-from tellurium.multiplexer.pool import LAUNCH_WAIT, NoChrome, Pool, PoolClosed, QueueTimeout
+from tellurium.multiplexer import pool as pool_module
+from tellurium.multiplexer.pool import ClientGone, NoChrome, Pool, PoolClosed, QueueTimeout
 
 #: Largest WebSocket message either way (full-page screenshots, response bodies).
 MAX_MESSAGE = 256 * 2**20
@@ -39,6 +40,12 @@ MAX_MESSAGE = 256 * 2**20
 MAX_FRAMES = 16
 #: Seconds the closing handshake with a client may take.
 CLOSE_TIMEOUT = 5.0
+#: Seconds a new connection has to send its request, before it is dropped.
+REQUEST_TIMEOUT = 10.0
+#: Connections whose request has not come yet, at most: past it the oldest is
+#: dropped, so silent sockets cannot use up the descriptors (or crowd out a
+#: client with the token, whose request comes at once).
+MAX_UNCHECKED = 64
 
 _VERSION_PATHS = frozenset({"/json/version", "/json/version/"})
 _BROWSER_PATH = re.compile(r"/devtools/browser/[^/?#]*")
@@ -112,11 +119,12 @@ class Server:
         self._server: Any = None
         self._leases: dict[Any, Any] = {}
         self._orphans: set[asyncio.Task] = set()
+        #: connection -> the timer that drops it if its request does not come
+        self._unchecked: dict[Any, asyncio.TimerHandle] = {}
         self.port: int | None = None
 
     async def start(self) -> None:
         server = require_websockets()
-        open_timeout = self._pool.acquire_timeout + LAUNCH_WAIT + 10
         self._server = await server.serve(
             self._handle,
             self._host,
@@ -124,7 +132,8 @@ class Server:
             process_request=self._process_request,
             max_size=MAX_MESSAGE,
             max_queue=MAX_FRAMES,
-            open_timeout=open_timeout,
+            open_timeout=None,  # REQUEST_TIMEOUT before the checks; the queue has its own
+            create_connection=self._connection_class(server.ServerConnection),
             close_timeout=CLOSE_TIMEOUT,
             ping_interval=None,
             compression=None,
@@ -141,12 +150,53 @@ class Server:
         await asyncio.sleep(0)  # done callbacks of the last handshakes
         while self._orphans:
             await asyncio.wait(list(self._orphans))
+        for timer in self._unchecked.values():
+            timer.cancel()
+        self._unchecked.clear()
+
+    # ------------------------------------------------------------------ #
+    # Connections before their request
+    # ------------------------------------------------------------------ #
+
+    def _connection_class(self, base: type) -> type:
+        guard = self
+
+        class GuardedConnection(base):  # type: ignore[misc, valid-type]
+            def connection_made(self, transport: Any) -> None:
+                super().connection_made(transport)
+                guard._opened(self)
+
+            def connection_lost(self, exc: Exception | None) -> None:
+                try:
+                    super().connection_lost(exc)
+                finally:
+                    guard._checked(self)
+
+        return GuardedConnection
+
+    def _opened(self, connection: Any) -> None:
+        while len(self._unchecked) >= MAX_UNCHECKED:
+            oldest = next(iter(self._unchecked))
+            self._checked(oldest)
+            oldest.transport.abort()
+        loop = asyncio.get_running_loop()
+        self._unchecked[connection] = loop.call_later(REQUEST_TIMEOUT, self._expire, connection)
+
+    def _expire(self, connection: Any) -> None:
+        if self._unchecked.pop(connection, None) is not None:
+            connection.transport.abort()
+
+    def _checked(self, connection: Any) -> None:
+        timer = self._unchecked.pop(connection, None)
+        if timer is not None:
+            timer.cancel()
 
     # ------------------------------------------------------------------ #
     # HTTP, before any upgrade
     # ------------------------------------------------------------------ #
 
     async def _process_request(self, connection: Any, request: Any) -> Any:
+        self._checked(connection)  # its request came: no longer at risk of the timer
         refusal = self._refusal(request)
         if refusal is not None:
             return _reply(connection, *refusal)
@@ -155,11 +205,14 @@ class Server:
             return await self._version(connection, request)
         if not _BROWSER_PATH.fullmatch(path):
             return _reply(connection, 404, "Not found: connect to /devtools/browser/<id>")
-        if request.headers.get("Upgrade", "").lower() != "websocket":
+        upgrade = [v for k, v in request.headers.raw_items() if k.lower() == "upgrade"]
+        if [v.lower() for v in upgrade] != ["websocket"]:
             return _reply(connection, 426, "Upgrade Required: this path speaks WebSocket")
         try:
-            lease = await self._pool.acquire()
-        except (QueueTimeout, NoChrome, PoolClosed) as exc:
+            lease = await self._pool.acquire(
+                gone=getattr(connection, "connection_lost_waiter", None)
+            )
+        except (QueueTimeout, NoChrome, PoolClosed, ClientGone) as exc:
             return _reply(connection, 503, f"Service Unavailable: {exc}")
         self._leases[connection] = lease
         # The handler takes the lease; if the handshake fails it never runs.
@@ -169,7 +222,7 @@ class Server:
         return None
 
     def _refusal(self, request: Any) -> tuple[int, str, dict[str, str]] | None:
-        repeated = repeated_header(name for name, _ in request.headers.raw_items())
+        repeated = repeated_header((name for name, _ in request.headers.raw_items()), ("upgrade",))
         if repeated:
             return 400, f"Header {repeated} sent more than once", {}
         headers = {name.lower(): value for name, value in request.headers.raw_items()}
@@ -190,7 +243,7 @@ class Server:
 
     async def _version(self, connection: Any, request: Any) -> Any:
         try:
-            version = await self._pool.browser_version(LAUNCH_WAIT)
+            version = await self._pool.browser_version(pool_module.LAUNCH_WAIT)
         except (TimeoutError, PoolClosed) as exc:
             return _reply(connection, 503, f"Service Unavailable: {exc}")
         host = request.headers.get("Host") or f"{self._host}:{self.port}"

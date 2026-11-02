@@ -25,6 +25,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a `Host` naming the bind address and no `Origin`; a token in the URL, path included,
   is refused. Cancelling `serve()` closes the clients (1001), the Chromes, forwarders and
   profiles. `proxy`, `seed`, `user_data_dir` and `stealth` raise `TypeError`.
+  A client that hangs up while it waits leaves the queue at once (no Chrome launched for
+  it); past 64 waiting clients a new one gets 503 at once. A connection must send its
+  request within 10 s, and at most 64 connections may be waiting to do so (the oldest is
+  dropped): silent sockets cannot use up the descriptors.
 - Extra `tellurium[multiplex]` (`websockets>=13`); without it `Multiplexer()` raises
   `ImportError` with the install line.
 
