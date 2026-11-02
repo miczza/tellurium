@@ -558,3 +558,54 @@ async def test_a_warm_chrome_takes_the_client_at_once_and_is_replaced():
         assert _pids(mux) != [warm_pid]
         await asyncio.sleep(1)  # and it stays: no launch loop
         assert mux.status()["slots"][0]["launches"] == 2
+
+
+async def test_a_burst_of_events_slows_a_slow_client_down_without_closing_it(monkeypatch):
+    """100k console.log with Runtime.enable to a client that reads slowly: the relay
+    holds the pipe up (bounded memory), health does not mistake that for a hang."""
+    from tellurium.multiplexer import relay as relay_module
+
+    monkeypatch.setattr(relay_module, "HIGH_WATER", 256 * 1024)
+    monkeypatch.setattr(health, "INTERVAL", 0.2)
+    monkeypatch.setattr(health, "TIMEOUT", 0.5)
+    total = 100_000
+    async with serving() as mux, _client(mux) as ws:
+        created = await _cdp(ws, 1, "Target.createTarget", {"url": "about:blank"})
+        attached = await _cdp(
+            ws,
+            2,
+            "Target.attachToTarget",
+            {"targetId": created["result"]["targetId"], "flatten": True},
+        )
+        session = attached["result"]["sessionId"]
+        await _cdp(ws, 3, "Runtime.enable", session=session)
+        expression = f"for (let i = 0; i < {total}; i++) console.log(i)"
+        await ws.send(
+            json.dumps(
+                {
+                    "id": 4,
+                    "method": "Runtime.evaluate",
+                    "params": {"expression": expression},
+                    "sessionId": session,
+                }
+            )
+        )
+        relay = mux._pool.places[0].relay
+        peak, logs = 0, 0
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        while logs < total:
+            message = json.loads(await asyncio.wait_for(ws.recv(), 30))
+            if message.get("method") == "Runtime.consoleAPICalled":
+                assert message["params"]["args"][0]["value"] == logs
+                logs += 1
+                if logs % 50 == 0:
+                    await asyncio.sleep(0.002)  # a slow client, but a live one
+                    if relay._client is not None:
+                        peak = max(peak, relay._client.queued)
+        assert relay.pauses > 0  # the pipe was held up at least once
+        assert peak <= 256 * 1024 + 64 * 1024
+        assert (await _cdp(ws, 5, "Browser.getVersion"))["result"]
+        status = mux.status()
+        assert status["hangs"] == 0 and status["crashes"] == 0
+        assert loop.time() - start < 120

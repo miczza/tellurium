@@ -6,9 +6,14 @@ restored on the reply, so the client may reuse or scatter its ids and the
 health probes sent on the same pipe never collide with them. Events, with or
 without ``sessionId``, reach the client untouched; with no client they are
 dropped. A client message that is not a JSON object with an integer ``id``
-closes the connection with 1007. What Chrome sends waits in a bounded queue
-for the client: a client that reads too slowly is disconnected (1008)
-instead of growing the server's memory or stalling the pipe.
+closes the connection with 1007.
+
+Both ways are bounded in bytes, by back-pressure rather than by closing:
+past :data:`HIGH_WATER` bytes waiting for the client the relay stops reading
+the pipe (Chrome keeps the rest, as it does for a slow WebSocket client of
+its own) until the client catches up; past :data:`MAX_INFLIGHT_BYTES` of
+commands Chrome has not answered it stops reading the client. Only a client
+that takes nothing for :data:`STALL_LIMIT` seconds is closed (1008).
 """
 
 from __future__ import annotations
@@ -22,11 +27,15 @@ from typing import Any
 #: Ids are drawn below this bound: ``RawChrome`` used ``2**31 - 2`` for its own probe.
 _ID_LIMIT = 2**31 - 16
 
-#: Messages and bytes that may wait for a slow client before it is disconnected.
-MAX_QUEUED_MESSAGES = 4096
-MAX_QUEUED_BYTES = 512 * 2**20
+#: Bytes waiting for the client above which the pipe is no longer read. Messages
+#: are JSON with ``ensure_ascii``: one character is one byte.
+HIGH_WATER = 16 * 2**20
+#: Seconds a client that holds the pipe up may go without taking a message.
+STALL_LIMIT = 60.0
 
-#: Commands of the client Chrome has not answered yet, at most.
+#: Bytes of client commands Chrome has not answered above which the client is no
+#: longer read (one command alone may be larger), and their number.
+MAX_INFLIGHT_BYTES = 64 * 2**20
 MAX_PENDING = 16384
 
 #: WebSocket close codes.
@@ -51,8 +60,15 @@ class Relay:
     def __init__(self, transport: Any) -> None:
         self._transport = transport
         self._next_id = 0
-        #: own id -> the client's id, or the future of an internal probe
-        self._pending: dict[int, int | asyncio.Future[dict]] = {}
+        #: own id -> (the client's id, the command's size), or the future of a probe
+        self._pending: dict[int, tuple[int, int] | asyncio.Future[dict]] = {}
+        self._inflight = 0  # commands of the client in _pending
+        self._inflight_bytes = 0
+        self._answered = asyncio.Event()  # a reply to the client came (or the pipe ended)
+        #: True while the pipe is not read because the client is behind; *pauses*
+        #: counts those spells, so a probe that spans one is not a hang.
+        self.paused = False
+        self.pauses = 0
         self._client: _Client | None = None
         self._reader: asyncio.Task | None = None
         self.ended: asyncio.Future[str] = asyncio.get_running_loop().create_future()
@@ -69,6 +85,9 @@ class Relay:
     async def _read(self) -> None:
         try:
             while True:
+                client = self._client
+                if client is not None and client.queued > HIGH_WATER:
+                    await self._wait_for(client)
                 message = await self._transport.recv()
                 self._dispatch(message)
         except (EOFError, ConnectionError, OSError, ValueError) as exc:
@@ -76,6 +95,22 @@ class Relay:
         except asyncio.CancelledError:
             self._end("the relay was closed")
             raise
+
+    async def _wait_for(self, client: _Client) -> None:
+        """Leave Chrome's messages in the pipe until *client* catches up; close it
+        (1008) if it takes nothing for :data:`STALL_LIMIT` seconds."""
+        loop = asyncio.get_running_loop()
+        self.paused, self.pauses = True, self.pauses + 1
+        start = loop.time()
+        try:
+            while client.queued > HIGH_WATER and self._client is client:
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(client.room.wait(), 1.0)
+                if loop.time() - max(start, client.last_sent) > STALL_LIMIT:
+                    client.abandon(CLOSE_POLICY, f"the client took nothing for {STALL_LIMIT:g} s")
+                    return
+        finally:
+            self.paused = False
 
     def _dispatch(self, message: dict) -> None:
         own = message.get("id")
@@ -90,8 +125,12 @@ class Relay:
             if not entry.done():
                 entry.set_result(message)
             return
+        client_id, size = entry
+        self._inflight -= 1
+        self._inflight_bytes -= size
+        self._answered.set()
         if self._client is not None:
-            message["id"] = entry
+            message["id"] = client_id
             self._client.push(message)
 
     def _end(self, reason: str) -> None:
@@ -101,6 +140,8 @@ class Relay:
             if isinstance(entry, asyncio.Future) and not entry.done():
                 entry.set_exception(RelayClosed(reason))
         self._pending.clear()
+        self._inflight = self._inflight_bytes = 0
+        self._answered.set()
 
     # ------------------------------------------------------------------ #
     # here -> Chrome
@@ -153,8 +194,11 @@ class Relay:
         client = self._client = _Client(ws)
         writer = asyncio.ensure_future(client.write())
         pump = asyncio.ensure_future(self._pump(ws))
+        # The pump may be held back by commands Chrome has not answered: the
+        # client leaving must end the relay all the same.
+        gone = asyncio.ensure_future(ws.wait_closed())
         try:
-            await asyncio.wait([pump, self.ended], return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait([pump, gone, self.ended], return_when=asyncio.FIRST_COMPLETED)
             if self.ended.done():
                 if self.closed_by_client:
                     await client.close(CLOSE_NORMAL, "Chrome closed by the client")
@@ -162,9 +206,9 @@ class Relay:
                     await client.close(CLOSE_ERROR, f"Chrome exited: {self.ended.result()}")
         finally:
             self._client = None
-            for task in (pump, writer):
+            for task in (pump, writer, gone):
                 task.cancel()
-            await asyncio.wait([pump, writer])
+            await asyncio.wait([pump, writer, gone])
             if not pump.cancelled() and pump.exception() is not None:
                 raise pump.exception()
 
@@ -178,13 +222,21 @@ class Relay:
                         CLOSE_BAD_DATA, "each message must be a JSON object with an integer id"
                     )
                     return
-                if len(self._pending) >= MAX_PENDING:
-                    await ws.close(CLOSE_POLICY, "too many commands waiting for Chrome")
-                    return
+                size = len(raw)
+                while self._inflight and (
+                    self._inflight >= MAX_PENDING
+                    or self._inflight_bytes + size > MAX_INFLIGHT_BYTES
+                ):
+                    if self.ended.done():
+                        return  # serve() closes the client with the reason
+                    self._answered.clear()
+                    await self._answered.wait()  # Chrome answers: room again
                 if command.get("method") == "Browser.close":
                     self.closed_by_client = True
                 own = self._own_id()
-                self._pending[own] = command["id"]
+                self._pending[own] = (command["id"], size)
+                self._inflight += 1
+                self._inflight_bytes += size
                 command["id"] = own
                 try:
                     await self._send(command)
@@ -231,38 +283,49 @@ def _is_closed(exc: BaseException) -> bool:
 
 
 class _Client:
-    """The WebSocket of the client and the bounded queue of what goes to it."""
+    """The WebSocket of the client and what waits to go to it."""
 
     def __init__(self, ws: Any) -> None:
         self._ws = ws
         self._queue: deque[str] = deque()
-        self._bytes = 0
+        self.queued = 0  # bytes in the queue
         self._ready = asyncio.Event()
+        #: Set while the queue is at or below HIGH_WATER.
+        self.room = asyncio.Event()
+        self.room.set()
+        self.last_sent = 0.0  # loop time of the last message the client took
         self._closing: asyncio.Task | None = None
 
     def push(self, message: dict) -> None:
         if self._closing is not None:
             return
-        text = json.dumps(message, separators=(",", ":"))
+        text = json.dumps(message, separators=(",", ":"), ensure_ascii=True)
         self._queue.append(text)
-        self._bytes += len(text)
-        if len(self._queue) > MAX_QUEUED_MESSAGES or self._bytes > MAX_QUEUED_BYTES:
-            self._queue.clear()
-            self._bytes = 0
-            self._closing = asyncio.ensure_future(
-                self._ws.close(CLOSE_POLICY, "the client reads too slowly")
-            )
-            return
+        self.queued += len(text)
+        if self.queued > HIGH_WATER:
+            self.room.clear()
         self._ready.set()
 
+    def abandon(self, code: int, reason: str) -> None:
+        """Drop what waits and close the client."""
+        self._queue.clear()
+        self.queued = 0
+        self.room.set()
+        if self._closing is None:
+            self._closing = asyncio.ensure_future(self._ws.close(code, reason))
+
     async def write(self) -> None:
+        loop = asyncio.get_running_loop()
         try:
             while True:
                 await self._ready.wait()
                 while self._queue:
                     text = self._queue.popleft()
-                    self._bytes -= len(text)
                     await self._ws.send(text)
+                    self.queued -= len(text)
+                    self.last_sent = loop.time()
+                    if self.queued <= HIGH_WATER:
+                        self.room.set()
                 self._ready.clear()
         except Exception as exc:  # noqa: BLE001 - the client went away
             if not _is_closed(exc):

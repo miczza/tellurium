@@ -43,6 +43,7 @@ class FakeSocket:
         self.closed: tuple[int, str] | None = None
         self.unblocked = asyncio.Event()
         self.unblocked.set()
+        self._gone = asyncio.Event()
 
     def __aiter__(self):
         return self
@@ -63,6 +64,10 @@ class FakeSocket:
         if self.closed is None:
             self.closed = (code, reason)
         self.inbox.put_nowait(None)
+        self._gone.set()
+
+    async def wait_closed(self) -> None:
+        await self._gone.wait()
 
 
 async def _until(predicate, timeout: float = 2.0) -> None:
@@ -130,24 +135,48 @@ async def test_a_broken_pipe_closes_the_client_with_1011_and_fails_probes():
     await relay.close()
 
 
-async def test_a_client_that_reads_too_slowly_is_closed_with_1008(monkeypatch):
-    monkeypatch.setattr(relay_module, "MAX_QUEUED_MESSAGES", 10)
+async def test_a_slow_client_holds_the_pipe_up_instead_of_being_closed(monkeypatch):
+    monkeypatch.setattr(relay_module, "HIGH_WATER", 200)
     pipe, ws = FakePipe(), FakeSocket()
-    ws.unblocked.clear()  # the client reads nothing
+    ws.unblocked.clear()  # the client takes nothing for now
     relay = Relay(pipe)
     relay.start()
     serving = asyncio.ensure_future(relay.serve(ws))
     await _until(lambda: relay._client is not None)  # events with no client are dropped
+    for n in range(100):
+        pipe.incoming.put_nowait({"method": "E", "params": {"n": n}})
+    await _until(lambda: relay.paused)
+    await asyncio.sleep(0.1)
+    assert pipe.incoming.qsize() > 80  # left in the pipe, not queued here
+    assert relay._client.queued <= 200 + 40
+    ws.unblocked.set()  # it catches up: everything arrives, in order, nothing closed
+    await _until(lambda: len(ws.out) == 100)
+    assert [m["params"]["n"] for m in ws.out] == list(range(100))
+    assert ws.closed is None and not relay.paused and relay.pauses >= 1
+    ws.inbox.put_nowait(None)
+    await serving
+    await relay.close()
+
+
+async def test_a_client_that_takes_nothing_for_long_is_closed_with_1008(monkeypatch):
+    monkeypatch.setattr(relay_module, "HIGH_WATER", 100)
+    monkeypatch.setattr(relay_module, "STALL_LIMIT", 0.3)
+    pipe, ws = FakePipe(), FakeSocket()
+    ws.unblocked.clear()
+    relay = Relay(pipe)
+    relay.start()
+    serving = asyncio.ensure_future(relay.serve(ws))
+    await _until(lambda: relay._client is not None)
     for n in range(20):
         pipe.incoming.put_nowait({"method": "E", "params": {"n": n}})
-    await _until(lambda: ws.closed is not None)
-    assert ws.closed[0] == 1008
+    await _until(lambda: ws.closed is not None, 5)
+    assert ws.closed[0] == 1008 and "took nothing" in ws.closed[1]
     ws.unblocked.set()
     await asyncio.wait_for(serving, 2)
     await relay.close()
 
 
-async def test_too_many_unanswered_commands_close_with_1008(monkeypatch):
+async def test_commands_chrome_has_not_answered_hold_the_client_back(monkeypatch):
     monkeypatch.setattr(relay_module, "MAX_PENDING", 3)
     pipe, ws = FakePipe(), FakeSocket()
     relay = Relay(pipe)
@@ -155,8 +184,32 @@ async def test_too_many_unanswered_commands_close_with_1008(monkeypatch):
     serving = asyncio.ensure_future(relay.serve(ws))
     for id in range(5):
         ws.inbox.put_nowait(json.dumps({"id": id, "method": "A"}))
+    await _until(lambda: len(pipe.sent) == 3)
+    await asyncio.sleep(0.05)
+    assert len(pipe.sent) == 3 and ws.closed is None
+    pipe.incoming.put_nowait({"id": pipe.sent[0]["id"], "result": {}})
+    await _until(lambda: len(pipe.sent) == 4)
+    await ws.close(1000)  # leaving while held back ends the relay
     await asyncio.wait_for(serving, 2)
-    assert ws.closed[0] == 1008 and len(pipe.sent) == 3
+    await relay.close()
+
+
+async def test_bytes_chrome_has_not_answered_hold_the_client_back(monkeypatch):
+    monkeypatch.setattr(relay_module, "MAX_INFLIGHT_BYTES", 1000)
+    pipe, ws = FakePipe(), FakeSocket()
+    relay = Relay(pipe)
+    relay.start()
+    serving = asyncio.ensure_future(relay.serve(ws))
+    big = "x" * 600
+    for id in range(3):
+        ws.inbox.put_nowait(json.dumps({"id": id, "method": "A", "params": {"p": big}}))
+    await _until(lambda: len(pipe.sent) == 1)  # one alone may be larger than half
+    await asyncio.sleep(0.05)
+    assert len(pipe.sent) == 1
+    pipe.incoming.put_nowait({"id": pipe.sent[0]["id"], "result": {}})
+    await _until(lambda: len(pipe.sent) == 2)
+    await ws.close(1000)
+    await asyncio.wait_for(serving, 2)
     await relay.close()
 
 

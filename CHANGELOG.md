@@ -28,7 +28,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   A client that hangs up while it waits leaves the queue at once (no Chrome launched for
   it); past 64 waiting clients a new one gets 503 at once. A connection must send its
   request within 10 s, and at most 64 connections may be waiting to do so (the oldest is
-  dropped): silent sockets cannot use up the descriptors.
+  dropped): silent sockets cannot use up the descriptors. Both directions of the relay
+  are bounded in bytes by back-pressure: past 16 MiB waiting for a slow client the pipe
+  is no longer read (Chrome keeps the rest) and health probes are not counted as missed
+  meanwhile; past 64 MiB of commands Chrome has not answered the client is no longer
+  read. Only a client that takes nothing for 60 s is closed (1008).
 - Extra `tellurium[multiplex]` (`websockets>=13`); without it `Multiplexer()` raises
   `ImportError` with the install line.
 
