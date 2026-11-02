@@ -7,6 +7,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `tellurium.Multiplexer(size, *, proxies=(), warm=0, acquire_timeout=30, **launch)`: one
+  CDP endpoint in front of a pool of Chromes, one Chrome per WebSocket connection
+  (`async with`, `await mux.serve(host, port)` until cancelled, `mux.url`, `mux.token`,
+  `mux.status()`, `mux.restart(slot_id)`). Each client gets a Chrome of its own, launched
+  with a fresh seed and the next proxy and closed with its profile when it leaves; up to
+  `size` clients at once, the others wait in a first come, first served queue up to
+  `acquire_timeout` seconds, then HTTP 503. `warm` Chromes are kept ready. Client ids are
+  remapped (repeated or scattered ids are fine), events and `sessionId` pass untouched, a
+  message that is not a JSON object with an integer id closes with 1007. A health probe
+  (`Browser.getVersion` on the same pipe every 10 s, also for warm Chromes) kills a Chrome
+  that misses two in a row; a crash or a hang closes its client with 1011 and the reason,
+  and the place gets a new Chrome. Failed launches are retried with backoff and reported
+  in `status()`. `GET /json/version` (also `/json/version/`) answers like Chrome's; the
+  WebSocket path is `/devtools/browser/<anything>`. Every request, upgrade included,
+  needs `Authorization: Bearer <token>` (token in `~/.tellurium/multiplex-token`, 0600),
+  a `Host` naming the bind address and no `Origin`; a token in the URL, path included,
+  is refused. Cancelling `serve()` closes the clients (1001), the Chromes, forwarders and
+  profiles. `proxy`, `seed`, `user_data_dir` and `stealth` raise `TypeError`.
+- Extra `tellurium[multiplex]` (`websockets>=13`); without it `Multiplexer()` raises
+  `ImportError` with the install line.
+
 - `tellurium.browser.raw_chrome.RawChrome`: Chrome on its CDP pipe without `Browser`
   (`await RawChrome.launch(...)` or `async with`), for code that speaks CDP itself.
   `transport` (`send(bytes)` / `recv() -> dict`), `pid`, `seed`, `proxy`, `alive`,

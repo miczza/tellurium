@@ -19,6 +19,7 @@ from tellurium.cdp.types import TargetCrashedError
 
 __version__ = "0.1.0"
 
+from tellurium.multiplexer import Multiplexer  # noqa: E402
 from tellurium.session import Session, SessionBusyError, SessionPool  # noqa: E402 — after __version__ to avoid circular import
 
 __all__ = [
@@ -37,6 +38,7 @@ __all__ = [
     "DownloadError",
     "ElementNotHittableError",
     "LaunchError",
+    "Multiplexer",
     "NavigationError",
     "NavigationTimeoutError",
     "RobotsDisallowedError",
