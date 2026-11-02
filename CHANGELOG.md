@@ -16,6 +16,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   proxy's exit IP with `geoip=True`), with no stealth engine, extension or User-Agent
   rewrite, and always a temporary profile. Launch waits for `Browser.getVersion` on the
   pipe; a failure or cancellation at any step releases Chrome, forwarder and profile.
+- `Slots.slot(timeout=None)` (the browser slots of `SessionPool`): *timeout* limits only the
+  wait for a slot; past it `TimeoutError`, with no slot taken and no place left in the queue.
+  The block itself is not limited (an `asyncio.timeout` around `slot()` would cut it too).
+- `tellurium.access`: who may talk to a local tellurium server, without a web framework —
+  the token file (`load_or_create_token(path)`, `TokenFileError`; the file name is the
+  caller's), the bind address (`parse_bind`, `is_loopback`, `allowed_hosts`) and the checks
+  on lowercased headers (`host_ok`, `token_in_url`, `bearer_ok` in constant time,
+  `repeated_header`). `tellurium.mcp.auth` uses it and still exports the same names.
 
 - Patched engine: `--fingerprint-timezone=<IANA>` with the timezone of the stealth profile
   (GeoIP and the manual `timezone=` of `launch` included) or, with stealth off, the manual
@@ -516,6 +524,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   out of `examples/fingerprint_tests/`.
 
 ### Fixed
+
+- `SessionPool`: the browser slots are handed out first come, first served, with no polling.
+  Whoever releases a slot gives it to the oldest waiter (in any loop or thread) instead of
+  freeing it for whoever polls first, so a task that closes and opens again in a loop no
+  longer starves the others (with `max_browsers=1` and three such tasks a waiter could wait
+  over a second). A waiter cancelled in the queue leaves it; one cancelled after the slot was
+  given to it passes the slot on.
 
 - Patched backend: cancelling `Browser.launch` while the binary is being resolved stops a
   security download in flight (between release lookup, `SHA256SUMS`, each 64 KiB chunk,
