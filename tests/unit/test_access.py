@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import stat
+from urllib.parse import quote
 
 import pytest
 
@@ -137,3 +138,40 @@ def test_repeated_header():
     assert access.repeated_header(["host", "origin", "accept", "accept"]) is None
     assert access.repeated_header(["x-a", "X-A"], extra={"x-a"}) == "x-a"
     assert {"host", "origin", "authorization"} <= access.SINGLE_HEADERS
+
+
+LEAKED = "A" * 20 + "b-_" + "9" * 20
+
+
+@pytest.mark.parametrize("bind", ["0", "0.0.0.0", "::", "::0", "[::]", ""])
+def test_every_wildcard_spelling_checks_no_host(bind):
+    assert access.allowed_hosts(bind) is None
+
+
+def test_a_loopback_bind_accepts_its_own_name_and_the_loopback_names():
+    names = access.allowed_hosts("127.0.0.2")
+    assert {"127.0.0.2", "127.0.0.1", "localhost", "[::1]"} <= names
+    assert "[::1]" in access.allowed_hosts("::1")
+    assert access.allowed_hosts("192.168.1.5") == frozenset({"192.168.1.5"})
+    assert access.allowed_hosts("127.1") >= {"127.0.0.1"}
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        f"/devtools/browser/{LEAKED}",
+        f"/devtools/browser/{quote(LEAKED, safe='')}",
+        "/devtools/browser/" + quote(quote(LEAKED, safe=""), safe=""),
+        "/devtools/browser/" + "".join(f"%{ord(c):02X}" for c in LEAKED),
+        f"/json/version?x={LEAKED}",
+        "/json/version?token=abc",
+        "/json/version?" + quote(quote(f"t={LEAKED}", safe=""), safe=""),
+    ],
+)
+def test_the_token_is_seen_anywhere_in_the_target(target):
+    assert access.token_leaked(target, LEAKED)
+
+
+@pytest.mark.parametrize("target", ["/devtools/browser/abc", "/json/version", "/json/version/?a=1"])
+def test_clean_targets_pass(target):
+    assert not access.token_leaked(target, LEAKED)

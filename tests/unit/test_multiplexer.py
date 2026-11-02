@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sys
-from urllib.parse import quote
 
 import pytest
 
@@ -12,9 +11,6 @@ pytest.importorskip("websockets")
 from tellurium import Multiplexer  # noqa: E402
 from tellurium.browser.proxy import hide_credentials, parse_proxy_url, redact_proxy_url  # noqa: E402
 from tellurium.multiplexer.multiplexer import _url_host  # noqa: E402
-from tellurium.multiplexer.server import host_names, token_leaked  # noqa: E402
-
-TOKEN = "A" * 20 + "b-_" + "9" * 20
 
 
 @pytest.mark.parametrize("name", ["proxy", "seed", "user_data_dir", "stealth"])
@@ -59,40 +55,6 @@ def test_without_the_extra_the_error_says_how_to_install(monkeypatch):
     monkeypatch.setitem(sys.modules, "websockets.asyncio", None)
     with pytest.raises(ImportError, match=r"tellurium\[multiplex\]"):
         Multiplexer(1)
-
-
-@pytest.mark.parametrize("bind", ["0", "0.0.0.0", "::", "::0", "[::]", ""])
-def test_every_wildcard_spelling_checks_no_host(bind):
-    assert host_names(bind) is None
-
-
-def test_a_loopback_bind_accepts_its_own_name_and_the_loopback_names():
-    names = host_names("127.0.0.2")
-    assert {"127.0.0.2", "127.0.0.1", "localhost", "[::1]"} <= names
-    assert "[::1]" in host_names("::1")
-    assert host_names("192.168.1.5") == frozenset({"192.168.1.5"})
-    assert host_names("127.1") >= {"127.0.0.1"}
-
-
-@pytest.mark.parametrize(
-    "target",
-    [
-        f"/devtools/browser/{TOKEN}",
-        f"/devtools/browser/{quote(TOKEN, safe='')}",
-        "/devtools/browser/" + quote(quote(TOKEN, safe=""), safe=""),
-        "/devtools/browser/" + "".join(f"%{ord(c):02X}" for c in TOKEN),
-        f"/json/version?x={TOKEN}",
-        "/json/version?token=abc",
-        "/json/version?" + quote(quote(f"t={TOKEN}", safe=""), safe=""),
-    ],
-)
-def test_the_token_is_seen_anywhere_in_the_target(target):
-    assert token_leaked(target, TOKEN)
-
-
-@pytest.mark.parametrize("target", ["/devtools/browser/abc", "/json/version", "/json/version/?a=1"])
-def test_clean_targets_pass(target):
-    assert not token_leaked(target, TOKEN)
 
 
 def test_proxy_credentials_never_reach_the_status():

@@ -15,21 +15,17 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import http
-import ipaddress
 import json
 import re
-import socket
 import uuid
 from typing import Any
-from urllib.parse import unquote
 
 from tellurium.access import (
     allowed_hosts,
     bearer_ok,
     host_ok,
-    is_loopback,
     repeated_header,
-    token_in_url,
+    token_leaked,
 )
 from tellurium.multiplexer import pool as pool_module
 from tellurium.multiplexer.pool import ClientGone, NoChrome, Pool, PoolClosed, QueueTimeout
@@ -62,50 +58,6 @@ def require_websockets() -> Any:
     return server
 
 
-def host_names(bind: str) -> frozenset[str] | None:
-    """The ``Host`` names allowed for a server bound to *bind*; None for a wildcard.
-
-    Unlike :func:`~tellurium.access.allowed_hosts` alone, every spelling of a
-    wildcard (``0``, ``::0``, ``0.0.0.0``) is one, and a loopback address
-    other than 127.0.0.1 accepts its own name too.
-    """
-    address = _address(bind)
-    if address is None:
-        return allowed_hosts(bind)
-    if address.is_unspecified:
-        return None
-    name = f"[{address}]" if address.version == 6 else str(address)
-    if is_loopback(str(address)):
-        return allowed_hosts("127.0.0.1") | {name}
-    return frozenset({name})
-
-
-def _address(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
-    host = host.strip("[]")
-    if host == "":
-        return ipaddress.IPv4Address("0.0.0.0")
-    try:
-        return ipaddress.ip_address(host)
-    except ValueError:
-        pass
-    try:  # the short forms the system accepts: "0", "127.1"
-        return ipaddress.IPv4Address(socket.inet_aton(host))
-    except OSError:
-        return None
-
-
-def token_leaked(target: str, token: str) -> bool:
-    """Whether the request target (path and query) carries *token*: in the
-    path, the query, or a usual token key, raw or percent-encoded up to twice."""
-    path, _, query = target.partition("?")
-    seen = target
-    for _ in range(3):
-        if token in seen:
-            return True
-        seen = unquote(seen)
-    return token_in_url(query, token) or token_in_url(unquote(query), token)
-
-
 class Server:
     """The listening socket and its connections, for one :class:`Pool`."""
 
@@ -114,7 +66,7 @@ class Server:
         self._token = token
         self._host = host
         self._port = port
-        self._hosts = host_names(host)
+        self._hosts = allowed_hosts(host)
         self._browser_id = str(uuid.uuid4())
         self._server: Any = None
         self._leases: dict[Any, Any] = {}

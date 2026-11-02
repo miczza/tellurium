@@ -557,6 +557,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `tellurium.access.allowed_hosts` treats every spelling of a wildcard bind (`0`, `::0`,
+  `[::]`) as one, and a loopback bind other than 127.0.0.1 (`127.0.0.2`) accepts its own
+  name: the MCP HTTP server no longer answers 403 to everything on those binds. New
+  `access.token_leaked(target, token)` finds the token in a request's path or query, even
+  percent-encoded twice.
 - A proxy URL that cannot be parsed (unknown scheme, bad port) no longer quotes its
   user name and password in the error, for `Browser.launch` too.
 - `webrtc_ip='auto'`: the DNS lookup of the proxy host runs on a thread of its own, bounded

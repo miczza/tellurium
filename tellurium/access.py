@@ -18,6 +18,7 @@ import ipaddress
 import os
 import re
 import secrets
+import socket
 import stat
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -147,13 +148,36 @@ def is_loopback(host: str) -> bool:
 
 def allowed_hosts(bind_host: str) -> frozenset[str] | None:
     """The ``Host`` names a request may carry for a server bound to *bind_host*:
-    the loopback names on loopback, else that address only. ``None`` (no
-    check) for a wildcard bind, whose own name the server cannot know."""
-    if bind_host in _WILDCARDS:
+    the loopback names (and the address's own) on loopback, else that address
+    only. ``None`` (no check) for a wildcard bind in any spelling (``0.0.0.0``,
+    ``0``, ``::``, ``::0``, empty), whose own name the server cannot know."""
+    address = _address(bind_host)
+    if address is None:  # a host name
+        if is_loopback(bind_host):
+            return _LOOPBACK_NAMES
+        return frozenset({_host_name(bind_host)})
+    if address.is_unspecified:
         return None
-    if is_loopback(bind_host):
-        return _LOOPBACK_NAMES
-    return frozenset({_host_name(bind_host)})
+    name = _host_name(str(address))
+    if address.is_loopback:
+        return _LOOPBACK_NAMES | {name}
+    return frozenset({name})
+
+
+def _address(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """*host* as an IP address (with the short IPv4 forms ``0``, ``127.1`` the
+    system accepts), or None for a host name."""
+    host = host.strip("[]")
+    if host in _WILDCARDS:
+        return ipaddress.IPv4Address("0.0.0.0")
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    try:
+        return ipaddress.IPv4Address(socket.inet_aton(host))
+    except OSError:
+        return None
 
 
 def _host_name(host: str) -> str:
@@ -202,6 +226,18 @@ def token_in_url(query: str, token: str) -> bool:
     if token in unquote(query):
         return True
     return any(key.lower() in _URL_TOKEN_KEYS for key, _ in parse_qsl(query, True))
+
+
+def token_leaked(target: str, token: str) -> bool:
+    """Whether a request target (path and query) carries *token*: in the path or
+    the query, raw or percent-encoded up to twice, or under a usual token key."""
+    _, _, query = target.partition("?")
+    seen = target
+    for _ in range(3):
+        if token in seen:
+            return True
+        seen = unquote(seen)
+    return token_in_url(query, token) or token_in_url(unquote(query), token)
 
 
 def bearer_ok(headers: Mapping[str, str], token: str) -> bool:
