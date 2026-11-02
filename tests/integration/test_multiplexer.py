@@ -406,3 +406,15 @@ async def test_access_is_refused_before_anything_starts(upgrade):
                 assert found.get("www-authenticate") == "Bearer"
         assert mux.status()["connections"] == 0
         assert all(s["launches"] == 0 for s in mux.status()["slots"])
+
+
+async def test_a_handshake_that_fails_after_the_place_was_taken_gives_it_back():
+    async with serving() as mux:
+        broken = [*_good(mux), ("Upgrade", "websocket"), ("Connection", "Upgrade")]
+        status, _, _ = await _http(_port(mux), "/devtools/browser/x", broken)  # no key
+        assert status == 400
+        assert await _wait_until(lambda: mux.status()["clients"] == 0, 15)
+        pids = [s["pid"] for s in mux.status()["slots"]]
+        assert pids == [None]
+        async with _client(mux) as ws:
+            assert (await _cdp(ws, 1, "Browser.getVersion"))["result"]
