@@ -91,13 +91,17 @@ async def _cdp(ws, id: int, method: str, params: dict | None = None, session: st
 async def _closed(ws, timeout: float = 30.0) -> tuple[int | None, str]:
     """Read until the server closes *ws*: its close code and reason."""
 
-    async def drain() -> None:
-        with contextlib.suppress(ConnectionClosed):
+    async def drain() -> ConnectionClosed:
+        try:
             while True:
                 await ws.recv()
+        except ConnectionClosed as exc:
+            return exc
 
-    await asyncio.wait_for(drain(), timeout)
-    return ws.close_code, ws.close_reason or ""
+    closed = await asyncio.wait_for(drain(), timeout)
+    if closed.rcvd is None:
+        return None, ""
+    return closed.rcvd.code, closed.rcvd.reason
 
 
 async def _http(
@@ -266,6 +270,8 @@ async def test_each_connection_gets_a_new_seed_and_the_next_proxy():
                 (slot,) = [s for s in mux.status()["slots"] if s["state"] == "busy"]
                 line = _cmdline(slot["pid"])
                 assert f"--fingerprint={slot['seed']}" in line
+                assert "--remote-debugging-pipe" in line
+                assert not [a for a in line if "remote-debugging-port" in a]
                 assert "secret" not in json.dumps(mux.status())
                 seen.append((slot["pid"], slot["seed"], slot["proxy"], line))
         assert len({pid for pid, *_ in seen}) == 3

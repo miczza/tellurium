@@ -136,7 +136,7 @@ class Server:
         """Stop listening, close the clients with 1001, release every lease."""
         if self._server is not None:
             server, self._server = self._server, None
-            server.close(code=1001, reason="the multiplexer is shutting down")
+            server.close()  # clients get 1001 (going away)
             await server.wait_closed()
         await asyncio.sleep(0)  # done callbacks of the last handshakes
         while self._orphans:
