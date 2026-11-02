@@ -26,14 +26,14 @@ def _tab(replies):
 
 async def test_a_busy_page_is_waited_for(monkeypatch):
     monkeypatch.setattr(human, "POLL", 0.01)
-    replies = [asyncio.TimeoutError("busy"), "http://x/login", "http://x/dashboard"]
+    replies = [TimeoutError("busy"), "http://x/login", "http://x/dashboard"]
     await human.wait_for_human(_tab(replies), "Sign in", until="*/dashboard", timeout=5)
     assert replies == []
 
 
 async def test_a_busy_page_still_honours_the_timeout(monkeypatch):
     monkeypatch.setattr(human, "POLL", 0.01)
-    replies = [asyncio.TimeoutError("busy")] * 1000
+    replies = [TimeoutError("busy")] * 1000
     loop = asyncio.get_running_loop()
     start = loop.time()
     try:

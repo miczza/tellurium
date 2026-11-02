@@ -96,7 +96,7 @@ class AXTree:
 async def _send(session: Session, method: str, params: dict, timeout: float) -> dict:
     try:
         return await session.send(method, params, timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise TimeoutError(f"{method} got no answer within {timeout}s") from None
 
 
@@ -160,7 +160,7 @@ async def _frame_of(
         left = timeout if deadline is None else deadline - asyncio.get_running_loop().time()
         try:
             return await asyncio.wait_for(_oopif_tree(session, frame_id, sub), max(left, 0))
-        except (TimeoutError, asyncio.TimeoutError):  # a renderer stuck in a loop
+        except TimeoutError:  # a renderer stuck in a loop
             return _Unread(url, "not responding")
         except _TooLarge as large:  # an ad of 1e5 nodes: left out, the page still shows
             return _Unread(url, f"too large, {large.args[0]} nodes")
@@ -239,7 +239,7 @@ async def _snapshot_once(
     steps = _steps(session, selector, limits[0], seen, timeout, opts)
     try:
         return await asyncio.wait_for(steps, limits[1]), seen["sessions"]
-    except asyncio.TimeoutError:
+    except TimeoutError:
         hint = "a narrower selector= or " if seen["scope"] else ""
         raise SnapshotTooLargeError(
             f"The snapshot took over snapshot_timeout={limits[1]:g} s ({seen['count']} DOM nodes"

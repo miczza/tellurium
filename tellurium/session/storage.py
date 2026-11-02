@@ -7,7 +7,7 @@ import os
 import sys
 import tempfile
 import warnings
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from tellurium import __version__ as _tellurium_version
@@ -36,7 +36,7 @@ def save(path: str, data: dict[str, Any], full: bool) -> None:
     """
     out = dict(data)
     out["tellurium_version"] = _tellurium_version
-    out["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    out["updated_at"] = datetime.now(UTC).isoformat(timespec="seconds")
     if not full:
         out.pop("launch", None)
 

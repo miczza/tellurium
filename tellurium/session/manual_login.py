@@ -46,7 +46,7 @@ async def signed_in(validators: list, mode: str, tab: Any, timeout: float) -> bo
         return await asyncio.wait_for(
             combine(validators, mode, tab=tab), min(timeout, VALIDATOR_TIMEOUT)
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return False
 
 

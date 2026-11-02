@@ -63,7 +63,7 @@ async def fit(
                 if left < min_attempt:
                     raise TimeoutError
                 data = await asyncio.wait_for(capture("jpeg", quality, scale), left)
-            except (TimeoutError, asyncio.TimeoutError):
+            except TimeoutError:
                 raise ToolError(
                     f"Screenshot over {_mb(limit)} and not made smaller in time: take a part "
                     "of the page with ref="

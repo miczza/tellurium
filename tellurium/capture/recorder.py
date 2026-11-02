@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from tellurium.capture.manager import CaptureManager
 
@@ -12,7 +12,7 @@ class Recorder:
     def __init__(self, manager: CaptureManager, url_pattern: str = "*"):
         self._manager = manager
         self._url_pattern = url_pattern
-        self._start_time = datetime.now(timezone.utc)
+        self._start_time = datetime.now(UTC)
 
     async def export(self) -> RecordingSession:
         """Export captured requests with cookies snapshot."""
@@ -32,7 +32,7 @@ class Recorder:
 
         return RecordingSession(
             created_at=self._start_time.isoformat(),
-            duration_seconds=(datetime.now(timezone.utc) - self._start_time).total_seconds(),
+            duration_seconds=(datetime.now(UTC) - self._start_time).total_seconds(),
             requests=[
                 {
                     "method": r.method,

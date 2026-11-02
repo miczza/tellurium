@@ -452,7 +452,7 @@ class Browser(CookieJar):
         adopted = self._adopted.setdefault(target_id, asyncio.get_running_loop().create_future())
         try:
             return await asyncio.wait_for(asyncio.shield(adopted), timeout=timeout)
-        except asyncio.TimeoutError:  # not the builtin TimeoutError on Python 3.10
+        except TimeoutError:
             raise TimeoutError(f"New tab {target_id} was not ready within {timeout}s") from None
 
     def _on_target_info_changed(self, params: dict) -> None:
@@ -493,7 +493,7 @@ class Browser(CookieJar):
             self._tabs_changed.clear()
             try:
                 await asyncio.wait_for(self._tabs_changed.wait(), timeout=deadline - loop.time())
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 break
         self._forget_tab(tab._target_id)
 

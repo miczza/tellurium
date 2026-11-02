@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 from tellurium.browser import _update_check
@@ -19,7 +19,7 @@ def test_update_check_skipped_within_24h(tmp_path, monkeypatch):
     cache_root = tmp_path / ".tellurium" / "chromium"
     cache_root.mkdir(parents=True)
     check_file = tmp_path / ".tellurium" / ".update-check"
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(UTC).isoformat()
     check_file.parent.mkdir(parents=True, exist_ok=True)
     check_file.write_text(json.dumps({"last_check": now_iso, "latest_version": "146.0.7680.188"}))
 
@@ -38,13 +38,13 @@ def test_update_check_warns_if_stale(tmp_path, monkeypatch, caplog):
     (cache_root / "current").symlink_to(old_dir)
 
     check_file = tmp_path / ".update-check"
-    old_iso = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    old_iso = (datetime.now(UTC) - timedelta(days=2)).isoformat()
     check_file.write_text(json.dumps({"last_check": old_iso, "latest_version": ""}))
 
     manifest = {
         "version": "0.1.0",
         "chromium_upstream": "146.0.7680.188",
-        "released_at": (datetime.now(timezone.utc) - timedelta(weeks=2)).isoformat(),
+        "released_at": (datetime.now(UTC) - timedelta(weeks=2)).isoformat(),
         "security": False,
     }
     monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen(manifest))
@@ -62,13 +62,13 @@ def test_update_check_warns_aggressively_on_security(tmp_path, monkeypatch, capl
     (cache_root / "current").symlink_to(old_dir)
 
     check_file = tmp_path / ".update-check"
-    old_iso = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    old_iso = (datetime.now(UTC) - timedelta(days=2)).isoformat()
     check_file.write_text(json.dumps({"last_check": old_iso, "latest_version": ""}))
 
     manifest = {
         "version": "0.1.1",
         "chromium_upstream": "146.0.7680.195",
-        "released_at": datetime.now(timezone.utc).isoformat(),
+        "released_at": datetime.now(UTC).isoformat(),
         "security": True,
         "cve": ["CVE-2026-1234"],
         "severity": "high",

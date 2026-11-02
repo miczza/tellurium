@@ -151,7 +151,7 @@ async def download(frame: Frame, origin: str, agent: str) -> tuple[RobotsRules, 
     url = origin + "/robots.txt"
     try:
         status, body = await asyncio.wait_for(_load(frame, url), FETCH_TIMEOUT)
-    except (CDPError, asyncio.TimeoutError, TimeoutError) as exc:
+    except (CDPError, TimeoutError) as exc:
         logger.info("robots.txt of %s unreachable (%s): nothing allowed", origin, exc)
         return DISALLOW_ALL, ERROR_TTL
     if status is None:
@@ -200,7 +200,7 @@ async def _read(session: Any, stream: str) -> bytes:
 async def _close_stream(session: Any, stream: str) -> None:
     try:
         await session.send("IO.close", {"handle": stream}, timeout=_CLOSE_TIMEOUT)
-    except (CDPError, ConnectionError, TimeoutError, asyncio.TimeoutError) as exc:
+    except (CDPError, ConnectionError, TimeoutError) as exc:
         logger.debug("IO.close of a robots.txt stream failed: %s", exc)
 
 
@@ -251,7 +251,7 @@ class Robots:
             rules = await self.rules(tab, split[0], left)
         except NavigationTimeoutError:
             raise
-        except (CDPError, TimeoutError, asyncio.TimeoutError) as exc:
+        except (CDPError, TimeoutError) as exc:
             error = f"robots.txt for {url} could not be checked ({exc})"
             raise NavigationError(url, error) from exc
         allows = await asyncio.to_thread(rules.allows, split[1])  # hostile files: costly

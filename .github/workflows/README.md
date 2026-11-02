@@ -21,7 +21,7 @@ Status: **active** (no longer a draft). Concurrency group per ref with
   backlog (see the TODO comment in the job). Most of it disappears with
   `ruff check --fix` + `ruff format`; the manual remainder is `BLE001`,
   `F841`, `E741`, `B904`, `B905`. Flip to `false` once clean.
-- **`unit`** — `pytest tests/unit` on Python 3.10 / 3.11 / 3.12 / 3.13.
+- **`unit`** — `pytest tests/unit` on Python 3.11 / 3.12 / 3.13.
 - **`integration`** — Python 3.12, Chrome stable via
   `browser-actions/setup-chrome@v1`, then
   `xvfb-run -a pytest tests/integration tests/stealth -q` (20 min timeout).

@@ -215,7 +215,7 @@ class ProxyForwarder:
                 return
             try:
                 up_reader, up_writer = await self._open_upstream()
-            except (OSError, asyncio.TimeoutError) as exc:
+            except (TimeoutError, OSError) as exc:
                 logger.debug("ProxyForwarder cannot reach the upstream: %s", exc)
                 writer.write(_BAD_GATEWAY)
                 await writer.drain()
@@ -247,7 +247,7 @@ class ProxyForwarder:
         await up_writer.drain()
         try:
             answer = await asyncio.wait_for(_read_head(up_reader), self.answer_timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             writer.write(_GATEWAY_TIMEOUT)
             await writer.drain()
             return

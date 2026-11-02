@@ -78,7 +78,7 @@ async def send_on_handle(session: Session, method: str, params: dict) -> dict:
         return await session.send(method, params, timeout=HANDLE_TIMEOUT)
     except CDPError as exc:
         raise as_stale(exc) from exc
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise TimeoutError(f"{method} got no answer within {HANDLE_TIMEOUT}s") from None
 
 

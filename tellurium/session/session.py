@@ -10,7 +10,7 @@ import secrets
 import threading
 import warnings
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from tellurium.session import manual_login, profile_release, session_cookies, storage
@@ -203,7 +203,7 @@ class Session:
 
     def _write_json(self, full: bool) -> None:
         if self._created_at is None:
-            self._created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            self._created_at = datetime.now(UTC).isoformat(timespec="seconds")
 
         payload: dict[str, Any] = {
             "name": self.name,

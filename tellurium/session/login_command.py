@@ -136,7 +136,7 @@ async def _open_keeper(browser: Any) -> str | None:
             {"url": KEEPER_URL, "newWindow": True, "background": True},
             timeout=CALL_TIMEOUT,
         )
-    except (asyncio.TimeoutError, CDPError, ConnectionError):
+    except (TimeoutError, CDPError, ConnectionError):
         return None
     keeper = created["targetId"]
     try:
@@ -148,7 +148,7 @@ async def _open_keeper(browser: Any) -> str | None:
             {"windowId": window["windowId"], "bounds": {"windowState": "minimized"}},
             timeout=CALL_TIMEOUT,
         )
-    except (asyncio.TimeoutError, CDPError, ConnectionError):
+    except (TimeoutError, CDPError, ConnectionError):
         pass  # shown, not minimized: it still keeps the session
     return keeper
 
@@ -173,7 +173,7 @@ async def _windows_closed(browser: Any, keeper: str | None) -> None:
         while True:
             try:
                 candidate = await session_cookies.snapshot(browser)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 candidate = None
             pages = await _pages(root)
             if not pages - {keeper}:

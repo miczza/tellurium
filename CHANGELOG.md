@@ -495,6 +495,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Breaking:** Python 3.10 is no longer supported; tellurium needs Python 3.11 or newer.
   The `multiplex` extra needs `websockets>=17`, the first release that hands a method
   other than `GET` to the server (`POST /admin/slots/<id>/restart`), and 17 needs 3.11.
+- Internal: code written for Python 3.11+ (`TimeoutError` instead of `asyncio.TimeoutError`,
+  `datetime.UTC`); `NavigationTimeoutError` subclasses `TimeoutError` directly. CI drops 3.10.
 
 - `Browser.launch` composes Chrome's command line with `tellurium.browser.launch_plan.LaunchPlan`
   (engine, executable, extensions, proxy forwarder, profile, GeoIP, stealth profile, flags);

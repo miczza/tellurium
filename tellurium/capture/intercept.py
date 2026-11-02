@@ -111,7 +111,7 @@ class InterceptStream:
                 raise StopAsyncIteration
             try:
                 return await asyncio.wait_for(self._queue.get(), timeout=0.1)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
     async def __aenter__(self):

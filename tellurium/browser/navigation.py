@@ -33,16 +33,8 @@ _SHORT_TIMEOUT = 5.0
 # Share of the deadline kept for Page.stopLoading once a navigation gives up.
 _STOP_RESERVE = 0.5
 
-# On Python 3.10 asyncio.TimeoutError is not the builtin TimeoutError: keep
-# both catchable there; on 3.11+ they are the same class.
-_TIMEOUT_BASES: tuple[type, ...] = (
-    (TimeoutError,)
-    if asyncio.TimeoutError is TimeoutError
-    else (TimeoutError, asyncio.TimeoutError)
-)
 
-
-class NavigationTimeoutError(*_TIMEOUT_BASES):  # type: ignore[misc]
+class NavigationTimeoutError(TimeoutError):
     """A navigation did not reach *phase* within *timeout* seconds.
 
     ``phase`` is ``"commit"`` (no response from the server yet), the
@@ -168,7 +160,7 @@ async def navigate(
     session.on("Page.lifecycleEvent", _on_lifecycle)
     try:
         await asyncio.wait_for(_run(), timeout=timeout - reserve)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         await stop_loading(session, max(deadline - loop.time(), 0.01))
         raise NavigationTimeoutError(url, phase, timeout, _dialog_hint(dialogs)) from None
     finally:
@@ -217,7 +209,7 @@ async def wait_for_main_frame(session: Session, pattern: str | None, *, timeout:
     session.on("Page.lifecycleEvent", _on_lifecycle)
     try:
         await asyncio.wait_for(_run(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise NavigationTimeoutError(pattern or "any URL", phase, timeout) from None
     finally:
         session.off("Page.frameNavigated", _on_navigated)
