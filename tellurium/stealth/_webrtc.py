@@ -20,7 +20,10 @@ from urllib.parse import urlparse
 
 
 def resolve_webrtc_ip(setting: str, *, proxy: str | None) -> str | None:
-    """Return the public IP to advertise via ICE, or None if disabled."""
+    """Return the public IP to advertise via ICE, or None if disabled.
+
+    'auto' does a blocking DNS lookup: off the event loop.
+    """
     if setting == "disable":
         return None
 
@@ -34,7 +37,11 @@ def resolve_webrtc_ip(setting: str, *, proxy: str | None) -> str | None:
         parsed = urlparse(proxy)
         host = parsed.hostname
         if not host:
-            raise ValueError(f"Could not parse hostname from proxy={proxy!r}")
+            # Not the URL itself: it may carry the proxy's password.
+            raise ValueError(
+                f"Could not parse a host name from the {parsed.scheme or 'proxy'} proxy URL "
+                "for webrtc_ip='auto'"
+            )
         try:
             return socket.gethostbyname(host)
         except OSError as e:

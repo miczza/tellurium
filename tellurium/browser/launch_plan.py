@@ -20,7 +20,7 @@ from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, TypeVar
 
-from tellurium.browser.engine import BrowserEngine, select_engine
+from tellurium.browser.engine import BrowserEngine, StockEngine, select_engine
 from tellurium.browser.launcher import (
     _detect_chrome_version,
     build_chrome_flags,
@@ -41,6 +41,8 @@ PROXIED_WEBRTC_FLAG = "--force-webrtc-ip-handling-policy=disable_non_proxied_udp
 
 #: Seconds the whole GeoIP step (exit IP and country) may take; then Chrome's defaults.
 GEOIP_TIMEOUT = 10.0
+#: Seconds ``webrtc_ip='auto'`` may take to resolve the proxy's host name.
+DNS_TIMEOUT = 10.0
 
 _T = TypeVar("_T")
 
@@ -117,7 +119,7 @@ class LaunchPlan:
         # which drops every candidate), so 'auto' must reach it already resolved
         # and our 'disable' — no spoofing — must leave the flag out entirely.
         if self.webrtc_ip is not None:
-            self.resolved_webrtc_ip = resolve_webrtc_ip(self.webrtc_ip, proxy=self.proxy)
+            self.resolved_webrtc_ip = await _webrtc_public_ip(self.webrtc_ip, self.proxy)
 
         self.engine = select_engine(
             self.browser,
@@ -127,6 +129,16 @@ class LaunchPlan:
             auto_security_update=self.auto_security_update,
             webrtc_ip_flag=self.resolved_webrtc_ip,
         )
+        if (
+            self.resolved_webrtc_ip is not None
+            and not self.stealth
+            and isinstance(self.engine, StockEngine)
+        ):
+            logger.warning(
+                "webrtc_ip=%r has no effect on stock Chrome without stealth: only the "
+                "patched engine (or the stealth script) rewrites the WebRTC candidates",
+                self.webrtc_ip,
+            )
         # Engines resolve the executable off the event loop.
         self.chrome_path = await self.engine.get_executable()
         if self.extensions:
@@ -334,6 +346,19 @@ async def _exit_geo(proxy: str, forwarder: Any) -> Any:
             e = f"no answer within {GEOIP_TIMEOUT:g} s"
         logger.warning("GeoIP not available: %s. Using default locale.", e)
         return None
+
+
+async def _webrtc_public_ip(setting: str, proxy: str | None) -> str | None:
+    """:func:`resolve_webrtc_ip`, with the DNS lookup of 'auto' off the loop and bounded."""
+    if setting != "auto":
+        return resolve_webrtc_ip(setting, proxy=proxy)
+    lookup = functools.partial(resolve_webrtc_ip, setting, proxy=proxy)
+    try:
+        return await _on_own_thread(lookup, timeout=DNS_TIMEOUT, name="tellurium-dns")
+    except asyncio.TimeoutError:
+        raise ValueError(
+            f"Could not resolve the proxy host for webrtc_ip='auto' within {DNS_TIMEOUT:g} s"
+        ) from None
 
 
 async def _on_own_thread(call: Callable[[], _T], *, timeout: float, name: str) -> _T:

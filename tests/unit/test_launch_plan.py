@@ -193,3 +193,45 @@ async def test_a_cancelled_lookup_returns_at_once_and_uses_no_default_executor_t
         assert time.monotonic() - started < 0.5
         await asyncio.wait_for(proc.close(), 10)
         assert not os.path.exists(plan.profile_dir)
+
+
+async def test_webrtc_auto_resolves_the_proxy_host_off_the_loop(monkeypatch):
+    import threading
+
+    threads: list[threading.Thread] = []
+
+    def gethostbyname(host):
+        threads.append(threading.current_thread())
+        return "198.51.100.7"
+
+    monkeypatch.setattr("socket.gethostbyname", gethostbyname)
+    proc = BrowserProcess()
+    plan = LaunchPlan(
+        headless=True, browser="patched", proxy="http://p.test:8080", webrtc_ip="auto"
+    )
+    try:
+        await plan.compose(proc)
+    finally:
+        await proc.close()
+    assert plan.resolved_webrtc_ip == "198.51.100.7"
+    assert "--fingerprint-webrtc-ip=198.51.100.7" in plan.flags
+    assert threads and threads[0] is not threading.main_thread()
+
+
+async def test_webrtc_auto_with_a_hanging_resolver_is_refused_in_time(monkeypatch):
+    from tellurium.browser import launch_plan
+
+    monkeypatch.setattr(launch_plan, "DNS_TIMEOUT", 0.2)
+    monkeypatch.setattr("socket.gethostbyname", lambda host: time.sleep(2) or "198.51.100.7")
+    started = time.monotonic()
+    with pytest.raises(ValueError, match="webrtc_ip='auto'"):
+        await _flags(browser="patched", proxy="http://p.test:8080", webrtc_ip="auto")
+    assert time.monotonic() - started < 1
+
+
+async def test_webrtc_ip_ignored_by_stock_chrome_is_said(caplog):
+    await _flags(webrtc_ip="203.0.113.4")
+    assert "webrtc_ip" in caplog.text and "stock" in caplog.text
+    caplog.clear()
+    await _flags(browser="patched", webrtc_ip="203.0.113.4")
+    assert "webrtc_ip" not in caplog.text

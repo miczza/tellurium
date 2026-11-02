@@ -526,6 +526,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `webrtc_ip='auto'`: the DNS lookup of the proxy host runs on a thread of its own, bounded
+  by `launch_plan.DNS_TIMEOUT` (10 s, then `ValueError`), no longer in the event loop; a
+  proxy URL without a host no longer puts the URL (and its password) in the `ValueError`.
+  `webrtc_ip` given to stock Chrome without stealth, where nothing applies it, now logs a
+  warning instead of being dropped in silence.
+
 - The GeoIP step of a launch (`Browser.launch(stealth=True)` or `geoip=True` with a proxy)
   is bounded as a whole by `launch_plan.GEOIP_TIMEOUT` (10 s; then Chrome's default locale,
   with a warning): a proxy that accepts and never answers cost up to 40 s per launch. It

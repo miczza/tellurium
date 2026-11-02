@@ -34,6 +34,13 @@ def test_resolve_webrtc_ip_auto_without_proxy_raises():
         resolve_webrtc_ip("auto", proxy=None)
 
 
+def test_auto_with_a_proxy_without_host_keeps_the_password_out_of_the_error():
+    with pytest.raises(ValueError, match="host name") as info:
+        resolve_webrtc_ip("auto", proxy="http://user:s3cret@:8080")
+    assert "s3cret" not in str(info.value)
+    assert "user" not in str(info.value)
+
+
 def test_resolve_webrtc_ip_invalid_setting_raises():
     """Setting that is neither 'auto', 'disable', nor a valid IP literal raises."""
     with pytest.raises(ValueError, match="invalid webrtc_ip"):
