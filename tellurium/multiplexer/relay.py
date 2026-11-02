@@ -38,6 +38,10 @@ STALL_LIMIT = 60.0
 MAX_INFLIGHT_BYTES = 64 * 2**20
 MAX_PENDING = 16384
 
+#: Seconds a closing handshake with a client may take; then its socket is cut.
+#: A client that reads nothing would otherwise hold ``close()`` in ``drain()``.
+CLOSE_WAIT = 5.0
+
 #: WebSocket close codes.
 CLOSE_GOING_AWAY = 1001
 CLOSE_BAD_DATA = 1007
@@ -218,8 +222,8 @@ class Relay:
             async for raw in ws:
                 command = _command(raw)
                 if command is None:
-                    await ws.close(
-                        CLOSE_BAD_DATA, "each message must be a JSON object with an integer id"
+                    await close_client(
+                        ws, CLOSE_BAD_DATA, "each message must be a JSON object with an integer id"
                     )
                     return
                 size = len(raw)
@@ -275,6 +279,26 @@ def _command(raw: str | bytes) -> dict | None:
     return command
 
 
+async def close_client(ws: Any, code: int, reason: str) -> None:
+    """Close *ws* with *code* and *reason*, within :data:`CLOSE_WAIT` seconds:
+    past it (a client that reads nothing), its socket is cut."""
+    try:
+        await asyncio.wait_for(ws.close(code, reason[:120]), CLOSE_WAIT)
+    except Exception:  # noqa: BLE001 - timed out or already broken: cut it below
+        pass
+    finally:
+        # transport.close() waits to flush what the client never reads: abort.
+        transport = getattr(ws, "transport", None)
+        if transport is not None and (not transport.is_closing() or _still_open(ws)):
+            transport.abort()
+
+
+def _still_open(ws: Any) -> bool:
+    """Whether the closing handshake of *ws* has not ended (its socket still up)."""
+    waiter = getattr(ws, "connection_lost_waiter", None)
+    return waiter is not None and not waiter.done()
+
+
 def _is_closed(exc: BaseException) -> bool:
     """Whether *exc* only says the WebSocket is closed."""
     from websockets.exceptions import ConnectionClosed
@@ -312,7 +336,7 @@ class _Client:
         self.queued = 0
         self.room.set()
         if self._closing is None:
-            self._closing = asyncio.ensure_future(self._ws.close(code, reason))
+            self._closing = asyncio.ensure_future(close_client(self._ws, code, reason))
 
     async def write(self) -> None:
         loop = asyncio.get_running_loop()
@@ -336,5 +360,4 @@ class _Client:
                     await self._closing
 
     async def close(self, code: int, reason: str) -> None:
-        with contextlib.suppress(Exception):
-            await self._ws.close(code, reason[:120])
+        await close_client(self._ws, code, reason)

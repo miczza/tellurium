@@ -29,6 +29,7 @@ from tellurium.access import (
 )
 from tellurium.multiplexer import pool as pool_module
 from tellurium.multiplexer.pool import ClientGone, NoChrome, Pool, PoolClosed, QueueTimeout
+from tellurium.multiplexer.relay import close_client
 
 #: Largest WebSocket message either way (full-page screenshots, response bodies).
 MAX_MESSAGE = 256 * 2**20
@@ -71,6 +72,9 @@ class Server:
         self._server: Any = None
         self._leases: dict[Any, Any] = {}
         self._orphans: set[asyncio.Task] = set()
+        #: WebSocket connections being relayed (closed by us on shutdown)
+        self._active: set[Any] = set()
+        self._open: set[Any] = set()  # every connection, from accept to loss
         #: connection -> the timer that drops it if its request does not come
         self._unchecked: dict[Any, asyncio.TimerHandle] = {}
         self.port: int | None = None
@@ -97,8 +101,18 @@ class Server:
         """Stop listening, close the clients with 1001, release every lease."""
         if self._server is not None:
             server, self._server = self._server, None
-            server.close()  # clients get 1001 (going away)
-            await server.wait_closed()
+            # Ours first, bounded: websockets' own close would wait on a client
+            # that reads nothing. Then no new connection, and the handlers end.
+            await asyncio.gather(
+                *(close_client(c, 1001, "the multiplexer is shutting down") for c in self._active)
+            )
+            server.close()
+            try:
+                await asyncio.wait_for(server.wait_closed(), CLOSE_TIMEOUT * 3)
+            except asyncio.TimeoutError:
+                for connection in list(self._open):
+                    connection.transport.abort()
+                await server.wait_closed()
         await asyncio.sleep(0)  # done callbacks of the last handshakes
         while self._orphans:
             await asyncio.wait(list(self._orphans))
@@ -123,10 +137,12 @@ class Server:
                     super().connection_lost(exc)
                 finally:
                     guard._checked(self)
+                    guard._open.discard(self)
 
         return GuardedConnection
 
     def _opened(self, connection: Any) -> None:
+        self._open.add(connection)
         while len(self._unchecked) >= MAX_UNCHECKED:
             oldest = next(iter(self._unchecked))
             self._checked(oldest)
@@ -225,11 +241,13 @@ class Server:
     async def _handle(self, connection: Any) -> None:
         lease = self._leases.pop(connection, None)
         if lease is None:
-            await connection.close(1011, "no Chrome was reserved for this connection")
+            await close_client(connection, 1011, "no Chrome was reserved for this connection")
             return
+        self._active.add(connection)
         try:
             await lease.relay.serve(connection)
         finally:
+            self._active.discard(connection)
             release = asyncio.ensure_future(lease.release())
             try:
                 await asyncio.shield(release)

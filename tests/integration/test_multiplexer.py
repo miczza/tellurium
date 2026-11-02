@@ -568,7 +568,7 @@ async def test_a_burst_of_events_slows_a_slow_client_down_without_closing_it(mon
 
     monkeypatch.setattr(relay_module, "HIGH_WATER", 256 * 1024)
     monkeypatch.setattr(health, "INTERVAL", 0.2)
-    monkeypatch.setattr(health, "TIMEOUT", 0.5)
+    monkeypatch.setattr(health, "TIMEOUT", 2.0)  # a reply may sit behind a burst
     total = 100_000
     async with serving() as mux, _client(mux) as ws:
         created = await _cdp(ws, 1, "Target.createTarget", {"url": "about:blank"})
@@ -610,3 +610,74 @@ async def test_a_burst_of_events_slows_a_slow_client_down_without_closing_it(mon
         status = mux.status()
         assert status["hangs"] == 0 and status["crashes"] == 0
         assert loop.time() - start < 120
+
+
+@pytest.mark.parametrize("action", ["restart", "kill", "stall", "cancel"])
+async def test_a_client_that_reads_nothing_cannot_hold_a_close_up(monkeypatch, action):
+    """Chrome floods a client that stopped reading (tiny receive buffer): restarting
+    or losing its Chrome, the stall limit and the server's shutdown all end in
+    bounded time, cutting its socket, and free the place."""
+    import socket
+
+    from tellurium.multiplexer import relay as relay_module
+
+    monkeypatch.setattr(relay_module, "HIGH_WATER", 1 << 20)
+    monkeypatch.setattr(relay_module, "CLOSE_WAIT", 1.0)
+    monkeypatch.setattr(relay_module, "STALL_LIMIT", 2.0 if action == "stall" else 600.0)
+    mux = Multiplexer(1, geoip=False)
+    task = asyncio.ensure_future(mux.serve("127.0.0.1", 0))
+    await _wait_until(lambda: mux.url is not None, 30)
+    sock = socket.socket()
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    sock.connect(("127.0.0.1", _port(mux)))
+    sock.setblocking(False)
+    ws = await connect(
+        f"ws://127.0.0.1:{_port(mux)}/devtools/browser/x",
+        additional_headers={"Authorization": f"Bearer {mux.token}"},
+        sock=sock,
+        max_queue=1,
+        max_size=None,
+        open_timeout=60,
+    )
+    try:
+        created = await _cdp(ws, 1, "Target.createTarget", {"url": "about:blank"})
+        target = created["result"]["targetId"]
+        attached = await _cdp(ws, 2, "Target.attachToTarget", {"targetId": target, "flatten": True})
+        session = attached["result"]["sessionId"]
+        await _cdp(ws, 3, "Runtime.enable", session=session)
+        flood = 'for (let i = 0; i < 300; i++) console.log("x".repeat(100000))'
+        params = {"expression": flood}
+        await ws.send(
+            json.dumps(
+                {"id": 4, "method": "Runtime.evaluate", "params": params, "sessionId": session}
+            )
+        )
+        # From here on the client reads nothing.
+        relay = mux._pool.places[0].relay
+        assert await _wait_until(lambda: relay.paused, 30)
+        (pid,) = _pids(mux)
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        if action == "restart":
+            assert mux.restart(0)
+        elif action == "kill":
+            os.kill(pid, signal.SIGKILL)
+        elif action == "cancel":
+            task.cancel()
+            await asyncio.wait_for(asyncio.wait([task]), 30)
+            assert loop.time() - start < 20
+            assert await _wait_until(lambda: not _alive(pid), 10)
+            return
+        freed = await _wait_until(
+            lambda: mux.status()["clients"] == 0 and mux.status()["slots"][0]["state"] == "idle",
+            25,
+        )
+        assert freed, json.dumps(mux.status())
+        assert loop.time() - start < 20
+        assert await _wait_until(lambda: not _alive(pid), 10)
+        async with _client(mux) as other:
+            assert (await _cdp(other, 1, "Browser.getVersion"))["result"]
+    finally:
+        ws.transport.abort()
+        task.cancel()
+        await asyncio.wait([task])
