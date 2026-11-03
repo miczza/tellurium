@@ -126,12 +126,14 @@ async def test_the_forwarder_carries_both_lookups_with_the_credentials(connectio
         await forwarder.start()
         forwarder_port = forwarder.port
         try:
-            geo = await asyncio.to_thread(geoip.exit_geo, url, forwarder_port)
+            geo = await asyncio.to_thread(geoip.exit_geo, url, forwarder)
         finally:
             await forwarder.stop()
     assert geo.country == "IT"
     assert proxy.connects == ["ip.test:80", "country.test:80"]
     assert all(b"Proxy-Authorization: Basic dXNlcjpzZWNyZXQ=" in h for h in proxy.heads)
+    # The forwarder's own secret got the lookups in, and stayed on this side.
+    assert not [h for h in proxy.heads if forwarder.auth_header.encode() in h]
     assert {a[1] for a in connections} <= {proxy.port, forwarder_port}
 
 

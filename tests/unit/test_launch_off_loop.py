@@ -42,7 +42,7 @@ async def test_proxy_geoip_lookup_runs_off_the_event_loop(monkeypatch):
     run inline it also starves the forwarder it is waiting for."""
     from tellurium.stealth import geoip
 
-    def slow_exit_ip(proxy, forwarder_port=None, **_kw):
+    def slow_exit_ip(proxy, forwarder=None, **_kw):
         time.sleep(BLOCK)
         raise OSError("no network in tests")
 

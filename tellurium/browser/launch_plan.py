@@ -343,9 +343,8 @@ async def _exit_geo(proxy: str, forwarder: Any) -> Any:
     """
     from tellurium.stealth.geoip import exit_geo
 
-    port = forwarder.port if forwarder is not None else None
-    # Off the loop: the lookup goes through the forwarder on it.
-    lookup = functools.partial(exit_geo, proxy, port, timeout=GEOIP_TIMEOUT)
+    # Off the loop: the lookup goes through the forwarder on it (with its secret).
+    lookup = functools.partial(exit_geo, proxy, forwarder, timeout=GEOIP_TIMEOUT)
     try:
         return await _on_own_thread(lookup, timeout=GEOIP_TIMEOUT, name="tellurium-geoip")
     except Exception as e:  # noqa: BLE001 - GeoIP is best-effort

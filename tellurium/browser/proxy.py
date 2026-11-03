@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hmac
 import logging
 import re
+import secrets
 import ssl
 from urllib.parse import unquote, urlparse
 
@@ -21,6 +23,17 @@ _MAX_HEAD_BYTES = 64 * 1024
 _CONNECT_TIMEOUT = 30.0
 _BAD_GATEWAY = b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 _GATEWAY_TIMEOUT = b"HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+#: The user name of the forwarder's own credentials; the password is a secret per forwarder.
+FORWARDER_USER = "tellurium"
+_CHALLENGE = (
+    b"HTTP/1.1 407 Proxy Authentication Required\r\n"
+    b'Proxy-Authenticate: Basic realm="tellurium"\r\n'
+    b"Content-Length: 0\r\nConnection: close\r\n\r\n"
+)
+#: What a refused client may still send (its request body) before the connection
+#: closes: read and dropped, so the close does not reset the 407 away.
+_REFUSED_DRAIN_BYTES = 1024 * 1024
+_REFUSED_DRAIN_TIMEOUT = 1.0
 
 
 def _split(url: str) -> tuple[str, str | None, str]:
@@ -123,8 +136,19 @@ def forwarder_for(url: str) -> ProxyForwarder | None:
     )
 
 
+class _Refused(Exception):
+    """A request head without the forwarder's secret."""
+
+
 class ProxyForwarder:
     """Local HTTP proxy that adds ``Proxy-Authorization`` to every upstream request.
+
+    It is not an open proxy: every request head must carry the forwarder's own
+    credentials (``tellurium`` and a random secret drawn per forwarder, see
+    :attr:`auth_header`); without them the client gets ``407`` and the upstream
+    is never contacted. Chrome answers that challenge through
+    :class:`~tellurium.browser.proxy_auth.ProxyAuth`. The secret never appears
+    in ``repr``, logs or errors.
 
     Plain HTTP requests share one upstream connection per client connection
     (keep-alive): each request head gets the credentials and its body is
@@ -148,16 +172,39 @@ class ProxyForwarder:
         self._username = username
         self._password = password
         self._tls = tls
+        self._secret = secrets.token_urlsafe(32)
+        token = base64.b64encode(f"{FORWARDER_USER}:{self._secret}".encode()).decode()
+        self._expected = f"Basic {token}".encode()
         self._server: asyncio.Server | None = None
         self._clients: set[asyncio.Task] = set()
         #: Seconds the upstream has to answer a CONNECT before Chrome gets a 504.
         self.answer_timeout = _CONNECT_TIMEOUT
+
+    def __repr__(self) -> str:
+        listening = self._server is not None
+        port = f" port={self.port}" if listening else ""
+        return f"<ProxyForwarder{port} upstream={self._upstream_host}:{self._upstream_port}>"
 
     @property
     def port(self) -> int:
         if self._server is None:
             raise RuntimeError("Forwarder not started")
         return self._server.sockets[0].getsockname()[1]
+
+    @property
+    def auth_header(self) -> str:
+        """The ``Proxy-Authorization`` value (``Basic …``) that gets a client in."""
+        return self._expected.decode()
+
+    @property
+    def credentials(self) -> tuple[str, str]:
+        """``(user, secret)`` to answer the forwarder's challenge with."""
+        return FORWARDER_USER, self._secret
+
+    def _admits(self, head: list[bytes]) -> bool:
+        """Whether *head* carries the forwarder's credentials (constant-time check)."""
+        given = _header(head, b"proxy-authorization") or b""
+        return hmac.compare_digest(given, self._expected)
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._handle_client, "127.0.0.1", 0)
@@ -213,6 +260,8 @@ class ProxyForwarder:
             head = await _read_head(reader)
             if head is None:
                 return
+            if not self._admits(head):
+                raise _Refused
             try:
                 up_reader, up_writer = await self._open_upstream()
             except (TimeoutError, OSError) as exc:
@@ -224,6 +273,9 @@ class ProxyForwarder:
                 await self._tunnel(head, reader, writer, up_reader, up_writer)
             else:
                 await _race(self._requests(head, reader, up_writer), _pipe(up_reader, writer))
+        except _Refused:
+            logger.debug("ProxyForwarder refused a request without its credentials")
+            await _refuse(reader, writer)
         except Exception:  # noqa: BLE001 — one broken connection never stops the forwarder
             logger.debug("ProxyForwarder client error", exc_info=True)
         finally:
@@ -235,8 +287,13 @@ class ProxyForwarder:
     async def _requests(
         self, head: list[bytes] | None, reader: asyncio.StreamReader, up: asyncio.StreamWriter
     ) -> None:
-        """Copy every request of a keep-alive connection, credentials added."""
+        """Copy every request of a keep-alive connection, credentials added.
+
+        Each head is checked: one without the forwarder's credentials ends the
+        connection with a ``407`` (:class:`_Refused`)."""
         while head is not None:
+            if not self._admits(head):
+                raise _Refused
             up.write(self._with_auth(head))
             await up.drain()
             await _copy_body(head, reader, up)
@@ -260,6 +317,24 @@ class ProxyForwarder:
             return
         await writer.drain()
         await _race(_pipe(reader, up_writer), _pipe(up_reader, writer))
+
+
+async def _refuse(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    """Answer ``407`` and close, after dropping what the client still sends (bounded)."""
+    try:
+        writer.write(_CHALLENGE)
+        await writer.drain()
+        if writer.can_write_eof():
+            writer.write_eof()
+
+        async def drain_input() -> None:
+            left = _REFUSED_DRAIN_BYTES
+            while left > 0 and (data := await reader.read(min(left, _CHUNK))):
+                left -= len(data)
+
+        await asyncio.wait_for(drain_input(), _REFUSED_DRAIN_TIMEOUT)
+    except (TimeoutError, OSError, ConnectionError):
+        pass
 
 
 async def _read_head(reader: asyncio.StreamReader) -> list[bytes] | None:

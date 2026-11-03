@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -89,6 +90,10 @@ class FakeVia:
         return answer
 
 
+#: A started forwarder, as far as the lookups can tell.
+FORWARDER = SimpleNamespace(port=9999, auth_header="Basic dGVsbHVyaXVtOnNlY3JldA==")
+
+
 @pytest.fixture
 def via(monkeypatch):
     """Every tunnel built by the module is this fake one."""
@@ -98,8 +103,8 @@ def via(monkeypatch):
     built: list[tuple] = []
     real_of = geoip._HttpProxy.of
 
-    def of(proxy_url, forwarder_port):
-        built.append((real_of(proxy_url, forwarder_port), proxy_url, forwarder_port))
+    def of(proxy_url, forwarder):
+        built.append((real_of(proxy_url, forwarder), proxy_url, forwarder))
         return fake if built[-1][0] is not None else None
 
     monkeypatch.setattr(geoip._HttpProxy, "of", staticmethod(of))
@@ -138,12 +143,15 @@ def test_online_country_parses_text_and_json():
 def test_http_proxy_of_picks_forwarder_or_plain_http_proxy():
     from tellurium.stealth.geoip import _HttpProxy
 
-    assert _HttpProxy.of("http://u:p@proxy:8080", 9999) == _HttpProxy("127.0.0.1", 9999)
+    via_forwarder = _HttpProxy.of("http://u:p@proxy:8080", FORWARDER)
+    assert via_forwarder == _HttpProxy("127.0.0.1", 9999, "Basic dGVsbHVyaXVtOnNlY3JldA==")
+    assert "dGVsbHVyaXVtOnNlY3JldA" not in repr(via_forwarder)
     assert _HttpProxy.of("http://proxy.example.com:3128", None) == _HttpProxy(
         "proxy.example.com", 3128
     )
     with_auth = _HttpProxy.of("http://u:p@proxy:8080", None)
     assert with_auth.authorization == "Basic dTpw"
+    assert "dTpw" not in repr(with_auth)
     assert _HttpProxy.of("socks5://proxy:1080", None) is None
     assert _HttpProxy.of(None, None) is None
 
@@ -237,9 +245,9 @@ def test_resolve_geoip_none_result():
 
 def test_resolve_exit_ip_goes_through_the_proxy(via):
     via.answers = {"https://api.ipify.org": "203.0.113.42"}
-    ip = resolve_exit_ip("http://user:pass@proxy:8080", forwarder_port=9999)
+    ip = resolve_exit_ip("http://user:pass@proxy:8080", forwarder=FORWARDER)
     assert ip == "203.0.113.42"
-    assert via.built[0][2] == 9999
+    assert via.built[0][2] is FORWARDER
 
 
 def test_resolve_exit_ip_socks5_no_forwarder_fallback(via):
@@ -252,13 +260,13 @@ def test_resolve_exit_ip_socks5_no_forwarder_fallback(via):
 
 def test_resolve_exit_ip_all_services_fail(via):
     with pytest.raises(RuntimeError, match="Could not determine exit IP"):
-        resolve_exit_ip("http://proxy:8080", forwarder_port=9999)
+        resolve_exit_ip("http://proxy:8080", forwarder=FORWARDER)
     assert len(via.urls) == 4
 
 
 def test_resolve_exit_ip_tries_next_service_on_failure(via):
     via.answers = {"https://checkip.amazonaws.com": "203.0.113.1\n".strip()}
-    ip = resolve_exit_ip("http://proxy:8080", forwarder_port=9999)
+    ip = resolve_exit_ip("http://proxy:8080", forwarder=FORWARDER)
     assert ip == "203.0.113.1"
     assert len(via.urls) == 2
 
@@ -267,7 +275,7 @@ def test_resolve_exit_ip_stops_at_the_deadline(via):
     import time
 
     with pytest.raises(TimeoutError):
-        resolve_exit_ip("http://proxy:8080", 9999, deadline=time.monotonic() - 1)
+        resolve_exit_ip("http://proxy:8080", FORWARDER, deadline=time.monotonic() - 1)
     assert via.urls == []
 
 

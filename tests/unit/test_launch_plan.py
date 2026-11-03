@@ -37,8 +37,8 @@ def exit_geo(monkeypatch):
     """The proxy's exit IP is in Rome; records the lookups."""
     lookups: list[tuple] = []
 
-    def fake_exit_ip(proxy, forwarder_port=None, **_kw):
-        lookups.append((proxy, forwarder_port))
+    def fake_exit_ip(proxy, forwarder=None, **_kw):
+        lookups.append((proxy, forwarder and (forwarder.port, forwarder.auth_header)))
         return "203.0.113.5"
 
     monkeypatch.setattr(geoip, "resolve_exit_ip", fake_exit_ip)
@@ -90,8 +90,9 @@ async def test_geoip_without_stealth_takes_timezone_and_languages_from_the_exit_
 
 async def test_geoip_goes_through_the_credential_forwarder(exit_geo):
     await _flags(proxy="http://user:secret@127.0.0.1:9", geoip=True)
-    ((_, port),) = exit_geo
+    ((_, (port, auth)),) = exit_geo
     assert isinstance(port, int) and port > 0
+    assert auth.startswith("Basic ") and "secret" not in auth  # the forwarder's own
 
 
 async def test_manual_overrides_win_over_the_exit_ip(exit_geo):

@@ -500,6 +500,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `tellurium.stealth.geoip.exit_geo`, `resolve_exit_ip` and `resolve_geoip` take the
+  credential forwarder itself (`forwarder=`, was `forwarder_port=`) and ask it with its
+  secret (`ProxyForwarder.auth_header`). The `Proxy-Authorization` value of a lookup is
+  kept out of `repr`.
+
 - **Breaking:** Python 3.10 is no longer supported; tellurium needs Python 3.11 or newer.
   The `multiplex` extra needs `websockets>=17`, the first release that hands a method
   other than `GET` to the server (`POST /admin/slots/<id>/restart`), and 17 needs 3.11.
@@ -590,6 +595,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   out of `examples/fingerprint_tests/`.
 
 ### Fixed
+
+- The local forwarder in front of an authenticated proxy is no longer an open proxy on
+  `127.0.0.1`: every request head (plain requests and `CONNECT`, each one on a keep-alive
+  connection) must carry `Proxy-Authorization: Basic tellurium:<secret>`, with a random
+  secret drawn per forwarder (32 bytes, compared in constant time). Without it the client
+  gets `407` with `Proxy-Authenticate: Basic realm="tellurium"` and `Connection: close`,
+  and nothing reaches the upstream proxy. New `ProxyForwarder.auth_header` (the header
+  value for tellurium's own clients) and `ProxyForwarder.credentials`. The secret never
+  shows in `repr`, logs or errors.
 
 - `tellurium.access.allowed_hosts` treats every spelling of a wildcard bind (`0`, `::0`,
   `[::]`) as one, and a loopback bind other than 127.0.0.1 (`127.0.0.2`) accepts its own

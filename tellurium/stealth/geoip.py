@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tellurium.browser.proxy import ProxyForwarder
 
 logger = logging.getLogger("tellurium")
 
@@ -140,17 +144,19 @@ class _HttpProxy:
 
     host: str
     port: int
-    authorization: str | None = None
+    #: The ``Proxy-Authorization`` value; kept out of ``repr``.
+    authorization: str | None = field(default=None, repr=False)
 
     @classmethod
-    def of(cls, proxy_url: str | None, forwarder_port: int | None) -> _HttpProxy | None:
+    def of(cls, proxy_url: str | None, forwarder: ProxyForwarder | None) -> _HttpProxy | None:
         """The forwarder, or a plain HTTP proxy; None when lookups cannot use the proxy.
 
+        The forwarder is asked with its own secret (:attr:`ProxyForwarder.auth_header`).
         SOCKS and HTTPS proxies are spoken to only through the forwarder: the
         lookups never fall back to a direct connection.
         """
-        if forwarder_port is not None:
-            return cls("127.0.0.1", forwarder_port)
+        if forwarder is not None:
+            return cls("127.0.0.1", forwarder.port, forwarder.auth_header)
         if not proxy_url:
             return None
         from tellurium.browser.proxy import parse_proxy_url
@@ -206,12 +212,12 @@ def _remaining(deadline: float | None) -> float:
 
 
 def resolve_exit_ip(
-    proxy_url: str, forwarder_port: int | None = None, *, deadline: float | None = None
+    proxy_url: str, forwarder: ProxyForwarder | None = None, *, deadline: float | None = None
 ) -> str:
     """Determine the real exit IP by making an HTTPS request through the proxy.
 
-    The request is tunnelled through the local forwarder (``forwarder_port``,
-    authenticated proxies) or through *proxy_url* itself when it is a plain
+    The request is tunnelled through the local *forwarder* (authenticated
+    proxies, asked with its secret) or through *proxy_url* itself when it is a plain
     HTTP proxy; never sent directly. A proxy the lookup cannot tunnel through
     (SOCKS, or HTTPS without the forwarder) falls back to the DNS resolution of
     its host name. *deadline* (``time.monotonic()``)
@@ -219,7 +225,7 @@ def resolve_exit_ip(
     """
     import socket
 
-    via = _HttpProxy.of(proxy_url, forwarder_port)
+    via = _HttpProxy.of(proxy_url, forwarder)
     if via is None:
         from urllib.parse import urlparse
 
@@ -281,7 +287,7 @@ def resolve_geoip(
     *,
     online_fallback: bool = True,
     proxy: str | None = None,
-    forwarder_port: int | None = None,
+    forwarder: ProxyForwarder | None = None,
     deadline: float | None = None,
 ) -> GeoResult:
     """Resolve IP -> country -> timezone/languages.
@@ -289,7 +295,7 @@ def resolve_geoip(
     Uses a local MMDB database (``tellurium download-geoip``, MaxMind GeoLite2
     or DB-IP Lite) via ``maxminddb``. Without one, and with *online_fallback*,
     asks a public IP-to-country web service — only through *proxy* (or its
-    forwarder, *forwarder_port*), as :func:`resolve_exit_ip` does: the IP never
+    *forwarder*), as :func:`resolve_exit_ip` does: the IP never
     goes to a third party from the host's own address. Without a usable proxy
     there is no online lookup.
     """
@@ -310,7 +316,7 @@ def resolve_geoip(
                     raise ValueError(f"Could not resolve IP: {ip}")
                 return _geo_from_country(result["country"]["iso_code"])
 
-    via = _HttpProxy.of(proxy, forwarder_port) if online_fallback else None
+    via = _HttpProxy.of(proxy, forwarder) if online_fallback else None
     if via is not None:
         code = _online_country(ip, via, deadline)
         if code:
@@ -329,7 +335,10 @@ def resolve_geoip(
 
 
 def exit_geo(
-    proxy_url: str, forwarder_port: int | None = None, *, timeout: float = _LOOKUP_TIMEOUT
+    proxy_url: str,
+    forwarder: ProxyForwarder | None = None,
+    *,
+    timeout: float = _LOOKUP_TIMEOUT,
 ) -> GeoResult:
     """Time zone and languages of the proxy's exit IP; every request goes through the proxy.
 
@@ -338,9 +347,9 @@ def exit_geo(
     import time
 
     deadline = time.monotonic() + timeout
-    exit_ip = resolve_exit_ip(proxy_url, forwarder_port, deadline=deadline)
+    exit_ip = resolve_exit_ip(proxy_url, forwarder, deadline=deadline)
     logger.info("Proxy exit IP: %s", exit_ip)
-    return resolve_geoip(exit_ip, proxy=proxy_url, forwarder_port=forwarder_port, deadline=deadline)
+    return resolve_geoip(exit_ip, proxy=proxy_url, forwarder=forwarder, deadline=deadline)
 
 
 _DB_DIR_NAME = "geolite2"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import logging
 
 import pytest
 
@@ -111,6 +112,11 @@ async def _forwarder(upstream: FakeUpstream, password: str = PASSWORD):
         await asyncio.wait_for(forwarder.stop(), STEP)
 
 
+def _auth(forwarder: ProxyForwarder) -> bytes:
+    """The header line that gets a client past the forwarder."""
+    return b"Proxy-Authorization: %s\r\n" % forwarder.auth_header.encode()
+
+
 async def _response(reader: asyncio.StreamReader) -> tuple[bytes, bytes]:
     first, headers = await asyncio.wait_for(_read_head(reader), STEP)
     body = await asyncio.wait_for(_read_body(reader, headers), STEP)
@@ -122,7 +128,8 @@ async def test_post_body_reaches_the_upstream():
         reader, writer = await asyncio.open_connection("127.0.0.1", fwd.port)
         writer.write(
             b"POST http://site.test/form HTTP/1.1\r\nHost: site.test\r\n"
-            b"Content-Length: 11\r\n\r\nhello=world"
+            + _auth(fwd)
+            + b"Content-Length: 11\r\n\r\nhello=world"
         )
         status, body = await _response(reader)
         writer.close()
@@ -135,7 +142,8 @@ async def test_chunked_body_reaches_the_upstream():
         reader, writer = await asyncio.open_connection("127.0.0.1", fwd.port)
         writer.write(
             b"POST http://site.test/up HTTP/1.1\r\nHost: site.test\r\n"
-            b"Transfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
+            + _auth(fwd)
+            + b"Transfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
         )
         _, body = await _response(reader)
         writer.close()
@@ -147,8 +155,9 @@ async def test_keep_alive_requests_are_all_answered_with_auth():
         reader, writer = await asyncio.open_connection("127.0.0.1", fwd.port)
         for i in range(3):
             writer.write(
-                b"GET http://site.test/%d HTTP/1.1\r\nHost: site.test\r\n"
-                b"Proxy-Connection: keep-alive\r\n\r\n" % i
+                b"GET http://site.test/%d HTTP/1.1\r\nHost: site.test\r\n" % i
+                + _auth(fwd)
+                + b"Proxy-Connection: keep-alive\r\n\r\n"
             )
             status, body = await _response(reader)
             assert status.startswith(b"HTTP/1.1 200")
@@ -162,19 +171,22 @@ async def test_client_credentials_are_replaced_not_duplicated():
     async with FakeUpstream() as up, _forwarder(up) as fwd:
         reader, writer = await asyncio.open_connection("127.0.0.1", fwd.port)
         writer.write(
-            b"GET http://site.test/ HTTP/1.1\r\nHost: site.test\r\n"
-            b"Proxy-Authorization: Basic Zm9vOmJhcg==\r\n\r\n"
+            b"GET http://site.test/ HTTP/1.1\r\nHost: site.test\r\n" + _auth(fwd) + b"\r\n"
         )
         await _response(reader)
         writer.close()
+        secret = fwd.auth_header
     first, headers, _ = up.requests[0]
     assert headers["proxy-authorization"] == GOOD_AUTH
+    assert secret not in repr(up.requests)  # the forwarder's secret stays local
 
 
 async def test_connect_rejection_is_passed_through():
     async with FakeUpstream() as up, _forwarder(up, password="wrong") as fwd:
         reader, writer = await asyncio.open_connection("127.0.0.1", fwd.port)
-        writer.write(b"CONNECT site.test:443 HTTP/1.1\r\nHost: site.test:443\r\n\r\n")
+        writer.write(
+            b"CONNECT site.test:443 HTTP/1.1\r\nHost: site.test:443\r\n" + _auth(fwd) + b"\r\n"
+        )
         status, body = await _response(reader)
         writer.close()
     assert status.startswith(b"HTTP/1.1 407"), status
@@ -184,7 +196,9 @@ async def test_connect_rejection_is_passed_through():
 async def test_connect_tunnel_relays_both_ways():
     async with FakeUpstream() as up, _forwarder(up) as fwd:
         reader, writer = await asyncio.open_connection("127.0.0.1", fwd.port)
-        writer.write(b"CONNECT site.test:443 HTTP/1.1\r\nHost: site.test:443\r\n\r\n")
+        writer.write(
+            b"CONNECT site.test:443 HTTP/1.1\r\nHost: site.test:443\r\n" + _auth(fwd) + b"\r\n"
+        )
         status, _ = await asyncio.wait_for(_read_head(reader), STEP)
         assert status.startswith(b"HTTP/1.1 200")
         writer.write(b"ping")
@@ -197,7 +211,7 @@ async def test_unreachable_upstream_answers_502():
     await forwarder.start()
     try:
         reader, writer = await asyncio.open_connection("127.0.0.1", forwarder.port)
-        writer.write(b"CONNECT site.test:443 HTTP/1.1\r\n\r\n")
+        writer.write(b"CONNECT site.test:443 HTTP/1.1\r\n" + _auth(forwarder) + b"\r\n")
         status, _ = await asyncio.wait_for(_read_head(reader), STEP)
         writer.close()
     finally:
@@ -210,7 +224,7 @@ async def test_stop_closes_open_connections():
         forwarder = ProxyForwarder("127.0.0.1", up.port, USER, PASSWORD)
         await forwarder.start()
         reader, writer = await asyncio.open_connection("127.0.0.1", forwarder.port)
-        writer.write(b"CONNECT site.test:443 HTTP/1.1\r\n\r\n")
+        writer.write(b"CONNECT site.test:443 HTTP/1.1\r\n" + _auth(forwarder) + b"\r\n")
         await asyncio.wait_for(_read_head(reader), STEP)
         await asyncio.wait_for(forwarder.stop(), STEP)
         assert await asyncio.wait_for(reader.read(), STEP) == b""
@@ -252,7 +266,7 @@ async def test_stop_does_not_hang_on_a_connection_not_yet_handled():
 async def test_oversized_request_head_is_refused():
     async with FakeUpstream() as up, _forwarder(up) as fwd:
         reader, writer = await asyncio.open_connection("127.0.0.1", fwd.port)
-        writer.write(b"GET http://site.test/ HTTP/1.1\r\n")
+        writer.write(b"GET http://site.test/ HTTP/1.1\r\n" + _auth(fwd))
         for i in range(100):  # ~70 KiB in lines well under the per-line limit
             writer.write(b"X-Filler-%d: %s\r\n" % (i, b"a" * 700))
         writer.write(b"\r\n")
@@ -280,7 +294,9 @@ async def test_a_huge_chunk_is_streamed_not_buffered():
     try:
         _, writer = await asyncio.open_connection("127.0.0.1", forwarder.port)
         writer.write(
-            b"POST http://site.test/ HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n"
+            b"POST http://site.test/ HTTP/1.1\r\n"
+            + _auth(forwarder)
+            + b"Transfer-Encoding: chunked\r\n\r\n"
             b"6400000\r\n"  # a 100 MiB chunk, only its start is sent
         )
         writer.write(b"x" * 80_000)
@@ -302,7 +318,7 @@ async def test_connect_without_an_upstream_answer_times_out():
     await forwarder.start()
     try:
         reader, writer = await asyncio.open_connection("127.0.0.1", forwarder.port)
-        writer.write(b"CONNECT site.test:443 HTTP/1.1\r\n\r\n")
+        writer.write(b"CONNECT site.test:443 HTTP/1.1\r\n" + _auth(forwarder) + b"\r\n")
         status, _ = await asyncio.wait_for(_read_head(reader), STEP)
         writer.close()
     finally:
@@ -326,7 +342,7 @@ async def test_chunked_connect_rejection_body_is_passed_through():
     await forwarder.start()
     try:
         reader, writer = await asyncio.open_connection("127.0.0.1", forwarder.port)
-        writer.write(b"CONNECT site.test:443 HTTP/1.1\r\n\r\n")
+        writer.write(b"CONNECT site.test:443 HTTP/1.1\r\n" + _auth(forwarder) + b"\r\n")
         status, body = await _response(reader)
         writer.close()
     finally:
@@ -334,3 +350,113 @@ async def test_chunked_connect_rejection_body_is_passed_through():
         server.close()
     assert status.startswith(b"HTTP/1.1 407")
     assert body == b"auth required"
+
+
+# --- the forwarder's own secret (S1) ----------------------------------------
+
+
+def _secret(forwarder: ProxyForwarder) -> str:
+    scheme, _, token = forwarder.auth_header.partition(" ")
+    assert scheme == "Basic"
+    user, _, secret = base64.b64decode(token).decode().partition(":")
+    assert user == "tellurium"
+    return secret
+
+
+async def _refused(reader: asyncio.StreamReader) -> tuple[bytes, dict[str, str]]:
+    """The forwarder's 407: its head, then the connection closes."""
+    first, headers = await asyncio.wait_for(_read_head(reader), STEP)
+    body = await asyncio.wait_for(_read_body(reader, headers), STEP)
+    assert body == b""
+    assert await asyncio.wait_for(reader.read(), STEP) == b""
+    return first, headers
+
+
+def _assert_challenge(first: bytes, headers: dict[str, str]) -> None:
+    assert first.startswith(b"HTTP/1.1 407"), first
+    assert headers["proxy-authenticate"] == 'Basic realm="tellurium"'
+    assert headers["connection"].lower() == "close"
+
+
+@pytest.mark.parametrize(
+    "request_head",
+    [
+        b"GET http://site.test/ HTTP/1.1\r\nHost: site.test\r\n\r\n",
+        b"CONNECT site.test:443 HTTP/1.1\r\nHost: site.test:443\r\n\r\n",
+        b"POST http://site.test/ HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello",
+    ],
+    ids=["get", "connect", "post"],
+)
+async def test_a_request_without_the_secret_gets_407_and_never_reaches_the_upstream(
+    request_head,
+):
+    async with FakeUpstream() as up, _forwarder(up) as fwd:
+        reader, writer = await asyncio.open_connection("127.0.0.1", fwd.port)
+        writer.write(request_head)
+        _assert_challenge(*await _refused(reader))
+        writer.close()
+    assert up.connections == 0 and up.requests == []
+
+
+@pytest.mark.parametrize(
+    "credentials",
+    [
+        f"Basic {base64.b64encode(b'tellurium:wrong').decode()}",
+        GOOD_AUTH,  # the upstream's credentials are not the forwarder's
+        "Bearer abc",
+        "Basic",
+        "Basic !!!not-base64!!!",
+    ],
+)
+async def test_a_wrong_secret_gets_407_and_never_reaches_the_upstream(credentials):
+    async with FakeUpstream() as up, _forwarder(up) as fwd:
+        reader, writer = await asyncio.open_connection("127.0.0.1", fwd.port)
+        writer.write(
+            b"CONNECT site.test:443 HTTP/1.1\r\nProxy-Authorization: %s\r\n\r\n"
+            % credentials.encode()
+        )
+        _assert_challenge(*await _refused(reader))
+        writer.close()
+    assert up.connections == 0
+
+
+async def test_every_request_head_of_a_connection_needs_the_secret():
+    async with FakeUpstream() as up, _forwarder(up) as fwd:
+        reader, writer = await asyncio.open_connection("127.0.0.1", fwd.port)
+        writer.write(
+            b"GET http://site.test/1 HTTP/1.1\r\nHost: site.test\r\n" + _auth(fwd) + b"\r\n"
+        )
+        status, _ = await _response(reader)
+        assert status.startswith(b"HTTP/1.1 200")
+        writer.write(b"GET http://site.test/2 HTTP/1.1\r\nHost: site.test\r\n\r\n")
+        _assert_challenge(*await _refused(reader))
+        writer.close()
+    assert [first.split()[1] for first, _, _ in up.requests] == [b"http://site.test/1"]
+
+
+async def test_each_forwarder_has_its_own_long_random_secret():
+    a = ProxyForwarder("127.0.0.1", 9, USER, PASSWORD)
+    b = ProxyForwarder("127.0.0.1", 9, USER, PASSWORD)
+    assert _secret(a) != _secret(b)
+    assert len(_secret(a)) >= 43  # 32 random bytes, URL-safe base64
+
+
+async def test_the_secret_never_shows_in_repr_or_logs(caplog):
+    caplog.set_level(logging.DEBUG, logger="tellurium")
+    async with FakeUpstream() as up, _forwarder(up, password="wrong") as fwd:
+        secret = _secret(fwd)
+        for head in (
+            b"GET http://site.test/ HTTP/1.1\r\n\r\n",  # refused: no secret
+            b"CONNECT site.test:443 HTTP/1.1\r\n" + _auth(fwd) + b"\r\n",  # upstream 407
+            b"GET http://site.test/ HTTP/1.1\r\n" + _auth(fwd) + b"\r\n",
+        ):
+            reader, writer = await asyncio.open_connection("127.0.0.1", fwd.port)
+            writer.write(head)
+            await asyncio.wait_for(_read_head(reader), STEP)
+            writer.close()
+        text = repr(fwd) + caplog.text
+    unrelated = ProxyForwarder("127.0.0.1", 9, USER, PASSWORD)
+    with pytest.raises(RuntimeError) as err:
+        unrelated.port  # noqa: B018 - not started
+    assert secret not in text
+    assert _secret(unrelated) not in repr(unrelated) + str(err.value)
