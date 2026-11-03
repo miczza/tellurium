@@ -206,20 +206,22 @@ class RawChrome:
         step is done.
         """
         cancelled = False
-        if not self._closed and self.alive:
-            asking = asyncio.ensure_future(self._ask_to_close())
-            try:
-                await asyncio.shield(asking)
-            except asyncio.CancelledError:
-                cancelled = True
-                asking.cancel()
-                await asyncio.wait([asking])
-        self._closed = True
         try:
-            await self._proc.close()
-        finally:
-            if cancelled:
-                raise asyncio.CancelledError
+            if not self._closed and self.alive:
+                asking = asyncio.ensure_future(self._ask_to_close())
+                try:
+                    await asyncio.shield(asking)
+                except asyncio.CancelledError:
+                    cancelled = True
+                    asking.cancel()
+                    await asyncio.wait([asking])
+        finally:  # whatever the asking did, the signals and the cleanup follow
+            self._closed = True
+            try:
+                await self._proc.close()
+            finally:
+                if cancelled:
+                    raise asyncio.CancelledError
 
     async def _ask_to_close(self) -> None:
         """``Browser.close`` on the pipe, then up to :data:`CLOSE_GRACE` seconds

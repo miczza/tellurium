@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from tellurium.access import load_or_create_token
+from tellurium.browser.launch_plan import check_timezone
 from tellurium.browser.raw_chrome import RawChrome
 from tellurium.multiplexer.admin import Admin
 from tellurium.multiplexer.pool import Pool
@@ -113,9 +114,14 @@ class Multiplexer:
 
     async def serve(self, host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> None:
         """Listen on *host*:*port* until cancelled, then close everything:
-        the server, the clients (1001), the Chromes, their forwarders and profiles."""
+        the server, the clients (1001), the Chromes, their forwarders and profiles.
+        A ``timezone`` launch option that is no IANA time zone raises
+        :class:`ValueError` before anything starts."""
         if self._serving is not None and not self._serving.done():
             raise RuntimeError("this Multiplexer is already serving")
+        timezone = self._pool.launch.get("timezone")
+        if timezone is not None:  # each launch would fail and retry for ever
+            await asyncio.to_thread(check_timezone, timezone)
         self._serving = asyncio.current_task()
         self._token = await asyncio.to_thread(load_or_create_token, self.token_file)
         admin = Admin(self.status, self.restart)

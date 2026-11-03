@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 
 import pytest
@@ -125,3 +126,16 @@ def test_a_password_with_scheme_separator_and_no_scheme_never_shows():
         with pytest.raises(ValueError) as error:
             parse_proxy_url(bad)
         assert "alice" not in str(error.value) and "pa:" not in str(error.value)
+
+
+async def test_an_unknown_timezone_fails_serve_before_anything_starts(tmp_path, monkeypatch):
+    """Every launch would fail on it, and the places retry with backoff for
+    ever: serve() refuses it at once, with no token written and no place."""
+    from tellurium.multiplexer import multiplexer as multiplexer_module
+
+    monkeypatch.setattr(multiplexer_module, "TOKEN_FILE", tmp_path / "multiplex-token")
+    mux = Multiplexer(1, timezone="Mars/Olympus_Mons", geoip=False)
+    with pytest.raises(ValueError, match="timezone"):
+        await asyncio.wait_for(mux.serve("127.0.0.1", 0), 5)
+    assert mux.url is None and not mux._pool.places
+    assert not (tmp_path / "multiplex-token").exists()

@@ -1049,6 +1049,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The proxy forwarder no longer writes its 407 after a response cut short: when a later
   request of a keep-alive connection lacks the credentials, the responses already on
   their way go through first (until the upstream is quiet for 1 s, at most 30 s).
+- `Multiplexer.serve()` raises `ValueError` for a `timezone` launch option that is no IANA
+  time zone, before anything starts (the places used to retry the launch for ever).
+- `RawChrome.close()` closes Chrome and its profile even when asking it to close fails
+  with an unexpected error, then raises that error.
 
 ## [0.1.0] - 2026-04-26
 

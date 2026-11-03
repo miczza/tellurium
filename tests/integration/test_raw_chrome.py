@@ -179,6 +179,25 @@ async def test_close_of_a_chrome_that_ignores_browser_close_escalates(private_te
     assert await _wait_until(lambda: not [p for p in processes if _alive(p)]), "orphans"
 
 
+async def test_close_releases_everything_when_asking_fails_unexpectedly(
+    private_tempdir, monkeypatch
+):
+    """An error of any kind while asking Chrome to close still closes the
+    process and removes the profile, and is raised afterwards."""
+    raw = await RawChrome.launch(headless=True)
+    processes = {raw.pid} | _descendants(raw.pid)
+
+    async def broken() -> None:
+        raise RuntimeError("asking went wrong")
+
+    monkeypatch.setattr(raw, "_ask_to_close", broken)
+    with pytest.raises(RuntimeError, match="asking went wrong"):
+        await asyncio.wait_for(raw.close(), 30)
+    assert not raw.alive
+    assert await _wait_until(lambda: not [p for p in processes if _alive(p)]), "orphans"
+    assert not _profiles(private_tempdir), "the temporary profile was left behind"
+
+
 async def test_alive_turns_false_when_chrome_dies(private_tempdir):
     async with RawChrome.launch(headless=True) as raw:
         os.kill(raw.pid, 9)
