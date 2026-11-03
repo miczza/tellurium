@@ -312,14 +312,22 @@ def test_nesting_limit_spans_stitched_iframes():
         _snapshot(tree, interactive=True)
 
 
+class _Router:
+    """Allocates the command ids, as the real router does on each send."""
+
+    _next_msg_id = 0
+
+
 class _SnapshotSession:
     """Answers the commands of a whole-page snapshot from the form recording."""
 
     def __init__(self, dom_nodes=100):
         self.calls: list[str] = []
         self.dom_nodes = dom_nodes
+        self.router = _Router()
 
     async def send(self, method, params=None, timeout=None):
+        self.router._next_msg_id += 1
         self.calls.append(method)
         if method == "DOM.getDocument":
             return {"root": {"nodeId": 1}}
