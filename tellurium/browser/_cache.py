@@ -40,6 +40,10 @@ BINARY_NAME = "chrome.exe" if sys.platform == "win32" else "chrome"
 _LEGACY_BINARY_NAME = "tellurium-chromium"
 CURRENT_LINK = "current"
 LOCK_NAME = ".install.lock"
+#: Taken by an install before the lock itself and held until it ends, and by a
+#: reader for an instant around taking the lock shared: while an install waits,
+#: no new reader gets in, so readers taking turns cannot starve it.
+GATE_NAME = ".install.gate"
 #: An install moved aside during a swap; one outside the lock is an orphan.
 OLD_PREFIX = ".old-"
 MANIFEST_NAME = "MANIFEST.json"
@@ -177,11 +181,20 @@ def install_lock(root: Path | None = None) -> Iterator[None]:
 
     Excludes other processes and other threads (each holder opens its own
     descriptor). POSIX uses ``fcntl.flock``; Windows ``msvcrt.locking`` on the
-    lock file's first byte, retried until it is free.
+    lock file's first byte, retried until it is free. The gate
+    (:data:`GATE_NAME`) is taken first and kept: readers already in finish,
+    new ones wait for this install.
     """
     root = root if root is not None else cache_root()
     root.mkdir(parents=True, exist_ok=True)
-    with open(root / LOCK_NAME, "a+b") as fh:
+    with _exclusive(root / GATE_NAME), _exclusive(root / LOCK_NAME):
+        yield
+
+
+@contextlib.contextmanager
+def _exclusive(path: Path) -> Iterator[None]:
+    """*path* locked exclusive, waiting as long as it takes."""
+    with open(path, "a+b") as fh:
         if sys.platform == "win32":
             import msvcrt
 
@@ -214,7 +227,8 @@ def reading_lock(root: Path, stop: threading.Event | None = None) -> Iterator[No
     Installs, which hold it exclusive, are waited for (at most
     :data:`LOCK_TIMEOUT`, then :class:`TimeoutError`; setting *stop* ends the
     wait with :class:`LockWaitStopped`); other readers are not (POSIX;
-    Windows has no shared lock, there readers exclude each other too). A
+    Windows has no shared lock, there readers exclude each other too), but
+    no reader enters while an install waits (see :data:`GATE_NAME`). A
     lock file that cannot be opened for permissions (a read-only mount, an
     image, another user's cache) means reading without the lock: this
     process could not install there either.
@@ -223,8 +237,9 @@ def reading_lock(root: Path, stop: threading.Event | None = None) -> Iterator[No
     if fh is None:
         yield
         return
-    with fh:
-        _acquire(fh, root, stop)
+    gate = _open_lock(root / GATE_NAME)  # None: a cache no install can write
+    with fh, gate if gate is not None else contextlib.nullcontext():
+        _acquire(fh, gate, root, stop)
         try:
             yield
         finally:
@@ -256,20 +271,31 @@ def _unlock(fh: Any) -> None:
         fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
-def _acquire(fh: Any, root: Path, stop: threading.Event | None) -> None:
-    """Take the lock on *fh*; give up when *stop* is set or after :data:`LOCK_TIMEOUT`."""
+def _try_gate(fh: Any) -> None:
+    """Take the gate on *fh* exclusive without waiting; OSError if held."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _acquire(fh: Any, gate: Any, root: Path, stop: threading.Event | None) -> None:
+    """Take the lock on *fh*, passing through *gate* (if any) for the
+    instant it takes; give up when *stop* is set or after :data:`LOCK_TIMEOUT`."""
     deadline = time.monotonic() + LOCK_TIMEOUT
     while True:
-        try:
-            _try_lock(fh)
-            return
-        except BlockingIOError:  # POSIX: held by an install
-            pass
-        except OSError:
-            # msvcrt reports a held lock as PermissionError; on POSIX any other
-            # error (no flock on this filesystem) is not worth waiting for.
-            if sys.platform != "win32":
-                raise
+        if _try(_try_gate, gate):
+            try:
+                if _try(_try_lock, fh):
+                    return
+            finally:
+                if gate is not None:
+                    _unlock(gate)
         if stop is not None and stop.is_set():
             raise LockWaitStopped(f"Stopped waiting for the install lock of {root}")
         if time.monotonic() >= deadline:
@@ -282,6 +308,23 @@ def _acquire(fh: Any, root: Path, stop: threading.Event | None) -> None:
             stop.wait(_LOCK_POLL)
         else:
             time.sleep(_LOCK_POLL)
+
+
+def _try(take: Any, fh: Any) -> bool:
+    """``take(fh)``: True if taken (or *fh* is None), False if held by someone else."""
+    if fh is None:
+        return True
+    try:
+        take(fh)
+        return True
+    except BlockingIOError:  # POSIX: held by an install
+        return False
+    except OSError:
+        # msvcrt reports a held lock as PermissionError; on POSIX any other
+        # error (no flock on this filesystem) is not worth waiting for.
+        if sys.platform != "win32":
+            raise
+        return False
 
 
 def _open_lock(path: Path) -> Any:

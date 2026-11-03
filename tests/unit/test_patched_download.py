@@ -71,7 +71,7 @@ def test_install_from_tarball_layout(tmp_path):
     assert entry.is_current
     # No staging leftovers
     leftovers = [p.name for p in root.iterdir() if p.name.startswith(".")]
-    assert leftovers in ([], [_cache.LOCK_NAME])
+    assert set(leftovers) <= {_cache.LOCK_NAME, _cache.GATE_NAME}
 
 
 def test_install_from_tarball_matches_engine_resolution(tmp_path):

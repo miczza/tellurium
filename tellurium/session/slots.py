@@ -9,7 +9,11 @@ slot straight to the head of the queue (waking it with
 ``call_soon_threadsafe``), so nobody polls and a waiter cannot lose its turn
 to a task that releases and asks again. A waiter cancelled in the queue
 leaves it; one cancelled after the slot was given to it, before it resumed,
-passes the slot on: no slot is ever lost.
+passes the slot on: no slot is ever lost. Not even when the waiter's loop
+is stopped when the slot is given, then closed without cancelling the task
+(a loop driven by hand, not ``asyncio.run``): the wake-up never runs there,
+and the next caller that finds no slot free takes the slot back from the
+closed loop and hands it on.
 """
 
 from __future__ import annotations
@@ -38,10 +42,16 @@ class Slots:
     given in the order they were asked for."""
 
     def __init__(self, total: int) -> None:
-        self.total = total
+        self._total = total
         self._held = 0
         self._queue: deque[_Waiter] = deque()
+        self._given: set[_Waiter] = set()  # handed a slot, not resumed yet
         self._lock = threading.Lock()
+
+    @property
+    def total(self) -> int:
+        """The cap, fixed at creation (raising it would wake nobody queued)."""
+        return self._total
 
     @property
     def held(self) -> int:
@@ -68,7 +78,8 @@ class Slots:
 
     async def _take(self, timeout: float | None) -> None:
         with self._lock:
-            if self._held < self.total and not self._queue:
+            self._reclaim()
+            if self._held < self._total and not self._queue:
                 self._held += 1
                 return
             waiter = _Waiter(asyncio.get_running_loop())
@@ -81,6 +92,7 @@ class Slots:
         except BaseException as exc:
             with self._lock:
                 given = waiter.given
+                self._given.discard(waiter)
                 if not given and waiter in self._queue:
                     self._queue.remove(waiter)
             if given:  # handed over, but this task will not use it: the next one will
@@ -88,19 +100,34 @@ class Slots:
             if isinstance(exc, asyncio.TimeoutError):  # a distinct class before 3.11
                 raise TimeoutError(f"no slot free within {timeout} s") from None
             raise
+        with self._lock:
+            self._given.discard(waiter)
 
     def _give_back(self) -> None:
-        """Hand the slot to the head of the queue, else free it."""
         with self._lock:
-            while self._queue:
-                waiter = self._queue.popleft()
-                try:
-                    waiter.loop.call_soon_threadsafe(_wake, waiter.future)
-                except RuntimeError:  # its loop is closed: it will never take it
-                    continue
-                waiter.given = True
-                return
-            self._held -= 1
+            self._hand_on()
+
+    def _hand_on(self) -> None:
+        """Under the lock: hand a slot to the head of the queue, else free it."""
+        while self._queue:
+            waiter = self._queue.popleft()
+            try:
+                waiter.loop.call_soon_threadsafe(_wake, waiter.future)
+            except RuntimeError:  # its loop is closed: it will never take it
+                continue
+            waiter.given = True
+            self._given.add(waiter)
+            return
+        self._held -= 1
+
+    def _reclaim(self) -> None:
+        """Under the lock: a slot handed to a waiter whose loop has been
+        closed since (its wake-up dropped, its task never to run again) is
+        handed on. Its task, if collected later, gives nothing back."""
+        for waiter in [w for w in self._given if w.loop.is_closed()]:
+            self._given.discard(waiter)
+            waiter.given = False
+            self._hand_on()
 
 
 def _wake(future: asyncio.Future[None]) -> None:

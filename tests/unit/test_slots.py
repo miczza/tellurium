@@ -319,3 +319,65 @@ async def test_three_opens_in_a_loop_each_get_a_turn_quickly():
     assert max(first_entry.values()) < 0.2
     assert turns == ["a", "b", "c"] * 3
     assert slots.held == 0
+
+
+async def test_slot_given_to_a_stopped_loop_comes_back_when_it_closes():
+    """The slot is given to a waiter whose loop is stopped (not closed): the
+    wake-up is queued there and never runs. When that loop is closed
+    without cancelling the task, the slot is not lost: the next one gets it."""
+    slots = Slots(1)
+    order: list[str] = []
+    held = slots.slot()
+    await held.__aenter__()
+    other = asyncio.new_event_loop()
+
+    def strand() -> None:
+        other.create_task(_enter(slots, "stranded", order))
+        other.run_until_complete(asyncio.sleep(0.01))  # stopped, still open
+
+    await asyncio.to_thread(strand)
+    assert slots.waiting == 1
+    await held.__aexit__(None, None, None)  # given to the stopped loop
+    assert slots.held == 1 and slots.waiting == 0
+    other.close()  # its task never ran again and was not cancelled
+    async with asyncio.timeout(1):
+        async with slots.slot():
+            order.append("after")
+    assert order == ["after"]
+    assert slots.held == 0
+    gc.collect()
+    assert slots.held == 0
+
+
+async def test_slot_given_to_a_stopped_loop_comes_back_to_a_queued_waiter():
+    """Same, with someone already queued behind the stranded waiter when the
+    loop closes: the next release, or the next ask, finds the slot."""
+    slots = Slots(1)
+    order: list[str] = []
+    held = slots.slot()
+    await held.__aenter__()
+    other = asyncio.new_event_loop()
+
+    def strand() -> None:
+        other.create_task(_enter(slots, "stranded", order))
+        other.run_until_complete(asyncio.sleep(0.01))
+
+    await asyncio.to_thread(strand)
+    queued = asyncio.create_task(_enter(slots, "queued", order))
+    await _until(lambda: slots.waiting == 2)
+    await held.__aexit__(None, None, None)  # to the stranded one
+    other.close()
+    async with asyncio.timeout(1):
+        async with slots.slot():
+            order.append("asker")
+        await queued
+    assert order == ["queued", "asker"]
+    assert slots.held == 0 and slots.waiting == 0
+
+
+def test_total_is_read_only():
+    """Raising the total would wake nobody in the queue: it cannot be set."""
+    slots = Slots(2)
+    assert slots.total == 2
+    with pytest.raises(AttributeError):
+        slots.total = 3  # type: ignore[misc]

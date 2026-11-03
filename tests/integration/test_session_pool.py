@@ -200,3 +200,30 @@ def test_one_pool_in_two_asyncio_runs(tmp_path):
     assert asyncio.run(two_at_once()) == [2, 2]
     assert asyncio.run(two_at_once()) == [2, 2]
     assert _running(str(tmp_path)) == set()
+
+
+async def test_three_opens_in_a_loop_wait_no_more_than_a_launch(tmp_path):
+    """E5: one slot, three identities opened over and over. Turns go round
+    in order, and between one browser leaving and the next entering there
+    is a close and a launch, never a lost turn of polling."""
+    pool = SessionPool(tmp_path, max_browsers=1, headless=True)
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    async with pool.open("warm") as browser:  # reference: one launch, alone
+        await browser.main_tab.eval("1")
+    reference = loop.time() - start
+    turns: list[tuple[str, float, float]] = []
+
+    async def opener(name: str):
+        for _ in range(2):
+            async with pool.open(name) as browser:
+                entered = loop.time()
+                await browser.main_tab.eval("1")
+                await asyncio.sleep(0.05)
+                turns.append((name, entered, loop.time()))
+
+    await asyncio.wait_for(asyncio.gather(*(opener(n) for n in ("a", "b", "c"))), 240)
+    order = [t[0] for t in turns]
+    assert sorted(order[:3]) == ["a", "b", "c"] and order[3:] == order[:3]  # round robin
+    gaps = [nxt[1] - prev[2] for prev, nxt in zip(turns, turns[1:], strict=False)]
+    assert max(gaps) < 2 * reference + 1.0, (gaps, reference)

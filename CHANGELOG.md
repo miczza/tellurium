@@ -630,6 +630,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Repo housekeeping: architecture specs migrated into `docs/superpowers/specs/architecture/`,
   build noise untracked, the one-off `diagnose_*` fingerprint scripts archived
   out of `examples/fingerprint_tests/`.
+- `Slots.total` (the cap of `SessionPool` and `Multiplexer` slots) is read-only: raising
+  it would have woken nobody already queued.
 
 ### Fixed
 
@@ -1019,6 +1021,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Stealth documentation in `README.md` described the pre-T7/T7.5 posture
   (extension-only delivery, WebGL spoofing, `toString` masking); realigned
   with the shipped engine.
+- A reinstall of the patched browser waiting for the cache's install lock is no longer
+  starved by readers whose shared holds overlap: while an install waits, no new reader
+  gets in (an `.install.gate` file next to `.install.lock`).
+- A `Slots` slot handed to a waiter whose loop was stopped, then closed without
+  cancelling the task, is no longer lost: the next caller finding no slot free takes it
+  back and hands it on.
 
 ## [0.1.0] - 2026-04-26
 
