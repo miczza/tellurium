@@ -656,6 +656,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A hidden robots.txt target whose `Target.createTarget` reply comes after the caller gave
+  up is closed as soon as the reply lands, however late (it was watched for 30 s only);
+  the wait for it lasts as long as the pipe, which is also the hidden target's lifetime.
 - `wait_for_human` keeps one deadline: every CDP call takes at most what is left of the
   wait (5 s at most), so `timeout=3` on a page busy in 2 s ticks ends in under 4 s, and a
   timeout that expires inside `until` says `within N s` too. The banner's cleanup waits at

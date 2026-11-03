@@ -179,6 +179,38 @@ async def test_robots_txt_has_the_stealth_user_agent_of_the_page(headless):
         assert robots.get(hint) in (None, page[hint]), hint
 
 
+async def test_load_network_resource_sends_no_client_hints_even_with_an_override():
+    """The proof behind a limit: Chrome sends no ``sec-ch-ua*`` with
+    ``Network.loadNetworkResource``, not even after
+    ``Network.setUserAgentOverride`` with ``userAgentMetadata`` on the hidden
+    target's session (whose User-Agent it ignores too). If this starts
+    failing, Chrome does send them: robots.txt can then carry the page's."""
+    from tellurium.browser import robots as robots_module
+
+    async with SiteProxy({"/robots.txt": (200, TEXT, ROBOTS)}) as site:
+        browser = await Browser.launch(headless=True)
+        try:
+            frame = await robots_module.open_frame(browser, "")
+            metadata = {
+                "brands": [{"brand": "Chromium", "version": "150"}],
+                "fullVersionList": [{"brand": "Chromium", "version": "150.0.0.0"}],
+                "platform": "Linux",
+                "platformVersion": "6.0.0",
+                "architecture": "x86",
+                "model": "",
+                "mobile": False,
+                "bitness": "64",
+            }
+            override = {"userAgent": "probe/1.0", "userAgentMetadata": metadata}
+            await frame.session.send("Network.setUserAgentOverride", override, timeout=5)
+            await robots_module._load(frame, site.url + "/robots.txt")
+        finally:
+            await browser.close()
+    robots = {line.split(" ")[1]: h for line, h in site.seen}["/robots.txt"]
+    assert not [h for h in robots if h.startswith("sec-ch-ua")], robots
+    assert robots["user-agent"] != "probe/1.0"
+
+
 TEXT = {"Content-Type": "text/plain"}
 
 
