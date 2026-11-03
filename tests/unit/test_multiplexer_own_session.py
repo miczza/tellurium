@@ -206,3 +206,56 @@ async def test_proxy_auth_answers_on_the_own_session_and_the_client_sees_none_of
     await auth.stop()
     assert ws.out == []
     await _done(ws, relay, serving)
+
+
+async def test_the_attach_has_one_deadline_for_both_commands():
+    """Each command answered in 60 % of the timeout: together they pass it,
+    so the attach fails at the timeout, not at twice it."""
+    pipe, ws, relay, serving = await _relay_with_client()
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    attaching = asyncio.ensure_future(OwnSession.attach(relay, 0.5))
+    await _until(lambda: pipe.sent)
+    await asyncio.sleep(0.3)
+    pipe.incoming.put_nowait({"id": pipe.sent[-1]["id"], "result": {"sessionId": OWN}})
+    await _until(lambda: len(pipe.sent) == 2)
+    with pytest.raises(TimeoutError):
+        await attaching
+    assert loop.time() - start < 0.7
+    await _done(ws, relay, serving)
+
+
+async def test_what_is_held_during_an_attach_counts_against_high_water(monkeypatch):
+    """Messages held for the client while an attach is in flight count as
+    queued for it: past HIGH_WATER the pipe is no longer read."""
+    from tellurium.multiplexer import relay as relay_module
+
+    monkeypatch.setattr(relay_module, "HIGH_WATER", 1000)
+    pipe, ws, relay, serving = await _relay_with_client()
+    attaching = asyncio.ensure_future(OwnSession.attach(relay, 0.5))
+    await _until(lambda: pipe.sent)
+    big = {"method": "Big.event", "params": {"data": "x" * 600}}
+    for _ in range(3):
+        pipe.incoming.put_nowait(big)
+    await _until(lambda: relay.paused)
+    assert relay.received == 2 and relay.own.held_bytes > 1000
+    with pytest.raises(TimeoutError):  # its reply sits in the pipe, behind
+        await attaching
+    await _until(lambda: len(ws.out) == 3)  # released: the pipe is read again
+    assert not relay.own.holding and relay.own.held_bytes == 0
+    await _done(ws, relay, serving)
+
+
+async def test_without_a_client_nothing_is_held():
+    pipe = FakePipe()
+    relay = Relay(pipe)
+    relay.start()
+    attaching = asyncio.ensure_future(OwnSession.attach(relay, 2))
+    await _until(lambda: pipe.sent)
+    pipe.incoming.put_nowait({"method": "Some.event", "params": {"data": "x" * 100}})
+    await _until(lambda: relay.received == 1)
+    assert relay.own.holding and relay.own.held_bytes == 0
+    attaching.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await attaching
+    await relay.close()

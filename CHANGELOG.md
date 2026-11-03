@@ -1027,6 +1027,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A `Slots` slot handed to a waiter whose loop was stopped, then closed without
   cancelling the task, is no longer lost: the next caller finding no slot free takes it
   back and hands it on.
+- Multiplexer: a request with a body (`Content-Length` other than 0, or a
+  `Transfer-Encoding`) gets HTTP 400; websockets used to close it without an answer.
+- Multiplexer: a client that hangs up while its Chrome is launching no longer throws that
+  launch away: its place is free at once, the next client in the queue takes the Chrome
+  being launched (and its proxy); with nobody waiting and no warm Chrome wanted, it is
+  closed once up.
+- Multiplexer: the relay's own-session attach has one deadline for its two commands
+  (`health.TIMEOUT` in all, not each); what is held for the client during it counts
+  against `HIGH_WATER`, and with no client nothing is held.
 
 ## [0.1.0] - 2026-04-26
 

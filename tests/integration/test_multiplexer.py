@@ -21,10 +21,13 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus  # noqa: E402
 
 from tellurium import Multiplexer  # noqa: E402
 from tellurium.browser.launcher import find_chrome  # noqa: E402
+from tellurium.browser.raw_chrome import RawChrome  # noqa: E402
 from tellurium.multiplexer import health  # noqa: E402
 from tellurium.multiplexer import multiplexer as multiplexer_module  # noqa: E402
 from tellurium.multiplexer import pool as pool_module  # noqa: E402
 from tellurium.multiplexer import server as server_module  # noqa: E402
+from tellurium.multiplexer.own_session import CommandError  # noqa: E402
+from tellurium.multiplexer.relay import Relay  # noqa: E402
 from tests.integration.test_authenticated_proxy import (  # noqa: E402, F401 - a fixture
     GOOD_AUTH,
     PASSWORD,
@@ -428,6 +431,33 @@ async def test_access_is_refused_before_anything_starts(upgrade):
         assert all(s["launches"] == 0 for s in mux.status()["slots"])
 
 
+@pytest.mark.parametrize(
+    "request_head, body",
+    [
+        ("POST /json/version HTTP/1.1", [("Content-Length", "5")]),
+        ("GET /devtools/browser/x HTTP/1.1", [("Content-Length", "5")]),
+        ("POST /json/version HTTP/1.1", [("Transfer-Encoding", "chunked")]),
+    ],
+    ids=["post-length", "get-length", "chunked"],
+)
+async def test_a_request_with_a_body_gets_a_400(request_head, body):
+    """E5: websockets reads no request body; such a request is answered 400
+    (it used to be closed without a word), before any check or launch."""
+    async with serving() as mux:
+        reader, writer = await asyncio.open_connection("127.0.0.1", _port(mux))
+        try:
+            head = [request_head, *(f"{k}: {v}" for k, v in [*_good(mux), *body])]
+            writer.write(("\r\n".join(head) + "\r\n\r\nhello").encode())
+            status = await asyncio.wait_for(reader.readline(), 10)
+            assert status.split()[1] == b"400", status
+            rest = await asyncio.wait_for(reader.read(), 10)
+            assert b"body" in rest
+        finally:
+            writer.close()
+        assert mux.status()["connections"] == 0
+        assert all(s["launches"] == 0 for s in mux.status()["slots"])
+
+
 async def test_a_handshake_that_fails_after_the_place_was_taken_gives_it_back():
     async with serving() as mux:
         broken = [*_good(mux), ("Upgrade", "websocket"), ("Connection", "Upgrade")]
@@ -509,6 +539,46 @@ async def test_clients_that_hang_up_in_the_queue_leave_it_at_once():
         status = mux.status()
         assert status["connections"] == 2
         assert status["slots"][0]["launches"] == 2  # none for the ghosts
+
+
+async def test_a_client_that_hangs_up_during_its_launch_leaves_the_chrome_to_the_next():
+    """The launch a client was waiting for is not thrown away when it hangs
+    up: the next client in the queue gets that Chrome (one launch, one
+    proxy), with no close and relaunch in between."""
+    async with serving(1, acquire_timeout=60) as mux:
+        port = _port(mux)
+        _, ghost = await asyncio.open_connection("127.0.0.1", port)
+        ghost.write(_request("/devtools/browser/x", _good(mux), upgrade=True))
+        assert await _wait_until(lambda: mux.status()["slots"][0]["state"] == "launching", 10)
+        real = asyncio.ensure_future(_client(mux).__aenter__())
+        assert await _wait_until(lambda: mux.status()["queue"] == 1, 5)
+        ghost.close()
+        ws = await asyncio.wait_for(real, 60)
+        try:
+            assert (await _cdp(ws, 1, "Browser.getVersion"))["result"]
+            status = mux.status()
+            assert status["slots"][0]["launches"] == 1, json.dumps(status)
+        finally:
+            await ws.close()
+
+
+async def test_a_launch_nobody_wants_any_more_is_closed():
+    """The client hangs up during its launch and nobody waits: the Chrome,
+    once up, is closed (no warm Chrome was asked for) and the place is idle."""
+    async with serving(1) as mux:
+        _, ghost = await asyncio.open_connection("127.0.0.1", _port(mux))
+        ghost.write(_request("/devtools/browser/x", _good(mux), upgrade=True))
+        assert await _wait_until(lambda: mux.status()["slots"][0]["state"] == "launching", 10)
+        ghost.close()
+        assert await _wait_until(lambda: mux.status()["clients"] == 0, 5)
+        assert await _wait_until(
+            lambda: (
+                mux.status()["slots"][0]["launches"] == 1
+                and mux.status()["slots"][0]["state"] == "idle"
+            ),
+            60,
+        ), json.dumps(mux.status())
+        assert _pids(mux) == []
 
 
 async def test_silent_sockets_are_dropped_and_do_not_crowd_out_a_client(monkeypatch):
@@ -879,3 +949,23 @@ async def test_the_client_cannot_detach_the_own_session():
             await _cdp(ws, 10, "Target.createTarget", {"url": "http://site.test/"})
             assert await _wait_until(lambda: proxy.requests, 20)
             assert proxy.requests[0] == ("GET http://site.test/ HTTP/1.1", GOOD_AUTH)
+
+
+async def test_chrome_detaches_a_browser_session_by_its_target_id():
+    """Why the relay refuses ``Target.detachFromTarget`` with its own session's
+    target id: Chrome (observed on 156) detaches that browser session by
+    target id too. On a bare pipe, no relay: if Chrome stops doing so, this
+    test says the refusal by target id may go."""
+    async with RawChrome.launch(headless=True, geoip=False) as raw:
+        relay = Relay(raw.transport)
+        relay.start()
+        try:
+            attached = await relay.call("Target.attachToBrowserTarget", timeout=10)
+            session = attached["sessionId"]
+            info = await relay.call("Target.getTargetInfo", timeout=10, session_id=session)
+            target = info["targetInfo"]["targetId"]
+            await relay.call("Target.detachFromTarget", {"targetId": target}, timeout=10)
+            with pytest.raises(CommandError, match="Session with given id not found"):
+                await relay.call("Browser.getVersion", timeout=10, session_id=session)
+        finally:
+            await relay.close()

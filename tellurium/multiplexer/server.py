@@ -8,7 +8,8 @@ a Chrome of its own. Every request, upgrade included, passes the same checks
 first: no repeated access header, a ``Host`` naming the bind address, no
 ``Origin`` (CDP clients send none, web pages always do), no token in the URL
 (query or path, even percent-encoded twice), then ``Authorization: Bearer``.
-The ``/admin`` routes (:mod:`.admin`) come after the same checks.
+The ``/admin`` routes (:mod:`.admin`) come after the same checks. A request
+with a body (none of these takes one) gets 400 before any of them.
 """
 
 from __future__ import annotations
@@ -133,6 +134,10 @@ class Server:
         guard = self
 
         class GuardedConnection(base):  # type: ignore[misc, valid-type]
+            def __init__(self, protocol: Any, *args: Any, **kwargs: Any) -> None:
+                super().__init__(protocol, *args, **kwargs)
+                _answer_bodies(protocol)
+
             def connection_made(self, transport: Any) -> None:
                 super().connection_made(transport)
                 guard._opened(self)
@@ -275,6 +280,29 @@ class Server:
     @property
     def browser_id(self) -> str:
         return self._browser_id
+
+
+def _answer_bodies(protocol: Any) -> None:
+    """websockets reads no request body: it drops a request with one (any
+    ``Content-Length`` but 0, or a ``Transfer-Encoding``) and closes without a
+    word. Have it answer 400 first, before the EOF it sends."""
+    send_eof = protocol.send_eof
+
+    def answered_send_eof() -> None:
+        if _has_body(protocol.handshake_exc):
+            text = "Bad Request: a request with a body is not supported here\n"
+            protocol.writes.append(protocol.reject(http.HTTPStatus.BAD_REQUEST, text).serialize())
+        send_eof()
+
+    protocol.send_eof = answered_send_eof
+
+
+def _has_body(exc: BaseException | None) -> bool:
+    """Whether *exc* is websockets' refusal of a request body."""
+    cause = exc.__cause__ if exc is not None else None
+    return isinstance(cause, NotImplementedError) or (
+        isinstance(cause, ValueError) and str(cause) == "unsupported request body"
+    )
 
 
 def _reply(

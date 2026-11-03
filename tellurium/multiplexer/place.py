@@ -105,8 +105,17 @@ class Place:
         return self._ready
 
     async def release(self) -> None:
-        """The client is done: returns once its Chrome is closed."""
+        """The client is done: returns once its Chrome is closed. A client
+        that leaves before it got the relay (it hung up during the launch)
+        leaves the launch to the pool: the place is free at once, the next
+        client takes the Chrome being launched, else it stays warm if wanted
+        so, else it is closed once up."""
         if not self.claimed:
+            return
+        if not self._attached and self._task is not None and not self._task.done():
+            self._unclaim()
+            self._pool.rebalance()
+            self._changed.set()
             return
         self._left = True
         self._changed.set()
@@ -199,7 +208,10 @@ class Place:
 
     async def _open(self, chrome: RawChrome) -> Relay | None:
         """Start the relay, read the version and have Chrome answer its proxy;
-        None (Chrome closed) if it fails."""
+        None (Chrome closed) if it fails. The probe has :data:`health.TIMEOUT`
+        and the own session's attach as much in all (its two commands share
+        it); ``Fetch.enable`` then has the timeout of
+        :class:`~tellurium.browser.proxy_auth.ProxyAuth`."""
         self.chrome, self.launches = chrome, self.launches + 1
         relay = None
         try:
@@ -237,6 +249,9 @@ class Place:
                     self._attached = True
                 if self._left:
                     code, reason = CLOSE_NORMAL, "the client left"
+                    break
+                if not self._wanted_now():  # its client hung up during the launch
+                    code, reason = CLOSE_NORMAL, "no client and not wanted warm"
                     break
                 if self._restart:
                     self._restart = False

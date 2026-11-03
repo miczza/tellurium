@@ -13,7 +13,13 @@ Chrome announces the new session (``Target.attachedToTarget`` on the root)
 *before* it answers ``attachToBrowserTarget``, when its id is not known yet:
 while an attach is in flight, whatever would go to the client is held, in
 order, and released once the id is known, without that announcement. The
-hold lasts one round trip (bounded by the attach's timeout).
+hold lasts one round trip (bounded by the attach's timeout); what is held
+counts as queued for the client against the relay's ``HIGH_WATER``, and with
+no client nothing is held (it would be dropped all the same).
+
+The detach refused by target id rests on what Chrome does (observed on 156,
+pinned by an integration test): ``Target.detachFromTarget`` with the target
+id of a browser session detaches that session.
 
 An :class:`OwnSession` has ``send(method, params, timeout)``, ``on`` and
 ``off``: what :class:`~tellurium.browser.proxy_auth.ProxyAuth` needs.
@@ -21,10 +27,12 @@ An :class:`OwnSession` has ``send(method, params, timeout)``, ``on`` and
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from collections import deque
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Protocol
 
 logger = logging.getLogger("tellurium")
 
@@ -38,6 +46,23 @@ class CommandError(Exception):
     """Chrome answered one of the relay's own commands with an error."""
 
 
+class OwnRelay(Protocol):
+    """What an :class:`OwnSession` uses of the relay it lives on."""
+
+    own: OwnSessions
+
+    async def call(
+        self,
+        method: str,
+        params: dict | None = None,
+        *,
+        timeout: float,
+        session_id: str | None = None,
+    ) -> dict: ...
+
+    def release_held(self) -> None: ...
+
+
 class OwnSessions:
     """The relay's own sessions on one pipe, and what keeps them from the client."""
 
@@ -46,6 +71,8 @@ class OwnSessions:
         self._targets: set[str] = set()  # target id of each own session
         self._attaching = 0
         self._held: deque[dict] = deque()
+        #: Size of the held messages as they will go to the client (JSON, ASCII).
+        self.held_bytes = 0
 
     @property
     def holding(self) -> bool:
@@ -54,6 +81,7 @@ class OwnSessions:
 
     def hold(self, message: dict) -> None:
         self._held.append(message)
+        self.held_bytes += len(json.dumps(message, separators=(",", ":"), ensure_ascii=True))
 
     def begin_attach(self) -> None:
         self._attaching += 1
@@ -65,6 +93,7 @@ class OwnSessions:
         if self._attaching:
             return []
         held, self._held = self._held, deque()
+        self.held_bytes = 0
         return [m for m in held if "id" in m or not self.take(m)]
 
     def adopt(self, session_id: str, handler: Callable[[dict], None]) -> None:
@@ -112,7 +141,7 @@ class OwnSessions:
 class OwnSession:
     """The relay's own browser session; open one with :meth:`attach`."""
 
-    def __init__(self, relay: Any, session_id: str) -> None:
+    def __init__(self, relay: OwnRelay, session_id: str) -> None:
         self._relay = relay
         self.id = session_id
         self._handlers: dict[str, list[Callable[[dict], Any]]] = {}
@@ -121,14 +150,16 @@ class OwnSession:
         return f"<OwnSession {self.id[:8]}…>"
 
     @classmethod
-    async def attach(cls, relay: Any, timeout: float) -> OwnSession:
-        """Attach to the browser target on *relay*'s pipe; each command within
-        *timeout* seconds.
+    async def attach(cls, relay: OwnRelay, timeout: float) -> OwnSession:
+        """Attach to the browser target on *relay*'s pipe: its two commands
+        within *timeout* seconds in all.
 
         Raises :class:`TimeoutError`, :class:`~tellurium.multiplexer.relay.RelayClosed`
         or :class:`CommandError`. Messages for the client are held meanwhile.
         """
-        own: OwnSessions = relay.own
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        own = relay.own
         own.begin_attach()
         try:
             result = await relay.call("Target.attachToBrowserTarget", timeout=timeout)
@@ -141,7 +172,10 @@ class OwnSession:
             relay.release_held()
         # Its target id (one per browser session, listed nowhere else) is refused
         # to the client's Target.detachFromTarget too.
-        info = await session.send("Target.getTargetInfo", timeout=timeout)
+        left = deadline - loop.time()
+        if left <= 0:
+            raise TimeoutError(f"Chrome did not answer within {timeout:g} s")
+        info = await session.send("Target.getTargetInfo", timeout=left)
         target_id = (info.get("targetInfo") or {}).get("targetId")
         if not isinstance(target_id, str) or not target_id:
             raise CommandError("Target.getTargetInfo: no targetId in the reply")

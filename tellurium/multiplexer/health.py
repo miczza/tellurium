@@ -10,6 +10,11 @@ and the browser process keeps answering. A probe is missed only if nothing
 at all came from the pipe while it waited, and the relay was not holding the
 pipe for a slow client: a Chrome that keeps talking is alive, even when the
 reply sits behind what it piled up during a client's pause.
+
+What is read counts in messages, not bytes: a message is counted once read
+whole. That never hides a live Chrome: the largest one (a V8 string at its
+limit, 512 MiB) comes through the pipe in under half a second (measured on
+Chrome 156), far below the :data:`MISSES` x :data:`TIMEOUT` a hang takes.
 """
 
 from __future__ import annotations

@@ -348,7 +348,10 @@ asyncio.run(main())
   written once to `~/.tellurium/multiplex-token` (mode 0600) and never printed
   nor accepted in the URL. A request with an `Origin` (any web page) or a
   `Host` other than the bind address is refused, so a page in a browser cannot
-  reach it.
+  reach it. A request with a body gets 400. Known limit: a local process can
+  still make a client fail before its request arrives, by flooding the server
+  with connections that send nothing (past 64 of them the oldest is dropped);
+  every policy for that cap favours some local attacker.
 - **Administration.** With the same token: `GET /admin/status` (per place:
   state, pid, proxy without credentials, age, restarts; in total: clients,
   queue, connections, crashes, hangs) and `POST /admin/slots/<id>/restart`

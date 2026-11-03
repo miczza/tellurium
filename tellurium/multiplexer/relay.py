@@ -87,6 +87,7 @@ class Relay:
         self.closed_by_client = False
         #: The relay's own sessions, kept from the client.
         self.own = OwnSessions()
+        self._released = asyncio.Event()  # an own attach let go of what it held
 
     def start(self) -> None:
         self._reader = asyncio.ensure_future(self._read())
@@ -99,7 +100,7 @@ class Relay:
         try:
             while True:
                 client = self._client
-                if client is not None and client.queued > HIGH_WATER:
+                if client is not None and self._behind(client):
                     await self._wait_for(client)
                 message = await self._transport.recv()
                 self.received += 1
@@ -117,14 +118,24 @@ class Relay:
         self.paused, self.pauses = True, self.pauses + 1
         start = loop.time()
         try:
-            while client.queued > HIGH_WATER and self._client is client:
+            while self._behind(client) and self._client is client:
+                if client.queued > HIGH_WATER:
+                    event = client.room
+                else:  # what an own attach holds: until it is released
+                    event = self._released
+                    event.clear()
                 with contextlib.suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(client.room.wait(), 1.0)
+                    await asyncio.wait_for(event.wait(), 1.0)
                 if loop.time() - max(start, client.last_sent) > STALL_LIMIT:
                     client.abandon(CLOSE_POLICY, f"the client took nothing for {STALL_LIMIT:g} s")
                     return
         finally:
             self.paused = False
+
+    def _behind(self, client: _Client) -> bool:
+        """Whether *client* has more than :data:`HIGH_WATER` bytes waiting for
+        it, those held during an own attach included."""
+        return client.queued + self.own.held_bytes > HIGH_WATER
 
     def _dispatch(self, message: dict) -> None:
         own = message.get("id")
@@ -148,15 +159,18 @@ class Relay:
 
     def _deliver(self, message: dict) -> None:
         """*message* to the client, if any (held while an own session attaches)."""
+        if self._client is None:
+            return
         if self.own.holding:
             self.own.hold(message)
-        elif self._client is not None:
+        else:
             self._client.push(message)
 
     def release_held(self) -> None:
         """An own attach is over: what was held goes to the client, in order."""
         for message in self.own.end_attach():
             self._deliver(message)
+        self._released.set()
 
     def _end(self, reason: str) -> None:
         if not self.ended.done():
