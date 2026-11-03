@@ -638,6 +638,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   where Python has no time zone database.
 - `RawChrome.close()` first sends `Browser.close` on the pipe and gives Chrome up to
   5 s (`CLOSE_GRACE`) to exit on its own, then SIGTERM and SIGKILL as before.
+- `tellurium.mcp.auth` no longer re-exports `hmac` and `os` (kept only for old tests).
 
 ### Fixed
 

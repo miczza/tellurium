@@ -11,9 +11,6 @@ so no preflight to get wrong).
 
 from __future__ import annotations
 
-# ``hmac`` and ``os`` stay importable from here: tests patch them through this module.
-import hmac  # noqa: F401
-import os  # noqa: F401
 from dataclasses import dataclass
 from typing import Any
 

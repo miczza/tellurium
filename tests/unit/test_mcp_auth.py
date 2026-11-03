@@ -12,6 +12,7 @@ import pytest
 
 pytest.importorskip("mcp")
 
+from tellurium import access  # noqa: E402
 from tellurium.mcp import auth  # noqa: E402
 
 posix_only = pytest.mark.skipif(os.name != "posix", reason="POSIX permissions")
@@ -154,8 +155,8 @@ def test_token_value_anywhere_in_the_url_is_refused():
 
 def test_token_compared_in_constant_time(monkeypatch):
     seen = []
-    real = auth.hmac.compare_digest
-    monkeypatch.setattr(auth.hmac, "compare_digest", lambda a, b: seen.append(1) or real(a, b))
+    real = access.hmac.compare_digest
+    monkeypatch.setattr(access.hmac, "compare_digest", lambda a, b: seen.append(1) or real(a, b))
     _guard().check(_scope(_OK))
     assert seen
 
@@ -273,7 +274,7 @@ def test_home_writable_by_others_is_refused(tmp_path, mode):
 def test_home_or_token_of_another_user_is_refused(tmp_path, monkeypatch):
     path = tmp_path / "home" / "mcp-token"
     auth.load_or_create_token(path)
-    monkeypatch.setattr(auth.os, "getuid", lambda: os.stat(path).st_uid + 1)
+    monkeypatch.setattr(access.os, "getuid", lambda: os.stat(path).st_uid + 1)
     with pytest.raises(auth.TokenFileError, match="another user"):
         auth.load_or_create_token(path)
 
@@ -310,8 +311,8 @@ def test_token_swapped_for_a_symlink_after_the_checks_is_not_read(tmp_path, monk
         swap()
         return info
 
-    monkeypatch.setattr(auth.os, "lstat", lstat)
-    monkeypatch.setattr(auth.os, "fstat", fstat)
+    monkeypatch.setattr(access.os, "lstat", lstat)
+    monkeypatch.setattr(access.os, "fstat", fstat)
     assert auth.load_or_create_token(path) == token
 
 

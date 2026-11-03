@@ -86,6 +86,31 @@ def test_host_without_port_passes_on_port_80():
     assert access.host_ok({"host": "localhost"}, LOOPBACK, 80)
 
 
+@pytest.mark.parametrize(
+    "host, port, ok",
+    [
+        ("[fe80::1]:9339", 9339, True),
+        ("[fe80::1]:9340", 9339, False),
+        ("[fe80::1]", 9339, False),
+        ("[fe80::1]", 80, True),
+        ("[fe80::1]:80", 80, True),
+        ("fe80::1", 80, False),  # unbracketed: not a valid Host
+        ("[fe80::2]:9339", 9339, False),
+    ],
+)
+def test_host_ok_with_a_non_loopback_ipv6_bind(host, port, ok):
+    hosts = access.allowed_hosts("fe80::1")
+    assert access.host_ok({"host": host}, hosts, port) is ok
+
+
+@pytest.mark.parametrize(
+    "host, port, ok",
+    [("[::1]", 80, True), ("[::1]", 9339, False), ("[::1]:80", 80, True), ("[::1]:81", 80, False)],
+)
+def test_host_ok_with_ipv6_loopback_and_no_port(host, port, ok):
+    assert access.host_ok({"host": host}, LOOPBACK, port) is ok
+
+
 def test_wildcard_bind_accepts_any_host():
     assert access.host_ok({"host": "whatever:1"}, None, 9339)
 
