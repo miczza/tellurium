@@ -751,7 +751,11 @@ an async `(tab) -> bool`;
 `until` is required (`ValueError` otherwise); Chrome counts as headless when
 either the `--headless` flag on its command line or `HeadlessChrome` in its
 user agent says so. The banner is removed however the
-wait ends.
+wait ends. The timeout holds within about a second even on a page whose main
+thread is busy: every CDP call takes at most what is left of the wait; on such
+a page the banner's cleanup ends in the background just after the wait. The
+banner also shows on SVG and XML documents; if its script fails on a page, a
+warning on the `tellurium` logger says why.
 
 The banner sits in a closed shadow root built from an isolated world, so the
 page cannot read it, and it is styled through the CSSOM, so a `style-src` CSP

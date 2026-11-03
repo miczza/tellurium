@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>ticks</title>
+</head>
+<body>
+<p id="content">A page whose main thread is busy in long ticks, with short breaks.</p>
+<script>
+  // Spins the main thread for ms milliseconds, rests a few, and again, until
+  // stop() (each CDP command to the page waits for the end of a tick).
+  window.ticks = function (ms) {
+    window.ticking = true;
+    const tick = function () {
+      if (!window.ticking) return;
+      const end = Date.now() + ms;
+      while (Date.now() < end) { /* busy */ }
+      setTimeout(tick, 5);
+    };
+    setTimeout(tick, 0);
+  };
+  window.stop = function () { window.ticking = false; };
+</script>
+</body>
+</html>

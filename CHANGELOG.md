@@ -656,6 +656,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `wait_for_human` keeps one deadline: every CDP call takes at most what is left of the
+  wait (5 s at most), so `timeout=3` on a page busy in 2 s ticks ends in under 4 s, and a
+  timeout that expires inside `until` says `within N s` too. The banner's cleanup waits at
+  most 0.5 s once the time is over and ends in the background, each call bounded. The
+  early script Chrome confirms only after the wait (a busy page) is taken away as soon as
+  its identifier arrives, also when `close()` is cancelled: no inert isolated world per
+  document for the rest of the tab's life.
+- The `wait_for_human` banner shows on SVG and XML documents (its elements are made in the
+  HTML namespace); an exception of the banner's script is logged once as a warning
+  instead of being swallowed.
 - A human click (and `hover()`) into an iframe drawn in 3D (`perspective`, `rotateX/Y`,
   `matrix3d`), cross-site or not and at any depth, reaches its element instead of raising
   `ElementNotHittableError`: a cross-site frame's points are mapped through the
