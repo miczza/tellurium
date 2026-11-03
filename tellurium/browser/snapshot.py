@@ -122,14 +122,51 @@ async def _oopif_session(session: Session, frame_id: str, timeout: float) -> Ses
     return child
 
 
-async def _oopif_tree(session: Session, frame_id: str, sub: dict) -> AXTree:
-    """The tree of the cross-site iframe *frame_id*, with its document's loader id."""
-    timeout, bounds = sub["timeout"], sub["_bounds"]
-    child = await _oopif_session(session, frame_id, timeout)
-    if bounds is not None and bounds.nodes != float("inf"):  # counted before it is read
-        if (count := await _count_nodes(child, timeout)) > bounds.nodes:
-            raise _TooLarge(count)
-        bounds.nodes -= count
+class _Ledger:
+    """Admits the cross-site iframes of one document under ``max_nodes`` in document
+    order: a counted one waits until those before it are admitted, left out or given
+    up on, so which one is left out does not depend on which renderer answers first."""
+
+    def __init__(self, bounds: _Bounds, size: int) -> None:
+        loop = asyncio.get_running_loop()
+        self._bounds = bounds
+        self._counts: dict[int, int | None] = {}
+        self._verdicts = [loop.create_future() for _ in range(size)]
+        self._next = 0
+
+    def report(self, index: int, count: int | None) -> None:
+        """The *index*-th iframe has *count* DOM nodes; ``None``: it takes no budget
+        (same-process, gone, not answering). Only the first report of an index counts."""
+        self._counts.setdefault(index, count)
+        while self._next in self._counts:
+            nodes = self._counts[self._next]
+            fits = nodes is not None and nodes <= self._bounds.nodes
+            if fits:
+                self._bounds.nodes -= nodes
+            self._verdicts[self._next].set_result(fits)
+            self._next += 1
+
+    async def admit(self, index: int, count: int) -> bool:
+        """Whether the *index*-th iframe, of *count* nodes, fits what those before leave."""
+        self.report(index, count)
+        return await asyncio.shield(self._verdicts[index])
+
+
+async def _oopif_tree(
+    session: Session, frame_id: str, sub: dict, slot: tuple[_Ledger, int] | None, within: float
+) -> AXTree:
+    """The tree of the cross-site iframe *frame_id*, with its document's loader id.
+    With a *slot* it is counted first (session included, within *within* s, so a stuck
+    renderer does not hold the ones after it) and read only if its ledger admits it."""
+    timeout = sub["timeout"]
+
+    async def counted() -> tuple[Session, int]:
+        child = await _oopif_session(session, frame_id, timeout)
+        return child, await _count_nodes(child, timeout) if slot is not None else 0
+
+    child, count = await asyncio.wait_for(counted(), within if slot is not None else None)
+    if slot is not None and not await slot[0].admit(slot[1], count):
+        raise _TooLarge(count)
     loaded = await _send(child, "Page.getFrameTree", {}, timeout)
     tree = await fetch_tree(child, **sub, _owner=child.session_id or "")
     tree.document = str(loaded["frameTree"]["frame"].get("loaderId") or "")
@@ -137,11 +174,22 @@ async def _oopif_tree(session: Session, frame_id: str, sub: dict) -> AXTree:
 
 
 async def _frame_of(
-    session: Session, bid: int, base_url: str, owner: str, sub: dict
+    session: Session, bid: int, base_url: str, owner: str, sub: dict, slot: Any
 ) -> AXTree | str | None:
     """The document of the ``<iframe>`` with backend id *bid*: tree, OOPIF URL or ``None``.
     *sub* holds the :func:`fetch_tree` options of the frame; an OOPIF has until the
-    deadline of its ``_bounds`` to answer, its nested frames included."""
+    deadline of its ``_bounds`` to answer, its nested frames included. *slot* is its
+    place in the ledger of its document (``None``: no node budget)."""
+    try:
+        return await _frame_in(session, bid, base_url, owner, sub, slot)
+    finally:
+        if slot is not None:  # not read across sites: those after it need not wait
+            slot[0].report(slot[1], None)
+
+
+async def _frame_in(
+    session: Session, bid: int, base_url: str, owner: str, sub: dict, slot: Any
+) -> AXTree | str | None:
     timeout, bounds = sub["timeout"], sub["_bounds"]
     try:
         described = await _send(session, "DOM.describeNode", {"backendNodeId": bid}, timeout)
@@ -152,14 +200,18 @@ async def _frame_of(
         return None
     if sub["_nesting"] > _MAX_FRAME_NESTING:  # too deep: shown without content
         return None
+    if "contentDocument" in node and slot is not None:  # same renderer: no budget of its own
+        slot[0].report(slot[1], None)
     if "contentDocument" not in node:  # the document lives in another renderer
         attributes = node.get("attributes", [])
         src = dict(zip(attributes[::2], attributes[1::2], strict=False)).get("src", "")
         url = urljoin(base_url, src) if src else "about:blank"
         deadline = bounds.deadline if bounds else None
         left = timeout if deadline is None else deadline - asyncio.get_running_loop().time()
+        left = max(left, 0)
         try:
-            return await asyncio.wait_for(_oopif_tree(session, frame_id, sub), max(left, 0))
+            read = _oopif_tree(session, frame_id, sub, slot, left / 2)
+            return await asyncio.wait_for(read, left)
         except TimeoutError:  # a renderer stuck in a loop
             return _Unread(url, "not responding")
         except _TooLarge as large:  # an ad of 1e5 nodes: left out, the page still shows
@@ -196,8 +248,13 @@ async def fetch_tree(
     tree, base_url = AXTree(nodes=nodes, owner=_owner, session=session), _document_url(nodes)
     if iframes:
         sub = {"timeout": timeout, "_nesting": _nesting + 1, "_bounds": _bounds}
+        limited = _bounds is not None and _bounds.nodes != float("inf")
+        ledger = _Ledger(_bounds, len(iframes)) if limited else None
         subs = await asyncio.gather(
-            *(_frame_of(session, b, base_url, _owner, sub) for b in iframes)
+            *(
+                _frame_of(session, b, base_url, _owner, sub, (ledger, i) if ledger else None)
+                for i, b in enumerate(iframes)
+            )
         )
         tree.frames = {bid: f for bid, f in zip(iframes, subs, strict=True) if f is not None}
     return tree

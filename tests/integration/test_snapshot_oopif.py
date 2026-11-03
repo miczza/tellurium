@@ -343,3 +343,35 @@ async def test_oopif_over_max_nodes_is_left_out(any_browser, local_server):
     assert "row 2999" in await tab.snapshot(max_nodes=10_000)
     with pytest.raises(SnapshotTooLargeError, match="max_nodes=10"):
         await tab.snapshot(max_nodes=10)  # the host alone is over
+
+
+@pytest.mark.parametrize("answers", ["in order", "reversed"])
+async def test_oopif_budget_goes_in_document_order(browser, local_server, monkeypatch, answers):
+    """max_nodes leaves room for two of three large cross-site frames: the third in
+    document order is left out, whichever frame's count answers first."""
+    from tellurium.browser import snapshot
+
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/oopif_three.html")
+    whole = await _snapshot_with(tab, "row 2999", max_nodes=None)
+    assert whole.count("row 2999") == 3, whole
+    count_nodes = snapshot._count_nodes
+    delays = [0.0, 0.3, 0.6] if answers == "in order" else [0.6, 0.3, 0.0]
+    calls = []
+
+    async def delayed(session, timeout):
+        count = await count_nodes(session, timeout)
+        if session is not tab._session:  # an OOPIF: they are asked in document order
+            calls.append(count)
+            await asyncio.sleep(delays[min(len(calls), 3) - 1])
+        return count
+
+    host = await count_nodes(tab._session, 5)
+    monkeypatch.setattr(snapshot, "_count_nodes", delayed)
+    text = await tab.snapshot(max_nodes=host + 13_000)
+    assert len(calls) == 3 and all(6000 < c < 6100 for c in calls), calls
+    port = local_server.rsplit(":", 1)[1]
+    left_out = re.findall(r"oopif_huge\.html\?(\w)\" \[oopif: too large", text)
+    assert left_out == ["c"], text
+    assert text.count("row 2999") == 2
+    assert f"http://localhost:{port}/oopif_huge.html?c" in text

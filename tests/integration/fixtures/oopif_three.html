@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Three widgets</title></head>
+<body>
+  <h1>Three ads</h1>
+  <iframe id="a" title="First"></iframe>
+  <iframe id="b" title="Second"></iframe>
+  <iframe id="c" title="Third"></iframe>
+  <script>
+    // Served from 127.0.0.1, each frame comes from localhost: three cross-site
+    // iframes (OOPIFs) of ~6000 DOM nodes each, told apart by their query.
+    const origin = location.protocol + '//localhost:' + location.port;
+    for (const id of ['a', 'b', 'c']) {
+      document.getElementById(id).src = origin + '/oopif_huge.html?' + id;
+    }
+  </script>
+</body>
+</html>

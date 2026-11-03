@@ -656,6 +656,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The `max_nodes` budget of a snapshot's cross-site iframes goes in document order: the
+  iframes of a document are counted, then admitted one after the other, so with several
+  large ones the same one is left out (`[oopif: too large, N nodes]`) whichever renderer
+  answers first. One that is not counted within half of the time left (a stuck renderer)
+  shows as not responding and does not hold the ones after it.
 - A human click (and `hover()`) into an iframe drawn in 3D (`perspective`, `rotateX/Y`,
   `matrix3d`), cross-site or not and at any depth, reaches its element instead of raising
   `ElementNotHittableError`: a cross-site frame's points are mapped through the
