@@ -149,6 +149,9 @@ asyncio.run(main("http://127.0.0.1:8000/download.html"))
   snapshot gave out raises `LookupError`. Take a new snapshot and retry.
 - **Frames**: same-process iframes are part of the snapshot and their refs
   work like any other; a cross-site iframe shows as `- iframe "<url>" [oopif]`.
+  A human click reaches an element in an iframe that is zoomed (CSS `zoom`, on it
+  or an ancestor), turned, or drawn in 3D (`perspective`, `matrix3d`), at any
+  depth; a frame seen edge-on takes no click (`ElementNotHittableError`).
 - **Downloads**: `tab.expect_download(timeout=30)` takes the next download of
   the tab (its iframes included). `download.url`, `suggested_filename`,
   `await download.path()`, `await download.save_as(path)`, `await

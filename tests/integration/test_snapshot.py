@@ -395,6 +395,8 @@ async def test_human_click_never_lands_on_another_element(browser, local_server,
         assert await status.text() == "idle"
         with pytest.raises(ElementNotHittableError):
             await save.hover()
+    else:  # the frame's zoom is undone: the click reaches Save (P3 [5])
+        assert await status.text() == "saved"
 
 
 async def test_tree_too_slow_to_fetch_is_refused_in_time(browser, local_server):
@@ -437,16 +439,20 @@ async def test_human_click_goes_through_what_a_person_clicks_through(browser, lo
 
 @pytest.mark.parametrize("mode", ["frame", "ancestor"])
 async def test_drag_from_a_zoomed_frame_sends_no_press_elsewhere(browser, local_server, mode):
-    from tellurium.browser.geometry import ElementNotHittableError
-
+    """The press lands on Save, not on "Delete account" where Chrome's quads put it
+    (P3 [5]: the frame's zoom is undone); released elsewhere, it clicks nothing."""
     tab = browser.main_tab
     refs = _watched(tab)
     await tab.get(f"{local_server}/snapshot_zoom.html?{mode}")
+    await tab.eval(
+        "document.getElementById('frame').contentDocument.getElementById('save')"
+        ".addEventListener('mousedown', () => { window.pressedSave = true; })"
+    )
     text = await take_snapshot(tab._session, refs)
     save = await resolve_ref(tab._session, tab, refs, _ref_of(text, '- button "Save"'))
-    with pytest.raises(ElementNotHittableError):
-        await save.drag_to(await tab.select("#status"))
+    await save.drag_to(await tab.select("#status"))
     assert await (await tab.select("#status")).text() == "idle"
+    assert await tab.eval("window.pressedSave === true")
 
 
 @pytest.mark.parametrize(("name", "other"), [("Accept", "link"), ("Notify", "#od")])

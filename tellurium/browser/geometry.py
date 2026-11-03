@@ -4,16 +4,15 @@
 for a node inside a same-process iframe, and cannot be faked by the page (a
 ``getBoundingClientRect`` can, and is relative to the node's own frame). A
 cross-site iframe (OOPIF) has its own session, whose quads are relative to that
-frame: they are mapped, up to the tab, through the affine map of each ``<iframe>``
-content quad (border, padding, CSS zoom and 2D transforms alike); a frame drawn in
-perspective takes no pointer action. A node without a box — detached by a re-render, hidden, or empty —
+frame: they are mapped, up to the tab, through the projective map of each
+``<iframe>``'s box (border, padding, CSS zoom, 2D and 3D transforms alike); a frame
+seen edge-on takes no pointer action. A node without a box — detached by a re-render, hidden, or empty —
 raises :class:`StaleElementError`: a pointer action never falls back to (0, 0).
 """
 
 from __future__ import annotations
 
 import asyncio
-import math
 import random
 import weakref
 from typing import TYPE_CHECKING, Any
@@ -30,11 +29,15 @@ class ElementNotHittableError(RuntimeError):
     event was sent."""
 
 
+# The devicePixelRatio of the window a node lives in, over the calling frame's; 1 when
+# the node's window is cross-origin (its devicePixelRatio cannot be read).
+_RATIO = """function() {
+  try { return this.ownerDocument.defaultView.devicePixelRatio / devicePixelRatio; }
+  catch (e) { return 1; }
+}"""
 # Frames climbed at most from the hit node up to the element's document.
 _MAX_FRAMES = 8
-# A frame's content quad farther than this (px) from a parallelogram is in perspective.
-_SKEW = 1.0
-# A frame scaled below this area per CSS pixel (edge-on, scale(0)) takes no clicks.
+# A frame scaled below this area per CSS pixel² (edge-on, scale(0)) takes no clicks.
 _MIN_DET = 1e-3
 # The aim point wanders this far from the centre, at most a quarter of the box.
 _JITTER = 3.0
@@ -100,76 +103,136 @@ async def _largest_quad(session: Any, params: dict, what: str) -> list[float]:
     return max(quads, key=_area)
 
 
-class _Affine:
-    """The map from a cross-site frame's own CSS pixels to its parent frame's viewport:
-    ``p = origin + u * across + v * down``. It carries the ``<iframe>``'s border,
-    padding, CSS zoom and 2D transform at once."""
+class _Homography:
+    """The projective map from a cross-site frame's own CSS pixels to its parent frame's
+    viewport: ``(x, y, w) = M (u, v, 1)``, the point ``(x / w, y / w)``. It carries the
+    ``<iframe>``'s border, padding, CSS zoom, 2D and 3D transforms (perspective,
+    ``matrix3d``) at once: a projective map is fixed by where four corners go."""
 
-    def __init__(self, origin: tuple, across: tuple, down: tuple) -> None:
-        self.origin, self.across, self.down = origin, across, down
-        self.det = across[0] * down[1] - across[1] * down[0]
+    def __init__(self, m: tuple[float, ...]) -> None:
+        self.m = m  # row major, 3x3
+
+    @classmethod
+    def of_rect(cls, width: float, height: float, quad: list[tuple[float, float]]) -> _Homography:
+        """The map taking the corners of the rectangle (0, 0)-(*width*, *height*), clockwise
+        from the top left, to the four points of *quad*."""
+        (x0, y0), (x1, y1), (x2, y2), (x3, y3) = quad
+        sx, sy = x0 - x1 + x2 - x3, y0 - y1 + y2 - y3
+        dx1, dx2, dy1, dy2 = x1 - x2, x3 - x2, y1 - y2, y3 - y2
+        den = dx1 * dy2 - dx2 * dy1
+        if abs(den) < 1e-12:
+            raise _degenerate()
+        g, h = (sx * dy2 - dx2 * sy) / den, (dx1 * sy - sx * dy1) / den
+        a, b, d, e = x1 - x0 + g * x1, x3 - x0 + h * x3, y1 - y0 + g * y1, y3 - y0 + h * y3
+        # the unit square's map, after scaling the rectangle down to it
+        return cls((a / width, b / height, x0, d / width, e / height, y0, g / width, h / height, 1))
+
+    def then_after(self, du: float, dv: float) -> _Homography:
+        """This map applied after moving a point by (*du*, *dv*)."""
+        a, b, c, d, e, f, g, h, i = self.m
+        return _Homography(
+            (a, b, a * du + b * dv + c, d, e, d * du + e * dv + f, g, h, g * du + h * dv + i)
+        )
 
     def apply(self, u: float, v: float) -> tuple[float, float]:
-        (ox, oy), (ax, ay), (bx, by) = self.origin, self.across, self.down
-        return ox + u * ax + v * bx, oy + u * ay + v * by
+        a, b, c, d, e, f, g, h, i = self.m
+        w = g * u + h * v + i
+        if w <= 0:  # behind the viewer: not on the screen
+            raise _degenerate()
+        return (a * u + b * v + c) / w, (d * u + e * v + f) / w
 
     def invert(self, x: float, y: float) -> tuple[float, float]:
-        (ox, oy), (ax, ay), (bx, by) = self.origin, self.across, self.down
-        dx, dy = x - ox, y - oy
-        return (dx * by - dy * bx) / self.det, (ax * dy - ay * dx) / self.det
+        a, b, c, d, e, f, g, h, i = self.m
+        adjugate = (
+            e * i - f * h, c * h - b * i, b * f - c * e,
+            f * g - d * i, a * i - c * g, c * d - a * f,
+            d * h - e * g, b * g - a * h, a * e - b * d,
+        )  # fmt: skip
+        return _Homography(adjugate).apply(x, y)
+
+
+def _degenerate() -> ElementNotHittableError:
+    return ElementNotHittableError("Element's frame is seen edge-on: no event sent")
+
+
+def _convex(points: list[tuple[float, float]]) -> bool:
+    """Whether the four *points* turn the same way at each corner (no bow tie)."""
+    turns = []
+    for i, (x0, y0) in enumerate(points):
+        (x1, y1), (x2, y2) = points[(i + 1) % 4], points[(i + 2) % 4]
+        turns.append((x1 - x0) * (y2 - y1) - (y1 - y0) * (x2 - x1))
+    return all(t > 0 for t in turns) or all(t < 0 for t in turns)
 
 
 def _corners(quad: list[float]) -> list[tuple[float, float]]:
     return list(zip(quad[0::2], quad[1::2], strict=True))
 
 
-def _length(a: tuple[float, float], b: tuple[float, float]) -> float:
-    return math.hypot(b[0] - a[0], b[1] - a[1])
-
-
-async def _frame_map(child: Any, parent: Any, frame_id: str) -> tuple[int, _Affine]:
-    """Backend id (in *parent*) of the ``<iframe>`` of *frame_id*, and the affine map
-    from *child*'s CSS pixels to *parent*'s viewport. Raises
-    :class:`ElementNotHittableError` when the frame is drawn in perspective or edge-on:
-    no 2D map gives where a point of it is on the screen."""
+async def _frame_map(child: Any, parent: Any, frame_id: str) -> tuple[int, _Homography]:
+    """Backend id (in *parent*) of the ``<iframe>`` of *frame_id*, and the projective
+    map from *child*'s CSS pixels to *parent*'s viewport. Raises
+    :class:`ElementNotHittableError` when the frame is seen edge-on (no area, or
+    folded): no map gives where a point of it is on the screen."""
     owner = await send_on_handle(parent, "DOM.getFrameOwner", {"frameId": frame_id})
     backend = owner["backendNodeId"]
-    # the frame's document fills the content quad (inside border and padding) of the
-    # <iframe>, turned like it; the model's width and height are the untransformed
-    # border box in the <iframe>'s own (zoomed) CSS pixels, as the document's are
+    # the model's width and height are the untransformed border box in the <iframe>'s
+    # own (zoomed) CSS pixels, as the document's are; its quads are where that box is
     model = (await send_on_handle(parent, "DOM.getBoxModel", {"backendNodeId": backend}))["model"]
-    content, border = _corners(model["content"]), _corners(model["border"])
-    if min(model["width"], model["height"]) <= 0:
+    width, height = model["width"], model["height"]
+    if min(width, height) <= 0:
         raise StaleElementError("Element's frame has no box on the page (hidden or empty)")
-    q0, q1, q2, q3 = content
-    across, down = (0.0, 0.0), (0.0, 0.0)
-    if (span := _length(border[0], border[1])) > 0:  # edge-on: no span, no map
-        width = model["width"] * _length(q0, q1) / span  # in the document's CSS pixels
-        across = ((q1[0] - q0[0]) / width, (q1[1] - q0[1]) / width) if width > 0 else across
-    if (span := _length(border[0], border[3])) > 0:
-        height = model["height"] * _length(q0, q3) / span
-        down = ((q3[0] - q0[0]) / height, (q3[1] - q0[1]) / height) if height > 0 else down
-    affine = _Affine(q0, across, down)
-    skew = _length((q0[0] + q2[0], q0[1] + q2[1]), (q1[0] + q3[0], q1[1] + q3[1]))
-    if skew > _SKEW or abs(affine.det) < _MIN_DET:
-        raise ElementNotHittableError(
-            "Element's frame is drawn in perspective or edge-on: no event sent"
-        )
-    return backend, affine
+    border = _corners(model["border"])
+    if not _convex(border) or _area(model["border"]) < _MIN_DET * width * height:
+        raise _degenerate()
+    outer = _Homography.of_rect(width, height, border)
+    # the frame's document starts at the content box's corner (inside border and padding)
+    left, top = outer.invert(*_corners(model["content"])[0])
+    return backend, outer.then_after(left, top)
+
+
+async def _zoom(element: Element) -> float:
+    """How many of its session's root-frame CSS pixels one CSS pixel of *element*'s own
+    frame is. ``DOM.getContentQuads`` divides a node's quad by its frame's zoom: under a
+    CSS zoom on an ancestor of a same-process ``<iframe>`` the quad is too small by it.
+    The ratio of the two ``devicePixelRatio`` is read in the root's isolated world (page
+    JS cannot fake it there); 1 when there is no such world or the frame is cross-origin
+    to the root (then the hit test refuses a point off the element)."""
+    from tellurium.browser.refs import frame_world
+
+    session, tab = element._session, element._tab
+    tree = (await send_on_handle(session, "Page.getFrameTree", {}))["frameTree"]
+    if not tree.get("childFrames"):  # no frame but the root: nothing to undo
+        return 1.0
+    if (context := await frame_world(tab, session, tree["frame"]["id"])) is None:
+        return 1.0
+    node = await _send(element, "DOM.describeNode", {"objectId": await element._resolve()})
+    where = {"backendNodeId": node["node"]["backendNodeId"], "executionContextId": context}
+    try:
+        resolved = (await _send(element, "DOM.resolveNode", where))["object"]["objectId"]
+    except CDPError:  # a node the root's world cannot reach
+        return 1.0
+    try:
+        call = {"objectId": resolved, "functionDeclaration": _RATIO, "returnByValue": True}
+        ratio = (await _send(element, "Runtime.callFunctionOn", call))["result"].get("value")
+    finally:
+        await session.send("Runtime.releaseObject", {"objectId": resolved})
+    return float(ratio) if isinstance(ratio, int | float) and ratio > 0 else 1.0
 
 
 async def content_box(element: Element) -> dict[str, float]:
     """``{x, y, width, height}`` of *element* in top-level viewport coordinates.
 
-    The largest fragment of a node split over lines wins; across cross-site frames
-    the box bounds the node's quad as the frames turn and scale it. Raises
+    The largest fragment of a node split over lines wins; the quad is scaled back by
+    the CSS zoom of the same-process frames on the way, and across cross-site frames
+    the box bounds the node's quad as the frames turn, scale and tilt it. Raises
     :class:`StaleElementError` when the node, or the iframe holding it, has no box
-    with an area, :class:`ElementNotHittableError` when a frame on the way is in
-    perspective.
+    with an area, :class:`ElementNotHittableError` when a frame on the way is seen
+    edge-on.
     """
     object_id = await element._resolve()
     quad = await _largest_quad(element._session, {"objectId": object_id}, "Element")
-    points = _corners(quad)
+    zoom = await _zoom(element)
+    points = [(x * zoom, y * zoom) for x, y in _corners(quad)]
     for link in frame_chain(element._session):
         _, affine = await _frame_map(*link)
         points = [affine.apply(*point) for point in points]

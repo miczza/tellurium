@@ -1,4 +1,5 @@
-"""A2 part C — clicks into a cross-site iframe (OOPIF) that is transformed or zoomed.
+"""A2 part C — clicks into a cross-site iframe (OOPIF) that is transformed or zoomed
+(P3: in perspective too).
 
 The widget is a grid of buttons edge to edge (``oopif_grid.html``): a click mapped
 with the wrong scale, offset or angle lands on a neighbour, which writes its own
@@ -39,6 +40,7 @@ async def _clicked(tab) -> str:
         "&transform=translate(-120px,40px) scale(.75)",
         "&transform=rotate(-10deg) scale(1.2)&zoom=0.8",
         "&zoom=1.5",
+        "&transform=perspective(300px) rotateY(35deg)",
         "",
     ],
 )
@@ -76,11 +78,9 @@ async def test_box_of_a_rotated_oopif_holds_the_turned_button(browser, local_ser
     assert (box["width"], box["height"]) == pytest.approx((width, height), abs=1)
 
 
-@pytest.mark.parametrize(
-    "query", ["&transform=perspective(300px) rotateY(35deg)", "&transform=rotateY(90deg)"]
-)
-async def test_oopif_in_perspective_is_not_hittable(browser, local_server, query):
-    """No affine map takes the widget's points to the screen: nothing is sent."""
+@pytest.mark.parametrize("query", ["&transform=rotateY(90deg)", "&transform=scale(0)"])
+async def test_oopif_seen_edge_on_is_not_hittable(browser, local_server, query):
+    """No map takes the widget's points to the screen: nothing is sent."""
     tab = browser.main_tab
     text = await _open_grid(tab, local_server, query)
     button = await tab.ref(_ref_of(text, '- button "Hotel"'))
