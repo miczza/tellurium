@@ -656,6 +656,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Tab.expect_download()` takes a download started by an iframe nested inside a
+  cross-site iframe (same site as it or a third one, at any depth, or one whose src is
+  the download), stealth or not: such frames are reported to the cross-site iframe's
+  own session only, so when a download of a frame no tab knows begins, each waiting
+  tab looks it up in the frame trees of its cross-site iframes (`Target.getTargets`,
+  then `Page.getFrameTree` through the session already attached or one attached then,
+  which Chrome detaches with the frame), within 5 s. Progress reported meanwhile is
+  kept; another tab's waiter does not take it.
 - Snapshots of one document share its `Accessibility.getFullAXTree`: concurrent
   `snapshot(selector=...)` calls on a page whose tree must be read whole (shadow DOM)
   send one request, and a snapshot abandoned past `snapshot_timeout` leaves its request

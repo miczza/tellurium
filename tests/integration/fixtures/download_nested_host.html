@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Nested download host</title></head>
+<body>
+  <h1>Host</h1>
+  <iframe id="outer" title="Outer"></iframe>
+  <script>
+    // Served from 127.0.0.1, the outer frame comes from localhost: another site, an
+    // OOPIF. Its query (inner=<url>) says what its own nested iframe loads.
+    document.getElementById('outer').src = location.protocol + '//localhost:' +
+      location.port + '/download_nested_outer.html' + location.search;
+  </script>
+</body>
+</html>
