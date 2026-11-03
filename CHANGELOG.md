@@ -655,9 +655,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   edge-on (no area, or folded) still takes no click.
 - A human click into a same-process iframe under a CSS `zoom` on one of its ancestors
   lands on its element: Chrome reports that frame's boxes divided by its zoom, which is
-  now undone (the two `devicePixelRatio` are read in the isolated world); it used to aim
-  at the wrong point and raise `ElementNotHittableError`. A same-process frame of
-  another origin than the root's keeps the old refusal: its zoom cannot be read there.
+  now undone (each frame's `devicePixelRatio` is read in its own isolated world, so a
+  frame of another origin than the tab's is read too); it used to aim at the wrong
+  point and raise `ElementNotHittableError`.
+- A human click into a cross-site iframe held by a same-process frame under a CSS zoom
+  no longer lands on another element: the `<iframe>`'s box, which Chrome divides by the
+  zoom of the frame holding it, is scaled back before it is mapped. When that zoom
+  cannot be read, the click is refused with `ElementNotHittableError`, never sent.
 - A human click on a node of another origin than the hit frame's world no longer fails
   with `KeyError: 'objectId'`: Chrome resolves it to no object, read as "not inside".
 - `Tab.screenshot(full_page=True)` before the tab's first navigation has the CSS size

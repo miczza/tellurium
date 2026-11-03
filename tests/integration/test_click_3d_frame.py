@@ -15,7 +15,7 @@ import pytest
 
 from tellurium.browser.geometry import ElementNotHittableError
 from tellurium.browser.handles import StaleElementError
-from tests.integration.test_snapshot_oopif import _ref_of, _snapshot_with
+from tests.integration.test_snapshot_oopif import _iframe_targets, _ref_of, _snapshot_with
 
 _PERSPECTIVE = "&perspective=400px&transform=rotateY(20deg)"
 _MATRIX = "&transform=" + quote("matrix3d(1,0.05,0,0.0006,0,1,0,0.0004,0,0,1,0,0,0,0,1)")
@@ -118,22 +118,17 @@ def other_port():
     server.shutdown()
 
 
-async def test_a_zoomed_same_process_frame_of_another_origin_is_refused(
+async def test_a_zoomed_same_process_frame_of_another_origin_takes_the_click(
     browser, local_server, other_port
 ):
-    """The root's world cannot read the zoom of a cross-origin frame: the box stays
-    divided by it, the aim point is off the button and the hit test sends nothing
-    (no click lands elsewhere)."""
+    """The frame's zoom is read in its own isolated world, also when its origin is not
+    the root's: the click reaches each button."""
     tab = browser.main_tab
     text = await _open(
         tab, _stage(local_server, f"{other_port}/oopif_grid.html", "&zoom=1.5&left=60&top=40")
     )
-    assert "[oopif]" not in text  # the premise: one process, no cross-site frame
-    button = await tab.ref(_ref_of(text, '- button "Hotel"'))
-    with pytest.raises(ElementNotHittableError):
-        await button.click(human=True)
-    assert '"idle"' in await _clicked(tab)
-    assert await tab.eval("document.title") == "Stage"
+    assert await _iframe_targets(tab) == []  # the premise: one process, no cross-site frame
+    await _click_each(tab, text)
 
 
 @pytest.mark.parametrize("stage", ["", _PERSPECTIVE])
@@ -142,5 +137,55 @@ async def test_a_same_process_frame_of_another_origin_without_zoom_takes_the_cli
 ):
     tab = browser.main_tab
     text = await _open(tab, _stage(local_server, f"{other_port}/oopif_grid.html", stage))
-    assert "[oopif]" not in text
+    assert await _iframe_targets(tab) == []
     await _click_each(tab, text)
+
+
+_GRID = [
+    "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel",
+    "India", "Juliet", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa", "Quebec",
+    "Romeo", "Sierra", "Tango", "Uniform", "Victor", "Whiskey", "Xray",
+]  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("outer", "middle"),
+    [
+        ("&zoom=1.5", ""),
+        ("&zoom=2", ""),
+        ("&zoom=1.2", "&zoom=1.25"),  # zoom at two levels
+        ("", "&zoom=1.5"),  # zoom only inside the same-process frame
+    ],
+    ids=["zoom-1.5", "zoom-2", "zoom-two-levels", "zoom-in-the-middle"],
+)
+async def test_human_click_in_an_oopif_inside_a_zoomed_same_process_frame(
+    browser, local_server, outer, middle
+):
+    """127.0.0.1 (zoomed) holds 127.0.0.1 (same process), which holds localhost (an
+    OOPIF): the <iframe> of the OOPIF has its box divided by the zoom of the frame
+    holding it. Every button of the grid gets its own click, or none is sent."""
+    grid = f"{_other_site(local_server)}/oopif_grid.html"
+    inner = _stage(local_server, grid, middle + "&left=0&top=0&width=420&height=190")
+    tab = browser.main_tab
+    text = await _open(
+        tab, _stage(local_server, inner, outer + "&left=10&top=10&width=560&height=280")
+    )
+    # the premise: only the grid is cross-site (an iframe target of its own)
+    targets = await _iframe_targets(tab)
+    assert [url for url in targets if "oopif_grid" in url] and len(targets) == 1
+    await _click_each(tab, text, _GRID)
+
+
+@pytest.mark.parametrize("outer", ["&zoom=1.5", "&zoom=2"])
+async def test_human_click_in_an_oopif_inside_a_zoomed_frame_of_another_origin(
+    browser, local_server, other_port, outer
+):
+    """127.0.0.1 (zoomed) holds 127.0.0.1 on another port (same process, another
+    origin), which holds localhost (an OOPIF)."""
+    grid = f"{_other_site(local_server)}/oopif_grid.html"
+    inner = _stage(other_port, grid, "&left=0&top=0&width=420&height=190")
+    tab = browser.main_tab
+    url = _stage(local_server, inner, outer + "&left=10&top=10&width=560&height=280")
+    text = await _open(tab, url)
+    assert len(await _iframe_targets(tab)) == 1
+    await _click_each(tab, text, _GRID)

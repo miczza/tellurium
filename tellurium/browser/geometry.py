@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import random
 import weakref
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from tellurium.browser.handles import HANDLE_TIMEOUT, StaleElementError, send_on_handle
@@ -29,12 +30,8 @@ class ElementNotHittableError(RuntimeError):
     event was sent."""
 
 
-# The devicePixelRatio of the window a node lives in, over the calling frame's; 1 when
-# the node's window is cross-origin (its devicePixelRatio cannot be read).
-_RATIO = """function() {
-  try { return this.ownerDocument.defaultView.devicePixelRatio / devicePixelRatio; }
-  catch (e) { return 1; }
-}"""
+# The devicePixelRatio of this frame if the node is in its document, else null.
+_HELD = "function() { return this.ownerDocument === document ? devicePixelRatio : null; }"
 # Seconds a release of a handle may take: best effort, never worth a long wait.
 _RELEASE = 2.0
 # Frames climbed at most from the hit node up to the element's document.
@@ -175,7 +172,7 @@ def _corners(quad: list[float]) -> list[tuple[float, float]]:
     return list(zip(quad[0::2], quad[1::2], strict=True))
 
 
-async def _frame_map(child: Any, parent: Any, frame_id: str) -> tuple[int, _Homography]:
+async def _frame_map(tab: Any, child: Any, parent: Any, frame_id: str) -> tuple[int, _Homography]:
     """Backend id (in *parent*) of the ``<iframe>`` of *frame_id*, and the projective
     map from *child*'s CSS pixels to *parent*'s viewport. Raises
     :class:`ElementNotHittableError` when the frame is seen edge-on (no area, or
@@ -183,49 +180,115 @@ async def _frame_map(child: Any, parent: Any, frame_id: str) -> tuple[int, _Homo
     owner = await send_on_handle(parent, "DOM.getFrameOwner", {"frameId": frame_id})
     backend = owner["backendNodeId"]
     # the model's width and height are the untransformed border box in the <iframe>'s
-    # own (zoomed) CSS pixels, as the document's are; its quads are where that box is
+    # own (zoomed) CSS pixels, as the document's are; its quads are where that box is,
+    # divided by the zoom of the frame holding the <iframe>: multiplied back here
     model = (await send_on_handle(parent, "DOM.getBoxModel", {"backendNodeId": backend}))["model"]
     width, height = model["width"], model["height"]
     if min(width, height) <= 0:
         raise StaleElementError("Element's frame has no box on the page (hidden or empty)")
-    border = _corners(model["border"])
-    if not _convex(border) or _area(model["border"]) < _MIN_DET * width * height:
+    zoom = await _holder_zoom(tab, parent, backend)
+    border = [(x * zoom, y * zoom) for x, y in _corners(model["border"])]
+    if not _convex(border) or _area(model["border"]) * zoom**2 < _MIN_DET * width * height:
         raise _degenerate()
     outer = _Homography.of_rect(width, height, border)
     # the frame's document starts at the content box's corner (inside border and padding)
-    left, top = outer.invert(*_corners(model["content"])[0])
+    corner = _corners(model["content"])[0]
+    left, top = outer.invert(corner[0] * zoom, corner[1] * zoom)
     return backend, outer.then_after(left, top)
 
 
-async def _zoom(element: Element) -> float:
-    """How many of its session's root-frame CSS pixels one CSS pixel of *element*'s own
-    frame is. ``DOM.getContentQuads`` divides a node's quad by its frame's zoom: under a
-    CSS zoom on an ancestor of a same-process ``<iframe>`` the quad is too small by it.
-    The ratio of the two ``devicePixelRatio`` is read in the root's isolated world (page
-    JS cannot fake it there); 1 when there is no such world or the frame is cross-origin
-    to the root (then the hit test refuses a point off the element)."""
+async def _holder_zoom(tab: Any, parent: Any, owner: int) -> float:
+    """The zoom of the frame whose document holds the ``<iframe>`` *owner* (backend id in
+    *parent*), relative to *parent*'s root. Raises :class:`ElementNotHittableError` when
+    it cannot be read: a map off by an unknown zoom would send the click elsewhere."""
+    if (zoom := await _node_zoom(tab, parent, lambda: _known(owner))) is None:
+        raise ElementNotHittableError(
+            "The zoom of the frame holding the element's frame cannot be read: no event sent"
+        )
+    return zoom
+
+
+async def _known(node: int) -> int:
+    return node
+
+
+async def _node_zoom(tab: Any, session: Any, node_of: Callable[[], Awaitable[int]]) -> float | None:
+    """How many of *session*'s root-frame CSS pixels one CSS pixel of the frame holding
+    the backend node ``await node_of()`` (asked only when there are frames) is: Chrome divides a node's quads by the zoom of its frame (a CSS
+    zoom on an ancestor of a same-process ``<iframe>``). Each ``devicePixelRatio`` is read
+    in that frame's isolated world, where page JS cannot fake it, so a frame of another
+    origin than the root's is read too; ``None`` when it cannot be."""
+    tree = (await send_on_handle(session, "Page.getFrameTree", {}))["frameTree"]
+    frames = list(_parents(tree))  # the root first; cross-site frames are not in it
+    if len(frames) == 1:  # no same-process frame: the root holds it
+        return 1.0
+    node = await node_of()
+    for frame_id in frames:
+        if (own := await _ratio_if_holding(tab, session, frame_id, node)) is None:
+            continue
+        if frame_id == frames[0]:
+            return 1.0
+        base = await _pixel_ratio(tab, session, frames[0])
+        return own / base if base else None
+    return None
+
+
+async def _ratio_if_holding(tab: Any, session: Any, frame_id: str, node: int) -> float | None:
+    """``devicePixelRatio`` of *frame_id* if its document holds backend node *node*, asked
+    in the frame's isolated world; ``None`` otherwise or when it cannot be asked."""
     from tellurium.browser.refs import frame_world
 
-    session, tab = element._session, element._tab
-    tree = (await send_on_handle(session, "Page.getFrameTree", {}))["frameTree"]
-    if not tree.get("childFrames"):  # no frame but the root: nothing to undo
-        return 1.0
-    if (context := await frame_world(tab, session, tree["frame"]["id"])) is None:
-        return 1.0
-    node = await _send(element, "DOM.describeNode", {"objectId": await element._resolve()})
-    where = {"backendNodeId": node["node"]["backendNodeId"], "executionContextId": context}
+    if tab is None or (context := await frame_world(tab, session, frame_id)) is None:
+        return None
+    where = {"backendNodeId": node, "executionContextId": context}
     try:
-        resolved = (await _send(element, "DOM.resolveNode", where))["object"].get("objectId")
+        resolved = (await send_on_handle(session, "DOM.resolveNode", where))["object"]
+    except CDPError:  # another origin's node, or a world gone with its document
+        tab._hsim_worlds.pop(frame_id, None)
+        return None
+    if (object_id := resolved.get("objectId")) is None:
+        return None
+    call = {"objectId": object_id, "functionDeclaration": _HELD, "returnByValue": True}
+    try:
+        value = (await send_on_handle(session, "Runtime.callFunctionOn", call))["result"]
     except CDPError:
-        resolved = None
-    if resolved is None:  # a node the root's world cannot reach (another origin)
-        return 1.0
-    try:
-        call = {"objectId": resolved, "functionDeclaration": _RATIO, "returnByValue": True}
-        ratio = (await _send(element, "Runtime.callFunctionOn", call))["result"].get("value")
+        return None
     finally:
-        await session.send("Runtime.releaseObject", {"objectId": resolved}, timeout=_RELEASE)
-    return float(ratio) if isinstance(ratio, int | float) and ratio > 0 else 1.0
+        await session.send("Runtime.releaseObject", {"objectId": object_id}, timeout=_RELEASE)
+    value = value.get("value")
+    ok = isinstance(value, int | float) and not isinstance(value, bool) and value > 0
+    return float(value) if ok else None
+
+
+async def _pixel_ratio(tab: Any, session: Any, frame_id: str) -> float | None:
+    """``devicePixelRatio`` of *frame_id*, read in the tab's isolated world there (made
+    once more if the cached one went with its document); ``None`` when it cannot be."""
+    from tellurium.browser.refs import frame_world
+
+    for _ in range(2):
+        if tab is None or (context := await frame_world(tab, session, frame_id)) is None:
+            return None
+        params = {"expression": "devicePixelRatio", "contextId": context, "returnByValue": True}
+        try:
+            value = (await send_on_handle(session, "Runtime.evaluate", params))["result"]
+        except CDPError:  # the world went with its document
+            tab._hsim_worlds.pop(frame_id, None)
+            continue
+        value = value.get("value")
+        ok = isinstance(value, int | float) and not isinstance(value, bool) and value > 0
+        return float(value) if ok else None
+    return None
+
+
+async def _zoom(element: Element) -> float:
+    """:func:`_node_zoom` of *element*; 1 when it cannot be read (the hit test, in the
+    element's own session, then refuses a point off the element)."""
+
+    async def node_of() -> int:
+        params = {"objectId": await element._resolve()}
+        return (await _send(element, "DOM.describeNode", params))["node"]["backendNodeId"]
+
+    return await _node_zoom(element._tab, element._session, node_of) or 1.0
 
 
 async def content_box(element: Element) -> dict[str, float]:
@@ -243,7 +306,7 @@ async def content_box(element: Element) -> dict[str, float]:
     zoom = await _zoom(element)
     points = [(x * zoom, y * zoom) for x, y in _corners(quad)]
     for link in frame_chain(element._session):
-        _, affine = await _frame_map(*link)
+        _, affine = await _frame_map(element._tab, *link)
         points = [affine.apply(*point) for point in points]
     return _box([coordinate for point in points for coordinate in point])
 
@@ -367,7 +430,7 @@ async def ensure_hit(element: Element, x: float, y: float) -> None:
     each document on the way must hit the ``<iframe>`` that leads to the element."""
     top_x, top_y = x, y
     for link in reversed(frame_chain(element._session)):  # from the tab down
-        owner, affine = await _frame_map(*link)
+        owner, affine = await _frame_map(element._tab, *link)
         parent = link[1]
         hit = await _hit(parent, x, y)
         if hit is None or hit["backendNodeId"] != owner:

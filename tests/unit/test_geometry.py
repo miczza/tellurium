@@ -156,13 +156,20 @@ def test_a_flat_rectangle_maps_like_an_affine_one():
 
 
 class _FrameSession:
-    def __init__(self, border, content=None, width=400, height=300):
+    def __init__(self, border, content=None, width=400, height=300, holder="root"):
         self.model = {"border": border, "content": content or border}
         self.model |= {"width": width, "height": height}
+        # the frames of this process: the root, and the same-process frame holding the
+        # <iframe> when it is not the root (the cross-site frame F1 is in no tree here)
+        self.tree = {"frame": {"id": "root"}}
+        if holder != "root":
+            self.tree["childFrames"] = [{"frame": {"id": holder}}]
 
     async def send(self, method, params=None, timeout=None):
         if method == "DOM.getFrameOwner":
             return {"backendNodeId": 9}
+        if method == "Page.getFrameTree":
+            return {"frameTree": self.tree}
         return {"model": self.model}
 
 
@@ -175,13 +182,13 @@ class _FrameSession:
 )
 async def test_a_frame_seen_edge_on_or_folded_is_not_hittable(border):
     with pytest.raises(geometry.ElementNotHittableError, match="edge-on"):
-        await geometry._frame_map(None, _FrameSession(border), "F1")
+        await geometry._frame_map(None, None, _FrameSession(border), "F1")
 
 
 async def test_a_frame_map_starts_at_the_content_corner():
     border = [100, 50, 500, 50, 500, 350, 100, 350]
     content = [110, 60, 490, 60, 490, 340, 110, 340]
-    owner, homography = await geometry._frame_map(None, _FrameSession(border, content), "F1")
+    owner, homography = await geometry._frame_map(None, None, _FrameSession(border, content), "F1")
     assert owner == 9
     assert homography.apply(0, 0) == pytest.approx((110, 60))
     assert homography.invert(120, 70) == pytest.approx((10, 10))
@@ -199,3 +206,41 @@ def test_a_mirrored_frame_map_inverts(quad):
     homography = geometry._Homography.of_rect(400, 300, quad)
     for u, v in [(10, 10), (200, 150), (390, 290)]:
         assert homography.invert(*homography.apply(u, v)) == pytest.approx((u, v))
+
+
+_BORDER = [100, 50, 500, 50, 500, 350, 100, 350]
+_CONTENT = [110, 60, 490, 60, 490, 340, 110, 340]
+
+
+async def test_a_frame_held_by_a_zoomed_frame_is_mapped_with_that_zoom(monkeypatch):
+    """Chrome divides the <iframe>'s quads by the zoom of the frame holding it."""
+
+    async def held(tab, session, frame_id, node):  # the middle frame holds node 9
+        return 3.0 if (frame_id, node) == ("middle", 9) else None
+
+    async def pixel_ratio(tab, session, frame_id):
+        return {"root": 2.0}.get(frame_id)  # so the middle frame is zoomed 1.5
+
+    monkeypatch.setattr(geometry, "_ratio_if_holding", held)
+    monkeypatch.setattr(geometry, "_pixel_ratio", pixel_ratio)
+    session = _FrameSession(_BORDER, _CONTENT, holder="middle")
+    _, homography = await geometry._frame_map(None, None, session, "F1")
+    assert homography.apply(0, 0) == pytest.approx((165, 90))
+    assert homography.apply(380, 280) == pytest.approx((735, 510))
+
+
+@pytest.mark.parametrize(("holding", "root"), [(None, 1.0), (3.0, None)])
+async def test_a_frame_held_by_a_frame_of_unknown_zoom_is_not_hittable(monkeypatch, holding, root):
+    """No frame says it holds the <iframe>, or the root's ratio cannot be read."""
+
+    async def held(tab, session, frame_id, node):
+        return holding if frame_id == "middle" else None
+
+    async def pixel_ratio(tab, session, frame_id):
+        return root
+
+    monkeypatch.setattr(geometry, "_ratio_if_holding", held)
+    monkeypatch.setattr(geometry, "_pixel_ratio", pixel_ratio)
+    session = _FrameSession(_BORDER, _CONTENT, holder="middle")
+    with pytest.raises(geometry.ElementNotHittableError, match="zoom"):
+        await geometry._frame_map(None, None, session, "F1")
