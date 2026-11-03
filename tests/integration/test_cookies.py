@@ -1,5 +1,7 @@
 """Cookie jar operations against a real Chrome (audit M6, m10)."""
 
+import asyncio
+
 import pytest
 
 from tellurium.browser.cookie import Cookie
@@ -42,7 +44,12 @@ async def test_clear_cookies_for_domain_keeps_the_others(browser):
 async def test_cookies_are_cleared_in_a_page(browser, local_server):
     tab = await browser.get(local_server + "/basic.html")
     await tab.eval("document.cookie = 'seen=1; path=/'")
-    assert [c.name for c in await browser.get_cookies("127.0.0.1")] == ["seen"]
+    # A cookie written by the renderer reaches the browser's store asynchronously:
+    # under load Storage.getCookies can run before it lands.
+    async with asyncio.timeout(5):
+        while not (names := [c.name for c in await browser.get_cookies("127.0.0.1")]):
+            await asyncio.sleep(0.05)
+    assert names == ["seen"]
     await browser.clear_cookies("127.0.0.1")
     assert await tab.eval("document.cookie") == ""
 
