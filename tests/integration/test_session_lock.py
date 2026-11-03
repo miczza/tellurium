@@ -13,6 +13,7 @@ import pytest
 
 from tellurium import Session, SessionBusyError
 from tellurium.session.lock import SessionLock
+from tests.integration.session_child import child_env
 
 _CHILD = str(Path(__file__).with_name("session_child.py"))
 
@@ -23,6 +24,7 @@ async def _hold(path: str) -> asyncio.subprocess.Process:
         _CHILD,
         "hold",
         path,
+        env=child_env(path),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
         start_new_session=True,  # its Chrome too can be killed as a group

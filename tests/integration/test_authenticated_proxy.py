@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
 import shutil
 import ssl
 import subprocess
+import tempfile
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
@@ -397,7 +400,30 @@ async def test_without_credentials_no_forwarder_and_no_fetch():
 # --- ownership ------------------------------------------------------------------
 
 
+def _chromes_under(root: Path) -> set[int]:
+    """Live processes (not zombies) whose command line names a path under *root*."""
+    marker = str(root).encode()
+    found = set()
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            cmdline = Path(f"/proc/{entry}/cmdline").read_bytes()
+            state = Path(f"/proc/{entry}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        except OSError:
+            continue
+        if marker in cmdline and state != "Z":
+            found.add(int(entry))
+    return found
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc"), reason="looks for Chrome in /proc")
 async def test_a_launch_cancelled_with_fetch_on_leaves_nothing_behind(monkeypatch):
+    """Cancelled while Chrome answers the proxy: no ProxyAuth task, no
+    forwarder port, no Chrome process and no temporary profile left."""
+    root = Path(tempfile.mkdtemp(prefix="tlr", dir="/tmp"))  # short: Chrome's socket path
+    monkeypatch.setattr(tempfile, "tempdir", str(root))
+    monkeypatch.setenv("TMPDIR", str(root))
     started = asyncio.Event()
     seen: dict = {}
     real_start = ProxyAuth.start
@@ -405,20 +431,28 @@ async def test_a_launch_cancelled_with_fetch_on_leaves_nothing_behind(monkeypatc
     async def start_then_hang(self):
         await real_start(self)
         seen["auth"] = self
+        seen["chromes"] = _chromes_under(root)
+        seen["profiles"] = sorted(root.glob("tellurium_*"))
         started.set()
         await asyncio.Event().wait()
 
     monkeypatch.setattr(ProxyAuth, "start", start_then_hang)
-    async with FakeProxy() as proxy:
-        launching = asyncio.ensure_future(Browser.launch(headless=True, proxy=_url(proxy)))
-        await asyncio.wait_for(started.wait(), 30)
-        launching.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await launching
-    auth = seen["auth"]
-    assert not auth._active and not auth._tasks
-    assert not _proxy_auth_tasks()
-    port = auth._port
-    with pytest.raises(OSError):
-        _, writer = await asyncio.open_connection("127.0.0.1", port)
-        writer.close()
+    try:
+        async with FakeProxy() as proxy:
+            launching = asyncio.ensure_future(Browser.launch(headless=True, proxy=_url(proxy)))
+            await asyncio.wait_for(started.wait(), 30)
+            launching.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await launching
+        auth = seen["auth"]
+        assert not auth._active and not auth._tasks
+        assert not _proxy_auth_tasks()
+        port = auth._port
+        with pytest.raises(OSError):
+            _, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.close()
+        assert seen["chromes"] and seen["profiles"]  # they did exist
+        assert not _chromes_under(root), "Chrome outlived the cancelled launch"
+        assert not list(root.glob("tellurium_*")), "the temporary profile was left behind"
+    finally:
+        shutil.rmtree(root, ignore_errors=True)

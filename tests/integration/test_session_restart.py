@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.integration.session_child import child_env
+
 _CHILD = str(Path(__file__).with_name("session_child.py"))
 _TIMEOUT = 90.0
 
@@ -19,6 +21,7 @@ async def _run_child(*args: str) -> str:
         sys.executable,
         _CHILD,
         *args,
+        env=child_env(args[1]),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )

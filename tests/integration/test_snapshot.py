@@ -201,7 +201,15 @@ _COUNT_NODES = """(() => {
 })()"""
 
 
+#: How many times Chrome's own AX tree may take, at most, for the whole snapshot.
+SNAPSHOT_OVER_AX_TREE = 2.0
+
+
 async def test_five_thousand_node_page_snapshot_time(browser, local_server):
+    """The snapshot of a 5000-node page against Chrome's own cost for its AX
+    tree, measured in turns in the same test (A/B, five rounds, the best of
+    each): a loaded machine slows both, so the ratio holds where a limit in
+    milliseconds would not."""
     tab = browser.main_tab
     await tab.get(f"{local_server}/snapshot_list.html")
     elements = await tab.eval("document.getElementsByTagName('*').length")
@@ -209,13 +217,16 @@ async def test_five_thousand_node_page_snapshot_time(browser, local_server):
     assert dom_nodes >= 5000
     refs = _watched(tab)
     await take_snapshot(tab._session, refs)  # warm-up: Chrome builds its AX tree once
-    runs = []
+    references, runs = [], []
     for _ in range(5):
+        start = time.perf_counter()
+        await tab._session.send("Accessibility.getFullAXTree", {})
+        references.append((time.perf_counter() - start) * 1000)
         start = time.perf_counter()
         text = await take_snapshot(tab._session, refs)
         runs.append((time.perf_counter() - start) * 1000)
     # the best of five: a busy machine only ever adds time, never takes it away
-    best = min(runs)
+    best, reference = min(runs), min(references)
     METRICS.mkdir(parents=True, exist_ok=True)
     (METRICS / "A1-snapshot.json").write_text(
         json.dumps(
@@ -227,11 +238,14 @@ async def test_five_thousand_node_page_snapshot_time(browser, local_server):
                 "runs_ms": [round(r, 1) for r in runs],
                 "min_ms": round(best, 1),
                 "median_ms": round(statistics.median(runs), 1),
-                "limit_ms": 300,
+                "ax_tree_min_ms": round(reference, 1),
+                "limit_ratio": SNAPSHOT_OVER_AX_TREE,
             }
         )
     )
-    assert best < 300, f"snapshot best {best:.0f} ms over {runs}"
+    assert best <= reference * SNAPSHOT_OVER_AX_TREE, (
+        f"snapshot best {best:.0f} ms, AX tree best {reference:.0f} ms: {runs} / {references}"
+    )
 
 
 async def test_ref_of_a_rerendered_node_is_stale_not_another_element(browser, local_server):

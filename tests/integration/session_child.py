@@ -8,17 +8,23 @@ closes with a Chrome that dies before committing that last change (as it can
 on SIGTERM). ``python session_child.py read PATH`` opens it again and prints
 its cookies as a JSON object, name to value. ``python session_child.py hold
 PATH`` opens it, prints ``ready`` and waits until it is killed.
+
+The tests start it with :func:`child_env`: killed with SIGKILL, it cannot
+remove its temporary folders, so they go in the test's own tmp_path.
 """
 
 from __future__ import annotations
 
 import asyncio
+import atexit
+import contextlib
 import json
 import os
 import signal
 import sqlite3
 import sys
 import time
+import uuid
 
 from tellurium import Cookie, Session
 
@@ -37,6 +43,30 @@ async def read(path: str) -> None:
     async with session.start(headless=True) as browser:
         jar = {c.name: c.value for c in await browser.get_cookies("127.0.0.1")}
     print(json.dumps(jar, sort_keys=True), flush=True)
+
+
+_LINKS: list[str] = []
+
+
+def child_env(path: str) -> dict[str, str]:
+    """The environment for a child holding the session at *path*: its ``TMPDIR``
+    is a hidden folder next to it (inside the test's tmp_path; a pool skips
+    it), reached through a short link in /tmp, since Chrome's singleton
+    socket path must stay short. The links go when the tests end."""
+    tmpdir = os.path.join(os.path.dirname(os.path.abspath(path)), ".child-tmp")
+    os.makedirs(tmpdir, exist_ok=True)
+    link = os.path.join("/tmp", f"tlrc-{uuid.uuid4().hex[:10]}")
+    os.symlink(tmpdir, link)
+    if not _LINKS:
+        atexit.register(_unlink_all)
+    _LINKS.append(link)
+    return {**os.environ, "TMPDIR": link}
+
+
+def _unlink_all() -> None:
+    for link in _LINKS:
+        with contextlib.suppress(OSError):
+            os.unlink(link)
 
 
 def _token(value: str) -> Cookie:

@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from tellurium.session import SessionBusyError, SessionPool
+from tests.integration.session_child import child_env
 
 _CHILD = str(Path(__file__).with_name("session_child.py"))
 
@@ -107,6 +108,7 @@ async def test_a_session_open_in_another_process(tmp_path):
         _CHILD,
         "hold",
         path,
+        env=child_env(path),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
         start_new_session=True,
