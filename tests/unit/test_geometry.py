@@ -71,7 +71,11 @@ async def test_content_box_is_the_largest_fragment_in_page_coordinates():
     )
     box = await geometry.content_box(_Element(session))
     assert box == {"x": 400, "y": 300, "width": 80, "height": 30}
-    assert session.calls == [("DOM.getContentQuads", {"objectId": "obj-1"})]
+    # no frame in the page: no zoom to undo, nothing asked past the frame tree
+    assert session.calls == [
+        ("DOM.getContentQuads", {"objectId": "obj-1"}),
+        ("Page.getFrameTree", {}),
+    ]
 
 
 @pytest.mark.parametrize("answer", [{"quads": []}, {}, _quads(10, 10, 0, 20)])
@@ -121,3 +125,122 @@ def test_frame_chain_climbs_from_an_oopif_to_the_tab():
     geometry.link_frame(inner, outer, "F2")
     assert geometry.frame_chain(inner) == [(inner, outer, "F2"), (outer, tab, "F1")]
     assert geometry.frame_chain(tab) == []
+
+
+# A rectangle 400x300 seen in perspective: its right side is farther, so shorter.
+_TILTED = [(100.0, 50.0), (420.0, 90.0), (420.0, 290.0), (100.0, 350.0)]
+
+
+def test_a_frame_map_takes_the_corners_of_the_frame_to_its_quad():
+    homography = geometry._Homography.of_rect(400, 300, _TILTED)
+    for (u, v), point in zip([(0, 0), (400, 0), (400, 300), (0, 300)], _TILTED, strict=True):
+        assert homography.apply(u, v) == pytest.approx(point)
+
+
+def test_a_frame_map_in_perspective_is_not_affine_and_inverts():
+    homography = geometry._Homography.of_rect(400, 300, _TILTED)
+    # the centre of the frame is not the average of the corners in perspective: it is
+    # nearer the far (short) side
+    x, y = homography.apply(200, 150)
+    assert x > 260 + 1
+    for u, v in [(10, 10), (200, 150), (390, 20), (35.5, 280.25)]:
+        assert homography.invert(*homography.apply(u, v)) == pytest.approx((u, v))
+    moved = homography.then_after(10, 20)
+    assert moved.apply(5, 5) == pytest.approx(homography.apply(15, 25))
+
+
+def test_a_flat_rectangle_maps_like_an_affine_one():
+    flat = [(10.0, 20.0), (210.0, 20.0), (210.0, 120.0), (10.0, 120.0)]
+    homography = geometry._Homography.of_rect(100, 50, flat)
+    assert homography.apply(50, 25) == pytest.approx((110, 70))
+
+
+class _FrameSession:
+    def __init__(self, border, content=None, width=400, height=300, holder="root"):
+        self.model = {"border": border, "content": content or border}
+        self.model |= {"width": width, "height": height}
+        # the frames of this process: the root, and the same-process frame holding the
+        # <iframe> when it is not the root (the cross-site frame F1 is in no tree here)
+        self.tree = {"frame": {"id": "root"}}
+        if holder != "root":
+            self.tree["childFrames"] = [{"frame": {"id": holder}}]
+
+    async def send(self, method, params=None, timeout=None):
+        if method == "DOM.getFrameOwner":
+            return {"backendNodeId": 9}
+        if method == "Page.getFrameTree":
+            return {"frameTree": self.tree}
+        return {"model": self.model}
+
+
+@pytest.mark.parametrize(
+    "border",
+    [
+        [100, 50, 100.2, 50, 100.2, 350, 100, 350],  # edge-on: no area
+        [100, 50, 420, 350, 420, 50, 100, 350],  # folded: a bow tie
+    ],
+)
+async def test_a_frame_seen_edge_on_or_folded_is_not_hittable(border):
+    with pytest.raises(geometry.ElementNotHittableError, match="edge-on"):
+        await geometry._frame_map(None, None, _FrameSession(border), "F1")
+
+
+async def test_a_frame_map_starts_at_the_content_corner():
+    border = [100, 50, 500, 50, 500, 350, 100, 350]
+    content = [110, 60, 490, 60, 490, 340, 110, 340]
+    owner, homography = await geometry._frame_map(None, None, _FrameSession(border, content), "F1")
+    assert owner == 9
+    assert homography.apply(0, 0) == pytest.approx((110, 60))
+    assert homography.invert(120, 70) == pytest.approx((10, 10))
+
+
+@pytest.mark.parametrize(
+    "quad",
+    [
+        [(500.0, 50.0), (100.0, 50.0), (100.0, 350.0), (500.0, 350.0)],  # scaleX(-1)
+        [(100.0, 350.0), (500.0, 350.0), (500.0, 50.0), (100.0, 50.0)],  # scaleY(-1)
+        [(420.0, 90.0), (100.0, 50.0), (100.0, 350.0), (420.0, 290.0)],  # mirrored, tilted
+    ],
+)
+def test_a_mirrored_frame_map_inverts(quad):
+    homography = geometry._Homography.of_rect(400, 300, quad)
+    for u, v in [(10, 10), (200, 150), (390, 290)]:
+        assert homography.invert(*homography.apply(u, v)) == pytest.approx((u, v))
+
+
+_BORDER = [100, 50, 500, 50, 500, 350, 100, 350]
+_CONTENT = [110, 60, 490, 60, 490, 340, 110, 340]
+
+
+async def test_a_frame_held_by_a_zoomed_frame_is_mapped_with_that_zoom(monkeypatch):
+    """Chrome divides the <iframe>'s quads by the zoom of the frame holding it."""
+
+    async def held(tab, session, frame_id, node):  # the middle frame holds node 9
+        return 3.0 if (frame_id, node) == ("middle", 9) else None
+
+    async def pixel_ratio(tab, session, frame_id):
+        return {"root": 2.0}.get(frame_id)  # so the middle frame is zoomed 1.5
+
+    monkeypatch.setattr(geometry, "_ratio_if_holding", held)
+    monkeypatch.setattr(geometry, "_pixel_ratio", pixel_ratio)
+    session = _FrameSession(_BORDER, _CONTENT, holder="middle")
+    _, homography = await geometry._frame_map(None, None, session, "F1")
+    assert homography.apply(0, 0) == pytest.approx((165, 90))
+    assert homography.apply(380, 280) == pytest.approx((735, 510))
+
+
+@pytest.mark.parametrize(("holding", "root"), [(None, 1.0), (3.0, None)])
+async def test_a_frame_held_by_a_frame_of_unknown_zoom_is_not_hittable(monkeypatch, holding, root):
+    """No frame says it holds the <iframe>, or the root's ratio cannot be read."""
+
+    async def held(tab, session, frame_id, node):
+        return holding if frame_id == "middle" else None
+
+    async def pixel_ratio(tab, session, frame_id):
+        return root
+
+    monkeypatch.setattr(geometry, "_ratio_if_holding", held)
+    monkeypatch.setattr(geometry, "_pixel_ratio", pixel_ratio)
+    session = _FrameSession(_BORDER, _CONTENT, holder="middle")
+    with pytest.raises(geometry.ElementNotHittableError, match="zoom"):
+        await geometry._frame_map(None, None, session, "F1")

@@ -7,6 +7,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Tab.keyboard_press("Shift+<digit or symbol>")` types the US layout's shifted character
+  (`Shift+1` -> `!`, `Shift+/` -> `?`), with `key`, `code` (`Digit1`) and
+  `windowsVirtualKeyCode` (49) as a real Shift press gives them. Every key event now
+  carries the DOM `code` of its physical key. Other layouts are not modelled.
 - `tellurium.Multiplexer(size, *, proxies=(), warm=0, acquire_timeout=30, **launch)`: one
   CDP endpoint in front of a pool of Chromes, one Chrome per WebSocket connection
   (`async with`, `await mux.serve(host, port)` until cancelled, `mux.url`, `mux.token`,
@@ -500,6 +504,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `Tab.keyboard_press` of a character typed with Shift on the US layout, pressed alone
+  (`"!"`, `"?"`, `"+"`), is now pressed as a keyboard does it: Shift held (`shiftKey`
+  true, modifier bit 8) on its physical key (`Digit1`, keycode 49), the same events as
+  `"Shift+1"`; it used to send keycode 0 and no Shift. `"Control++"` is therefore
+  Control and Shift on `=`. Letters keep their modifiers (`"Control+A"` has no Shift).
+- `Tab.eval_on`: only a value whose getter throws while Chrome serializes it (CDP
+  `-32603` on returning the value) raises `RuntimeError`; any other `-32603` of
+  `Runtime.callFunctionOn` now comes out as the `CDPError` Chrome gave. The function runs
+  once, as before; its result is read back by value in a second call.
+
 - `Browser.launch(proxy=<with credentials>)`: Chrome answers the forwarder's challenge
   through CDP `Fetch` on the browser session (`handleAuthRequests`, every URL), enabled
   before `launch` returns and covering every context, popup, worker and service worker.
@@ -641,6 +655,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `tellurium.mcp.auth` no longer re-exports `hmac` and `os` (kept only for old tests).
 
 ### Fixed
+
+- A human click (and `hover()`) into an iframe drawn in 3D (`perspective`, `rotateX/Y`,
+  `matrix3d`), cross-site or not and at any depth, reaches its element instead of raising
+  `ElementNotHittableError`: a cross-site frame's points are mapped through the
+  projective map from its box's four corners to where Chrome draws them, exact in
+  perspective too, and for a mirrored frame (`scaleX(-1)`, `scaleY(-1)`). A frame seen
+  edge-on (no area, or folded) still takes no click.
+- A human click into a same-process iframe under a CSS `zoom` on one of its ancestors
+  lands on its element: Chrome reports that frame's boxes divided by its zoom, which is
+  now undone (each frame's `devicePixelRatio` is read in its own isolated world, so a
+  frame of another origin than the tab's is read too); it used to aim at the wrong
+  point and raise `ElementNotHittableError`.
+- A human click into a cross-site iframe held by a same-process frame under a CSS zoom
+  no longer lands on another element: the `<iframe>`'s box, which Chrome divides by the
+  zoom of the frame holding it, is scaled back before it is mapped. When that zoom
+  cannot be read, the click is refused with `ElementNotHittableError`, never sent.
+- A human click on a node of another origin than the hit frame's world no longer fails
+  with `KeyError: 'objectId'`: Chrome resolves it to no object, read as "not inside".
+- `Tab.screenshot(full_page=True)` before the tab's first navigation has the CSS size
+  under a device pixel ratio and gives the scrollbar back, as after a navigation: the
+  main frame's id, not yet known from a `Page.frameNavigated`, is asked of Chrome.
 
 - The local forwarder in front of an authenticated proxy is no longer an open proxy on
   `127.0.0.1`: every request head (plain requests and `CONNECT`, each one on a keep-alive

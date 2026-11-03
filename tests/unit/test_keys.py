@@ -20,7 +20,7 @@ def test_modifiers_and_printable_keys():
     assert keys.parse("Meta+c").modifiers == 4
     assert keys.parse("7") == ("7", 0, 55, "7")
     assert keys.parse(";").code == 186
-    assert keys.parse("+") == ("+", 0, 0, "+")
+    assert keys.parse("+") == ("+", 8, 187, "+")  # Shift held, as on a keyboard
 
 
 @pytest.mark.parametrize("combo", ["Entr", "NotAKey", "", "ab"])
@@ -125,7 +125,7 @@ def test_typing_events_of_a_named_key_carry_no_text():
 
 
 def test_plus_is_a_key_after_modifiers_too():
-    assert keys.parse("Control++") == ("+", 2, 0, "+")
+    assert keys.parse("Control++") == ("+", 2 | 8, 187, "+")
     assert keys.parse("Control+Shift++").modifiers == 2 | 8
     with pytest.raises(ValueError, match="Unknown key"):
         keys.parse("Control+")
@@ -134,7 +134,63 @@ def test_plus_is_a_key_after_modifiers_too():
 def test_shift_and_a_letter_is_the_capital_letter():
     assert keys.parse("Shift+a") == ("A", 8, 65, "A")
     assert keys.parse("Shift+A") == ("A", 8, 65, "A")
-    assert keys.parse("Shift+1") == ("1", 8, 49, "1")  # no layout table for the rest
+
+
+@pytest.mark.parametrize(
+    ("combo", "expected"),
+    [
+        ("Shift+1", ("!", 8, 49, "!")),
+        ("Shift+2", ("@", 8, 50, "@")),
+        ("Shift+0", (")", 8, 48, ")")),
+        ("Shift+/", ("?", 8, 191, "?")),
+        ("Shift+=", ("+", 8, 187, "+")),
+        ("Shift+`", ("~", 8, 192, "~")),
+        ("Shift+'", ('"', 8, 222, '"')),
+        ("Shift+\\", ("|", 8, 220, "|")),
+        ("Shift++", ("+", 8, 187, "+")),  # already the shifted character
+    ],
+)
+def test_shift_and_a_digit_or_symbol_is_the_us_layout_character(combo, expected):
+    assert keys.parse(combo) == expected
+
+
+def test_a_shifted_character_alone_is_pressed_with_shift_on_its_physical_key():
+    assert keys.parse("!") == ("!", 8, 49, "!")
+    assert keys.parse("?") == ("?", 8, 191, "?")
+    assert keys.parse("Alt+@") == ("@", 1 | 8, 50, "@")
+    assert keys.parse("1") == ("1", 0, 49, "1")  # an unshifted one: no Shift
+    assert keys.parse("A").modifiers == 0  # a letter keeps its modifiers: Control+A stays
+
+
+@pytest.mark.parametrize(
+    ("combo", "code"),
+    [
+        ("Shift+1", "Digit1"),
+        ("!", "Digit1"),
+        ("Shift+/", "Slash"),
+        ("a", "KeyA"),
+        ("Shift+a", "KeyA"),
+        ("Enter", "Enter"),
+        ("Space", "Space"),
+        ("ArrowDown", "ArrowDown"),
+        (";", "Semicolon"),
+    ],
+)
+async def test_every_event_carries_the_dom_code_of_the_physical_key(combo, code):
+    events = await _sent(combo)
+    assert all(e["code"] == code for e in events)
+
+
+async def test_shift_and_a_digit_types_its_shifted_text_with_the_digit_key():
+    events = await _sent("Shift+1")
+    assert [e["type"] for e in events] == ["rawKeyDown", "char", "keyUp"]
+    assert all(e["key"] == "!" and e["windowsVirtualKeyCode"] == 49 for e in events)
+    assert all(e["modifiers"] == 8 for e in events)
+    assert events[1]["text"] == "!"
+
+
+def test_a_key_without_a_us_layout_position_has_no_dom_code():
+    assert "code" not in keys.event(keys.parse("é"), "keyUp")
 
 
 def test_a_newline_is_typed_as_enter():

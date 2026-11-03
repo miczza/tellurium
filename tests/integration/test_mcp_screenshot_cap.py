@@ -97,3 +97,27 @@ async def test_full_page_leaves_a_scrolled_body_scroller_alone(any_browser, loca
         reply = await pages._screenshot(_Pool(tab), {"targetId": "t1", "fullPage": True})
         assert reply.image[20:24] == (4000).to_bytes(4, "big")
         await check_left_alone(tab, before)
+
+
+async def test_full_page_of_a_quirks_mode_page_gives_the_scrollbar_back(any_browser, local_server):
+    """No doctype: the tool's capture (the same ``capture_beyond`` as ``Tab.screenshot``)
+    has the whole page and gives the viewport's scrollbar back, scroll kept (P3 [12])."""
+    from tests.integration.test_tab_screenshot import _FRAMES, _QUIRKS_LAYOUT
+
+    tab = any_browser.main_tab
+    await tab.get(local_server + "/quirks.html")
+    await tab.eval(
+        "new Promise(r => { addEventListener('scroll', r, {once: true}); scrollTo(0, 1000) })",
+        timeout=10,
+    )
+    await tab.eval(_FRAMES)
+    await tab.eval("window.scrolls = 0")
+    before = await tab.eval(_QUIRKS_LAYOUT)
+    assert before[5] == "BackCompat" and before[0] < before[1] and before[4] == 1000
+    for _ in range(2):
+        reply = await pages._screenshot(_Pool(tab), {"targetId": "t1", "fullPage": True})
+        assert reply.image_type == "image/png"
+        assert reply.image[16:24] == before[1].to_bytes(4, "big") + (4000).to_bytes(4, "big")
+        await tab.eval(_FRAMES)
+        assert await tab.eval(_QUIRKS_LAYOUT) == before
+        assert await tab.eval("window.scrolls") == 0

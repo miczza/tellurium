@@ -149,6 +149,12 @@ asyncio.run(main("http://127.0.0.1:8000/download.html"))
   snapshot gave out raises `LookupError`. Take a new snapshot and retry.
 - **Frames**: same-process iframes are part of the snapshot and their refs
   work like any other; a cross-site iframe shows as `- iframe "<url>" [oopif]`.
+  A human click reaches an element in an iframe that is zoomed (CSS `zoom`, on it
+  or an ancestor), turned, or drawn in 3D (`perspective`, `matrix3d`), at any
+  depth, mirrored too, cross-site frames inside zoomed same-process ones included; a
+  frame seen edge-on takes no click (`ElementNotHittableError`). When the zoom of a
+  frame on the way cannot be read (no isolated world there), the click is refused
+  with `ElementNotHittableError`, never sent elsewhere.
 - **Downloads**: `tab.expect_download(timeout=30)` takes the next download of
   the tab (its iframes included). `download.url`, `suggested_filename`,
   `await download.path()`, `await download.save_as(path)`, `await
@@ -606,6 +612,8 @@ data = await tab.eval("JSON.parse(document.body.dataset.config)")
 
 # Evaluate on a specific element
 text = await tab.eval_on("h1", "el => el.textContent")
+# a JS exception, also from a getter of the value returned, raises RuntimeError;
+# a value Chrome cannot return (cyclic, BigInt) or any other CDP failure, CDPError
 
 # Inject script (runs on every page load)
 await tab.add_script("window.__injected = true;")
@@ -624,6 +632,7 @@ await tab.mouse_click(100, 200, human=True) # Human trajectory + click
 await tab.keyboard_press("Enter")             # submits the focused form
 await tab.keyboard_press("Tab")
 await tab.keyboard_press("Control+a")         # combos: Control, Alt, Shift, Meta
+await tab.keyboard_press("Shift+1")           # types "!": Shift follows the US layout
 await tab.keyboard_press("ArrowDown", human=True)  # holds the key 40-110 ms
 # An unknown key or modifier ("Entr", "Hyper+a") raises ValueError, sending nothing
 await tab.keyboard_type("Hello world")

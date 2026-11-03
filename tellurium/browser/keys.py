@@ -43,6 +43,18 @@ _MODIFIERS = {
 }
 _PUNCTUATION = {";": 186, "=": 187, ",": 188, "-": 189, ".": 190, "/": 191, "`": 192}
 _PUNCTUATION |= {"[": 219, "\\": 220, "]": 221, "'": 222, " ": 32}
+# US layout: what Shift makes of a digit or symbol key (the layout of ``keyCode`` in CDP)
+_SHIFTED = dict(zip("`1234567890-=[]\\;',./", '~!@#$%^&*()_+{}|:"<>?', strict=True))
+_PHYSICAL = {shifted: base for base, shifted in _SHIFTED.items()}
+# DOM ``code`` of the punctuation keys
+_PUNCTUATION_CODE = dict(
+    zip(
+        "`-=[]\\;',./ ",
+        "Backquote Minus Equal BracketLeft BracketRight Backslash Semicolon Quote "
+        "Comma Period Slash Space".split(),
+        strict=True,
+    )
+)
 
 Send = Callable[[str, dict[str, Any]], Awaitable[Any]]
 
@@ -74,28 +86,50 @@ def parse(combo: str) -> Key:
         code, text = NAMED[key]
         return Key(" " if key == "Space" else key, bits, code, text)
     if len(key) == 1 and key.isprintable():
-        if key.isalnum() and key.isascii():
-            code = ord(key.upper())
+        physical = _PHYSICAL.get(key, key)  # "!" is typed with the "1" key
+        if physical.isalnum() and physical.isascii():
+            code = ord(physical.upper())
         else:
-            code = _PUNCTUATION.get(key, 0)
-        if bits & SHIFT and key.isascii() and key.isalpha():
-            key = key.upper()  # the letters' shifted text needs no layout table
+            code = _PUNCTUATION.get(physical, 0)
+        if key in _PHYSICAL:  # "!" alone: a real press holds Shift for it, as Shift+1
+            bits |= SHIFT
+        elif bits & SHIFT and key.isascii():
+            key = key.upper() if key.isalpha() else _SHIFTED.get(key, key)
         return Key(key, bits, code, key)
     names = ", ".join(sorted(NAMED))
     raise ValueError(f"Unknown key {key!r}: use one character or one of {names}")
+
+
+def dom_code(key: str) -> str:
+    """The DOM ``code`` of the physical key (US layout) that types *key*: ``"!"`` ->
+    ``"Digit1"``, ``"a"`` -> ``"KeyA"``, ``"Enter"`` -> ``"Enter"``; ``""`` when no
+    key of the layout types it."""
+    if key in NAMED:
+        return key
+    physical = _PHYSICAL.get(key, key)
+    if len(physical) != 1 or not physical.isascii():
+        return ""
+    if physical.isalpha():
+        return f"Key{physical.upper()}"
+    if physical.isdigit():
+        return f"Digit{physical}"
+    return _PUNCTUATION_CODE.get(physical, "")
 
 
 def event(key: Key, kind: str) -> dict[str, Any]:
     """The ``Input.dispatchKeyEvent`` parameters of one *kind* of event for *key*
     (no text: only a ``char`` event carries it)."""
     code = key.code
-    return {
+    params = {
         "type": kind,
         "key": key.key,
         "modifiers": key.modifiers,
         "windowsVirtualKeyCode": code,
         "nativeVirtualKeyCode": code,
     }
+    if physical := dom_code(key.key):
+        params["code"] = physical
+    return params
 
 
 async def press(send: Send, combo: str, *, human: bool = False) -> None:

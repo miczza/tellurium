@@ -108,3 +108,39 @@ async def test_a_value_that_throws_when_returned_is_a_runtime_error(page, expres
     with pytest.raises(RuntimeError, match=r"eval_on\('#content'\) failed"):
         await page.eval_on("#content", expression)
     assert await page.eval("window.count") == 1
+
+
+async def test_another_internal_error_is_the_cdp_error(page):
+    """Only a value Chrome fails to serialize is a ``RuntimeError``: any other -32603
+    of ``Runtime.callFunctionOn`` comes out as Chrome gave it (P3 [11])."""
+    from tellurium.cdp.types import CDPError
+
+    send = page._session.send
+
+    async def failing(method, params=None, **kwargs):
+        if method == "Runtime.callFunctionOn":
+            raise CDPError("Internal error", -32603)
+        return await send(method, params, **kwargs)
+
+    page._session.send = failing
+    try:
+        with pytest.raises(CDPError) as raised:
+            await page.eval_on("#content", "el => el.id")
+    finally:
+        page._session.send = send
+    assert not isinstance(raised.value, RuntimeError) and raised.value.code == -32603
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "el => { const a = {}; a.a = a; return a }",  # Chrome refuses: not a JS exception
+        "el => 10n",
+    ],
+)
+async def test_a_value_chrome_cannot_return_stays_a_cdp_error(page, expression):
+    from tellurium.cdp.types import CDPError
+
+    with pytest.raises(CDPError):
+        await page.eval_on("#content", expression)
+    assert await page.eval_on("#content", "el => el.id") == "content"  # the tab still works

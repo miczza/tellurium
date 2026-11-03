@@ -68,6 +68,28 @@ async def test_shift_and_a_letter_types_the_capital(page):
     assert await page.eval("document.getElementById('second').value") == "A+"
 
 
+async def test_shift_and_a_digit_or_symbol_types_the_us_layout_character(page):
+    await page.eval(
+        """(() => {
+            const field = document.getElementById('second');
+            window.seen = [];
+            field.addEventListener('keydown', (e) =>
+                window.seen.push([e.key, e.code, e.keyCode, e.shiftKey]));
+            field.focus();
+        })()"""
+    )
+    for combo in ("Shift+1", "Shift+/", "Shift+2", "!", "1"):
+        await page.keyboard_press(combo)
+    assert await page.eval("document.getElementById('second').value") == "!?@!1"
+    assert await page.eval("window.seen") == [
+        ["!", "Digit1", 49, True],
+        ["?", "Slash", 191, True],
+        ["@", "Digit2", 50, True],
+        ["!", "Digit1", 49, True],  # alone, a shifted symbol is pressed with Shift too
+        ["1", "Digit1", 49, False],
+    ]
+
+
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
 @pytest.mark.parametrize("human", [False, True])
 async def test_a_newline_is_enter_in_a_textarea(page, human, newline):

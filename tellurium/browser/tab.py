@@ -284,37 +284,37 @@ class Tab:
         *expression* is a function (``"el => el.id"``, ``"() => this.id"``,
         ``"function() { return this.id; }"``), called with the element as ``this``
         and as its argument; an expression (``"this.id"``); or a function body
-        (``"return this.id"``). A JavaScript exception raises ``RuntimeError``.
-        *timeout* bounds each CDP command (default: the session's, 30 s).
+        (``"return this.id"``). A JavaScript exception, also from a getter of the value
+        returned, raises ``RuntimeError``. *timeout* bounds each CDP command (default 30 s).
         """
         send = self._session.send
         doc = await send("DOM.getDocument", {"depth": 0}, timeout=timeout)
-        query = await send(
-            "DOM.querySelector",
-            {"nodeId": doc["root"]["nodeId"], "selector": css_selector(selector)},
-            timeout=timeout,
-        )
-        node_id = query.get("nodeId", 0)
-        if not node_id:
+        selected = {"nodeId": doc["root"]["nodeId"], "selector": css_selector(selector)}
+        if not (node_id := (await send("DOM.querySelector", selected, timeout=timeout))["nodeId"]):
             raise LookupError(f"No element matching {selector!r}")
         node = {"nodeId": node_id, "objectGroup": self._handles.name}
-        object_id = (await send("DOM.resolveNode", node, timeout=timeout))["object"]["objectId"]
-        call = {"objectId": object_id, "returnByValue": True, "awaitPromise": True}
+        kept = [(await send("DOM.resolveNode", node, timeout=timeout))["object"]["objectId"]]
+        call = {"objectId": kept[0], "awaitPromise": True}
         try:  # as a function or an expression; else, if it does not compile, as a body
             for source in (f"(\n{expression}\n)", f"async function() {{\n{expression}\n}}"):
                 call["functionDeclaration"] = _EVAL_ON_JS % source
+                res = await send("Runtime.callFunctionOn", call, timeout=timeout)
+                if not _not_compiled(res):  # it ran: the wrapper caught any throw
+                    break
+            if "exceptionDetails" not in res and (ran := res["result"].get("objectId")):
+                kept.append(ran)  # only now does Chrome serialize what it returned
+                call |= {"objectId": ran, "returnByValue": True}
+                call["functionDeclaration"] = "function() { return this; }"
                 try:
                     res = await send("Runtime.callFunctionOn", call, timeout=timeout)
-                except CDPError as exc:  # the value threw while Chrome serialized it
+                except CDPError as exc:  # a getter of the value threw meanwhile
                     if exc.code != -32603:
                         raise
                     raise RuntimeError(f"eval_on({selector!r}) failed: {exc}") from None
-                if not _not_compiled(res):  # it ran: the wrapper caught any throw
-                    break
         finally:
-            self._handles.discard(object_id)
-        out = res.get("result", {}).get("value")
-        if "exceptionDetails" in res or not isinstance(out, dict):
+            for object_id in kept:
+                self._handles.discard(object_id)
+        if "exceptionDetails" in res or not isinstance(out := res["result"].get("value"), dict):
             out = {}  # it did not run (or the thrown value is in "result")
         if not out.get("ok"):
             error = out.get("error") or res.get("result", {}).get("description")
