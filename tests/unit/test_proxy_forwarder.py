@@ -460,3 +460,68 @@ async def test_the_secret_never_shows_in_repr_or_logs(caplog):
         unrelated.port  # noqa: B018 - not started
     assert secret not in text
     assert _secret(unrelated) not in repr(unrelated) + str(err.value)
+
+
+async def test_a_mute_connection_is_closed_after_the_head_timeout():
+    async with FakeUpstream() as up, _forwarder(up) as fwd:
+        fwd.head_timeout = 0.3
+        connections = [await asyncio.open_connection("127.0.0.1", fwd.port) for _ in range(20)]
+        for reader, writer in connections:
+            assert await asyncio.wait_for(reader.read(), STEP) == b""
+            writer.close()
+        for _ in range(100):  # the handlers end with their connections
+            if not fwd._clients:
+                break
+            await asyncio.sleep(0.01)
+        assert not fwd._clients
+    assert up.connections == 0
+
+
+async def test_a_slow_head_is_cut_at_the_head_timeout():
+    async with FakeUpstream() as up, _forwarder(up) as fwd:
+        fwd.head_timeout = 0.3
+        reader, writer = await asyncio.open_connection("127.0.0.1", fwd.port)
+        writer.write(b"GET http://site.test/ HTTP/1.1\r\n" + _auth(fwd))  # never ends
+        assert await asyncio.wait_for(reader.read(), STEP) == b""
+        writer.close()
+    assert up.connections == 0
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        [b"Proxy-Authorization : {tok}"],  # space before the colon
+        [b"Proxy-Authorization\t: {tok}"],
+        [b"X-Filler: a", b" Proxy-Authorization: {tok}"],  # obs-fold
+        [b"Proxy-Authorization: {tok}", b"X-Filler: a", b"\tProxy-Authorization: {tok}"],
+        [b"Proxy-Authorization: {tok}", b" Proxy-Authorization : {tok}"],
+        [b"Proxy-Authorization: {tok}", b"Proxy Authorization: {tok}"],
+        [b"Proxy-Authorization: {tok}", b"no colon here"],
+    ],
+    ids=["space", "tab", "fold", "fold-tab", "both", "space-in-name", "no-colon"],
+)
+@pytest.mark.parametrize("method", [b"GET http://site.test/", b"CONNECT site.test:443"])
+async def test_a_malformed_header_is_refused_and_the_secret_never_leaves(lines, method):
+    async with FakeUpstream() as up, _forwarder(up) as fwd:
+        token = fwd.auth_header.encode()
+        head = method + b" HTTP/1.1\r\n"
+        head += b"".join(line.replace(b"{tok}", token) + b"\r\n" for line in lines)
+        reader, writer = await asyncio.open_connection("127.0.0.1", fwd.port)
+        writer.write(head + b"\r\n")
+        _assert_challenge(*await _refused(reader))
+        writer.close()
+    assert up.connections == 0 and up.requests == []
+
+
+async def test_the_secret_header_is_removed_whatever_its_case():
+    async with FakeUpstream() as up, _forwarder(up) as fwd:
+        reader, writer = await asyncio.open_connection("127.0.0.1", fwd.port)
+        writer.write(
+            b"GET http://site.test/ HTTP/1.1\r\nPROXY-AUTHORIZATION: %s\r\n"
+            b"proxy-authorization: %s\r\n\r\n" % ((fwd.auth_header.encode(),) * 2)
+        )
+        status, _ = await _response(reader)
+        writer.close()
+        secret = _secret(fwd)
+    assert status.startswith(b"HTTP/1.1 200")
+    assert secret not in repr(up.requests)

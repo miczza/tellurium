@@ -1323,6 +1323,10 @@ The forwarder is not an open proxy. Every request must carry a secret drawn for 
 
 **Cost.** Every request is paused once on the browser session and continued at once, about 0.14 ms per request. Measured on a page with 200 requests (stock Chrome, headless): 104 ms before, 131 ms with `Fetch` at zero network latency; 1189 ms and 1222 ms (+3 %) with 30 ms of latency. It cannot be turned off: with credentials in the proxy the protection is always on, and a proxy without credentials has no forwarder and no `Fetch`. Chrome's own background traffic (component updater and the like) does not go through DevTools, so it gets `407` and fails.
 
+**Detectability.** A review found no difference visible from the page compared with the same proxy before this change: back/forward cache (`persisted` is still true), resource timing and the headers reaching the upstream proxy were the same. `Fetch` runs on the browser session, not in the page, also with `stealth=True`.
+
+**Known limit.** A WebSocket that is the first connection of a context to the proxy (a page on `about:blank`, `data:` or a fulfilled response, with no HTTP request before it) does not reach the upstream: `Fetch` does not pause the WebSocket handshake, so Chrome gets no `authRequired` to answer. After a first HTTP request in that context it works, because Chrome then sends the cached credentials up front.
+
 ### GeoIP exit IP resolution
 
 When `stealth=True` and a proxy is configured, Tellurium determines the correct timezone, locale, and language by:

@@ -510,10 +510,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   them there is no forwarder and no `Fetch`. Chrome's background traffic, which does
   not go through DevTools, gets `407`. New `tellurium.browser.proxy_auth.ProxyAuth`,
   owned by the launch's `BrowserProcess` and stopped by its `close()`.
-- `tellurium.stealth.geoip.exit_geo`, `resolve_exit_ip` and `resolve_geoip` take the
-  credential forwarder itself (`forwarder=`, was `forwarder_port=`) and ask it with its
-  secret (`ProxyForwarder.auth_header`). The `Proxy-Authorization` value of a lookup is
-  kept out of `repr`.
+- **Breaking:** `tellurium.stealth.geoip.exit_geo`, `resolve_exit_ip` and
+  `resolve_geoip` take the credential forwarder itself (`forwarder=`, was
+  `forwarder_port=`) and ask it with its secret (`ProxyForwarder.auth_header`); a port
+  passed as before fails with `AttributeError`. The `Proxy-Authorization` value of a
+  lookup is kept out of `repr`.
 
 - **Breaking:** Python 3.10 is no longer supported; tellurium needs Python 3.11 or newer.
   The `multiplex` extra needs `websockets>=17`, the first release that hands a method
@@ -613,7 +614,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   gets `407` with `Proxy-Authenticate: Basic realm="tellurium"` and `Connection: close`,
   and nothing reaches the upstream proxy. New `ProxyForwarder.auth_header` (the header
   value for tellurium's own clients) and `ProxyForwarder.credentials`. The secret never
-  shows in `repr`, logs or errors.
+  shows in `repr`, logs or errors. A new connection that sends no complete request head
+  within 30 s (`ProxyForwarder.head_timeout`) is closed. Header names are read one way
+  for the check and for the removal of `Proxy-Authorization`: a head with a folded line
+  (obs-fold), whitespace before a colon or a line without one gets `407`, so no spelling
+  of the header carries the secret upstream.
 
 - `tellurium.access.allowed_hosts` treats every spelling of a wildcard bind (`0`, `::0`,
   `[::]`) as one, and a loopback bind other than 127.0.0.1 (`127.0.0.2`) accepts its own

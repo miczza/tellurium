@@ -21,6 +21,12 @@ _CHUNK = 65536
 _MAX_HEADER_LINES = 200
 _MAX_HEAD_BYTES = 64 * 1024
 _CONNECT_TIMEOUT = 30.0
+#: Seconds a new connection has to send its first request head. Later heads of a
+#: keep-alive connection are not timed: only a client that showed the secret gets
+#: there, and Chrome keeps idle proxy connections open for reuse.
+_HEAD_TIMEOUT = 30.0
+#: A header field name (RFC 9110 token): nothing else may stand before the colon.
+_TOKEN = re.compile(rb"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
 _BAD_GATEWAY = b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 _GATEWAY_TIMEOUT = b"HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 #: The user name of the forwarder's own credentials; the password is a secret per forwarder.
@@ -179,6 +185,8 @@ class ProxyForwarder:
         self._clients: set[asyncio.Task] = set()
         #: Seconds the upstream has to answer a CONNECT before Chrome gets a 504.
         self.answer_timeout = _CONNECT_TIMEOUT
+        #: Seconds a new connection has to send its first request head; then it is closed.
+        self.head_timeout = _HEAD_TIMEOUT
 
     def __repr__(self) -> str:
         listening = self._server is not None
@@ -202,7 +210,15 @@ class ProxyForwarder:
         return FORWARDER_USER, self._secret
 
     def _admits(self, head: list[bytes]) -> bool:
-        """Whether *head* carries the forwarder's credentials (constant-time check)."""
+        """Whether *head* carries the forwarder's credentials (constant-time check).
+
+        A head with a malformed header line (folded, whitespace before the
+        colon, no colon) is refused: the check and the removal of the header
+        (:meth:`_with_auth`) read names the same way, so no spelling of it
+        can slip past both and carry the secret upstream.
+        """
+        if not all(_field_name(line) is not None for line in head[1:]):
+            return False
         given = _header(head, b"proxy-authorization") or b""
         return hmac.compare_digest(given, self._expected)
 
@@ -237,8 +253,8 @@ class ProxyForwarder:
 
     def _with_auth(self, head: list[bytes]) -> bytes:
         """The request head with our credentials in place of any the client sent."""
-        lines = [ln for ln in head if not ln.lower().startswith(b"proxy-authorization:")]
-        return b"".join(lines) + self._auth_line() + b"\r\n"
+        kept = [ln for ln in head[1:] if _field_name(ln) != b"proxy-authorization"]
+        return b"".join([head[0], *kept]) + self._auth_line() + b"\r\n"
 
     async def _open_upstream(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         tls = {}
@@ -257,7 +273,11 @@ class ProxyForwarder:
             self._clients.add(task)
         up_writer: asyncio.StreamWriter | None = None
         try:
-            head = await _read_head(reader)
+            try:
+                head = await asyncio.wait_for(_read_head(reader), self.head_timeout)
+            except TimeoutError:
+                logger.debug("ProxyForwarder: no request head within %g s", self.head_timeout)
+                return
             if head is None:
                 return
             if not self._admits(head):
@@ -355,11 +375,20 @@ async def _read_head(reader: asyncio.StreamReader) -> list[bytes] | None:
             raise ValueError("HTTP head too long")
 
 
+def _field_name(line: bytes) -> bytes | None:
+    """The lowercased name of a header line; None when the line is not a
+    well-formed field (an obs-fold continuation, whitespace before the colon,
+    no colon)."""
+    name, sep, _ = line.partition(b":")
+    if not sep or not _TOKEN.fullmatch(name):
+        return None
+    return name.lower()
+
+
 def _header(head: list[bytes], name: bytes) -> bytes | None:
     for line in head[1:]:
-        key, sep, value = line.partition(b":")
-        if sep and key.strip().lower() == name:
-            return value.strip()
+        if _field_name(line) == name:
+            return line.partition(b":")[2].strip()
     return None
 
 
