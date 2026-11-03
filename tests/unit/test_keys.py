@@ -20,7 +20,7 @@ def test_modifiers_and_printable_keys():
     assert keys.parse("Meta+c").modifiers == 4
     assert keys.parse("7") == ("7", 0, 55, "7")
     assert keys.parse(";").code == 186
-    assert keys.parse("+") == ("+", 0, 187, "+")
+    assert keys.parse("+") == ("+", 8, 187, "+")  # Shift held, as on a keyboard
 
 
 @pytest.mark.parametrize("combo", ["Entr", "NotAKey", "", "ab"])
@@ -125,7 +125,7 @@ def test_typing_events_of_a_named_key_carry_no_text():
 
 
 def test_plus_is_a_key_after_modifiers_too():
-    assert keys.parse("Control++") == ("+", 2, 187, "+")
+    assert keys.parse("Control++") == ("+", 2 | 8, 187, "+")
     assert keys.parse("Control+Shift++").modifiers == 2 | 8
     with pytest.raises(ValueError, match="Unknown key"):
         keys.parse("Control+")
@@ -154,10 +154,12 @@ def test_shift_and_a_digit_or_symbol_is_the_us_layout_character(combo, expected)
     assert keys.parse(combo) == expected
 
 
-def test_a_shifted_character_alone_carries_the_code_of_its_physical_key():
-    assert keys.parse("!") == ("!", 0, 49, "!")
-    assert keys.parse("?").code == 191
-    assert keys.parse("+") == ("+", 0, 187, "+")
+def test_a_shifted_character_alone_is_pressed_with_shift_on_its_physical_key():
+    assert keys.parse("!") == ("!", 8, 49, "!")
+    assert keys.parse("?") == ("?", 8, 191, "?")
+    assert keys.parse("Alt+@") == ("@", 1 | 8, 50, "@")
+    assert keys.parse("1") == ("1", 0, 49, "1")  # an unshifted one: no Shift
+    assert keys.parse("A").modifiers == 0  # a letter keeps its modifiers: Control+A stays
 
 
 @pytest.mark.parametrize(

@@ -10,8 +10,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `Tab.keyboard_press("Shift+<digit or symbol>")` types the US layout's shifted character
   (`Shift+1` -> `!`, `Shift+/` -> `?`), with `key`, `code` (`Digit1`) and
   `windowsVirtualKeyCode` (49) as a real Shift press gives them. Every key event now
-  carries the DOM `code` of its physical key, and a shifted character pressed alone
-  (`"!"`) carries the virtual key code of its key. Other layouts are not modelled.
+  carries the DOM `code` of its physical key. Other layouts are not modelled.
 - `tellurium.Multiplexer(size, *, proxies=(), warm=0, acquire_timeout=30, **launch)`: one
   CDP endpoint in front of a pool of Chromes, one Chrome per WebSocket connection
   (`async with`, `await mux.serve(host, port)` until cancelled, `mux.url`, `mux.token`,
@@ -505,6 +504,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `Tab.keyboard_press` of a character typed with Shift on the US layout, pressed alone
+  (`"!"`, `"?"`, `"+"`), is now pressed as a keyboard does it: Shift held (`shiftKey`
+  true, modifier bit 8) on its physical key (`Digit1`, keycode 49), the same events as
+  `"Shift+1"`; it used to send keycode 0 and no Shift. `"Control++"` is therefore
+  Control and Shift on `=`. Letters keep their modifiers (`"Control+A"` has no Shift).
 - `Tab.eval_on`: only a value whose getter throws while Chrome serializes it (CDP
   `-32603` on returning the value) raises `RuntimeError`; any other `-32603` of
   `Runtime.callFunctionOn` now comes out as the `CDPError` Chrome gave. The function runs

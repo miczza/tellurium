@@ -91,7 +91,9 @@ def parse(combo: str) -> Key:
             code = ord(physical.upper())
         else:
             code = _PUNCTUATION.get(physical, 0)
-        if bits & SHIFT and key.isascii():
+        if key in _PHYSICAL:  # "!" alone: a real press holds Shift for it, as Shift+1
+            bits |= SHIFT
+        elif bits & SHIFT and key.isascii():
             key = key.upper() if key.isalpha() else _SHIFTED.get(key, key)
         return Key(key, bits, code, key)
     names = ", ".join(sorted(NAMED))

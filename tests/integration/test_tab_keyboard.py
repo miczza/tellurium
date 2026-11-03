@@ -78,13 +78,15 @@ async def test_shift_and_a_digit_or_symbol_types_the_us_layout_character(page):
             field.focus();
         })()"""
     )
-    for combo in ("Shift+1", "Shift+/", "Shift+2"):
+    for combo in ("Shift+1", "Shift+/", "Shift+2", "!", "1"):
         await page.keyboard_press(combo)
-    assert await page.eval("document.getElementById('second').value") == "!?@"
+    assert await page.eval("document.getElementById('second').value") == "!?@!1"
     assert await page.eval("window.seen") == [
         ["!", "Digit1", 49, True],
         ["?", "Slash", 191, True],
         ["@", "Digit2", 50, True],
+        ["!", "Digit1", 49, True],  # alone, a shifted symbol is pressed with Shift too
+        ["1", "Digit1", 49, False],
     ]
 
 
