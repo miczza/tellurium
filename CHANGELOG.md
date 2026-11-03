@@ -7,6 +7,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Tab.keyboard_press("Shift+<digit or symbol>")` types the US layout's shifted character
+  (`Shift+1` -> `!`, `Shift+/` -> `?`), with `key`, `code` (`Digit1`) and
+  `windowsVirtualKeyCode` (49) as a real Shift press gives them. Every key event now
+  carries the DOM `code` of its physical key, and a shifted character pressed alone
+  (`"!"`) carries the virtual key code of its key. Other layouts are not modelled.
 - `tellurium.Multiplexer(size, *, proxies=(), warm=0, acquire_timeout=30, **launch)`: one
   CDP endpoint in front of a pool of Chromes, one Chrome per WebSocket connection
   (`async with`, `await mux.serve(host, port)` until cancelled, `mux.url`, `mux.token`,
