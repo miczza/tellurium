@@ -144,6 +144,41 @@ async def test_close_leaves_no_process_and_no_profile(private_tempdir):
     await asyncio.wait_for(raw.close(), 5)  # idempotent
 
 
+async def test_close_asks_chrome_first(private_tempdir):
+    """close() sends Browser.close on the pipe and Chrome exits on its own
+    (status 0, its orderly exit), before any signal."""
+    raw = await RawChrome.launch(headless=True)
+    sent: list[bytes] = []
+    send = raw.transport.send
+
+    async def spy(data: bytes) -> None:
+        sent.append(data)
+        await send(data)
+
+    raw.transport.send = spy
+    process = raw._proc.process
+    await asyncio.wait_for(raw.close(), 30)
+    assert [json.loads(d[:-1])["method"] for d in sent] == ["Browser.close"]
+    assert process.returncode == 0
+
+
+async def test_close_of_a_chrome_that_ignores_browser_close_escalates(private_tempdir, monkeypatch):
+    import signal
+
+    from tellurium.browser import raw_chrome
+
+    monkeypatch.setattr(raw_chrome, "CLOSE_GRACE", 0.5)
+    raw = await RawChrome.launch(headless=True)
+    processes = {raw.pid} | _descendants(raw.pid)
+    os.kill(raw.pid, signal.SIGSTOP)  # reads nothing, exits on nothing but SIGKILL
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    await asyncio.wait_for(raw.close(), 30)
+    assert loop.time() - start < 15
+    assert not raw.alive
+    assert await _wait_until(lambda: not [p for p in processes if _alive(p)]), "orphans"
+
+
 async def test_alive_turns_false_when_chrome_dies(private_tempdir):
     async with RawChrome.launch(headless=True) as raw:
         os.kill(raw.pid, 9)

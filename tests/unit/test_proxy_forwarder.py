@@ -525,3 +525,61 @@ async def test_the_secret_header_is_removed_whatever_its_case():
         secret = _secret(fwd)
     assert status.startswith(b"HTTP/1.1 200")
     assert secret not in repr(up.requests)
+
+
+class SlowUpstream:
+    """Answers each request with a body sent in two halves, *pause* apart."""
+
+    def __init__(self, pause: float = 0.3):
+        self.pause = pause
+
+    async def __aenter__(self) -> SlowUpstream:
+        self._server = await asyncio.start_server(self._serve, "127.0.0.1", 0)
+        self.port = self._server.sockets[0].getsockname()[1]
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        self._server.close()
+
+    async def _serve(self, reader, writer) -> None:
+        try:
+            while True:
+                first, _ = await _read_head(reader)
+                if not first:
+                    return
+                body = b"a" * 1000 + b"b" * 1000
+                writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body))
+                writer.write(body[:1000])
+                await writer.drain()
+                await asyncio.sleep(self.pause)
+                writer.write(body[1000:])
+                await writer.drain()
+        except (asyncio.IncompleteReadError, ConnectionError):
+            return
+        finally:
+            writer.close()
+
+
+async def test_a_refused_request_mid_keep_alive_waits_for_the_response_in_flight():
+    """The second request of a connection comes without the credentials while
+    the first one's response is still on its way: that response arrives
+    whole, then the 407, then the connection closes."""
+    up = SlowUpstream()
+    async with up:
+        fwd = ProxyForwarder("127.0.0.1", up.port, USER, PASSWORD)
+        await fwd.start()
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", fwd.port)
+            writer.write(
+                b"GET http://site.test/1 HTTP/1.1\r\nHost: site.test\r\n" + _auth(fwd) + b"\r\n"
+                b"GET http://site.test/2 HTTP/1.1\r\nHost: site.test\r\n\r\n"
+            )
+            status, body = await _response(reader)
+            assert status.startswith(b"HTTP/1.1 200")
+            assert body == b"a" * 1000 + b"b" * 1000
+            status, _ = await _response(reader)
+            assert status.startswith(b"HTTP/1.1 407"), status
+            assert await asyncio.wait_for(reader.read(), STEP) == b""
+            writer.close()
+        finally:
+            await asyncio.wait_for(fwd.stop(), STEP)

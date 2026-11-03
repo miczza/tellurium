@@ -197,3 +197,75 @@ async def test_launch_plan_lookup_goes_through_the_forwarder(
                 plan.stealth_engine.close()
     assert "--accept-lang=it-IT,en" in plan.flags
     assert proxy.connects == ["ip.test:80", "country.test:80"]
+
+
+class TricklingProxy:
+    """A CONNECT proxy that accepts the tunnel, then answers one byte every
+    *pace* seconds, for ever: each read gets data within its timeout."""
+
+    def __init__(self, pace: float = 0.1):
+        self.pace = pace
+        self.open = 0
+        self._handlers: set[asyncio.Task] = set()
+
+    async def __aenter__(self) -> TricklingProxy:
+        self._server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
+        self.port = self._server.sockets[0].getsockname()[1]
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        self._server.close()
+        for task in self._handlers:
+            task.cancel()
+        await self._server.wait_closed()
+
+    async def _handle(self, reader, writer) -> None:
+        self._handlers.add(asyncio.current_task())
+        self.open += 1
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+            writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            await reader.readuntil(b"\r\n\r\n")
+            head = b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\n"
+            for byte in head + b"1" * 1000000:
+                writer.write(bytes([byte]))
+                await writer.drain()
+                await asyncio.sleep(self.pace)
+        except (asyncio.IncompleteReadError, ConnectionError):
+            pass
+        finally:
+            self.open -= 1
+            writer.close()
+
+
+async def test_a_trickling_proxy_cannot_hold_a_lookup_past_its_timeout(
+    connections, test_services, monkeypatch
+):
+    """Each read gets a byte within the socket timeout: the whole request is
+    bounded all the same, and no thread or socket outlives the lookup."""
+    import threading
+    import time
+
+    monkeypatch.setattr(geoip, "_REQUEST_TIMEOUT", 0.6)
+    async with TricklingProxy() as proxy:
+        errors: list[BaseException] = []
+
+        def lookup() -> None:
+            try:
+                geoip.exit_geo(f"http://127.0.0.1:{proxy.port}", timeout=1.0)
+            except BaseException as exc:  # noqa: BLE001 - checked below
+                errors.append(exc)
+
+        worker = threading.Thread(target=lookup, daemon=True)
+        start = time.monotonic()
+        worker.start()
+        while worker.is_alive() and time.monotonic() - start < 3.0:
+            await asyncio.sleep(0.05)
+        assert not worker.is_alive(), "the lookup outlived its timeout"
+        assert time.monotonic() - start < 2.0
+        assert len(errors) == 1 and isinstance(errors[0], (TimeoutError, RuntimeError))
+        for _ in range(100):  # the server sees each tunnel closed
+            if proxy.open == 0:
+                break
+            await asyncio.sleep(0.05)
+        assert proxy.open == 0

@@ -120,6 +120,9 @@ class LaunchPlan:
         """
         # Refused before any async work or resource.
         validate_extension_paths(self.extensions or [])
+        if self.timezone is not None:
+            # zoneinfo reads the time zone database from disk: off the loop.
+            await asyncio.to_thread(check_timezone, self.timezone)
         if self.stealth:
             refuse_user_agent_arg(self.args)
         # The native patch only understands an IP literal (or its own 'disable',
@@ -352,6 +355,24 @@ async def _exit_geo(proxy: str, forwarder: Any) -> Any:
             e = f"no answer within {GEOIP_TIMEOUT:g} s"
         logger.warning("GeoIP not available: %s. Using default locale.", e)
         return None
+
+
+def check_timezone(timezone: str) -> None:
+    """:class:`ValueError` unless *timezone* is an IANA name (``Europe/Rome``):
+    Chrome takes any string and reports ``Etc/Unknown``. Not checked where
+    Python has no time zone database (Windows without ``tzdata``)."""
+    import zoneinfo
+
+    try:
+        zoneinfo.ZoneInfo(timezone)
+        return
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError, OSError):
+        pass
+    try:
+        zoneinfo.ZoneInfo("UTC")
+    except zoneinfo.ZoneInfoNotFoundError:
+        return  # no database to check against
+    raise ValueError(f"timezone {timezone!r} is not an IANA time zone, e.g. 'Europe/Rome'")
 
 
 async def _webrtc_public_ip(setting: str, proxy: str | None) -> str | None:

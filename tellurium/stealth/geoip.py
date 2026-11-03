@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from tellurium.browser.proxy import ProxyForwarder
@@ -173,9 +174,16 @@ class _HttpProxy:
         return cls(info["host"], info["port"], authorization)
 
     def get(self, url: str, timeout: float) -> str:
-        """GET *url* through a ``CONNECT`` tunnel of this proxy; the body, stripped."""
+        """GET *url* through a ``CONNECT`` tunnel of this proxy; the body, stripped.
+
+        *timeout* bounds the whole request, not only each read: a proxy that
+        sends a byte now and then would otherwise hold it (and its thread)
+        for hours. At the deadline the socket is shut down under the reader.
+        """
         import http.client
+        import socket
         import ssl
+        import threading
         from urllib.parse import urlsplit
 
         target = urlsplit(url)
@@ -185,6 +193,24 @@ class _HttpProxy:
             )
         else:
             conn = http.client.HTTPConnection(self.host, self.port, timeout=timeout)
+        # A duplicate of the connection's socket, kept to shut it down at the
+        # deadline: the TLS wrap detaches the socket object http.client holds.
+        handles: list[socket.socket] = []
+
+        def connect(*args: Any, **kwargs: Any) -> socket.socket:
+            sock = socket.create_connection(*args, **kwargs)
+            handles.append(sock.dup())
+            return sock
+
+        def cut() -> None:
+            for handle in list(handles):
+                with contextlib.suppress(OSError):
+                    handle.shutdown(socket.SHUT_RDWR)
+
+        conn._create_connection = connect  # type: ignore[attr-defined]
+        timer = threading.Timer(timeout, cut)
+        timer.daemon = True
+        timer.start()
         headers = {"Proxy-Authorization": self.authorization} if self.authorization else None
         try:
             conn.set_tunnel(target.hostname or "", target.port, headers=headers)
@@ -196,7 +222,10 @@ class _HttpProxy:
                 raise OSError(f"HTTP {resp.status} from {target.hostname}")
             return body.decode(errors="replace").strip()
         finally:
+            timer.cancel()
             conn.close()
+            for handle in handles:
+                handle.close()
 
 
 def _remaining(deadline: float | None) -> float:

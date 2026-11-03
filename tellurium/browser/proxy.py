@@ -40,6 +40,9 @@ _CHALLENGE = (
 #: closes: read and dropped, so the close does not reset the 407 away.
 _REFUSED_DRAIN_BYTES = 1024 * 1024
 _REFUSED_DRAIN_TIMEOUT = 1.0
+#: Seconds the responses to requests already forwarded may still take, after a
+#: later request of the same connection was refused, before it is closed.
+_IN_FLIGHT_LIMIT = 30.0
 
 
 def _split(url: str) -> tuple[str, str | None, str]:
@@ -292,7 +295,7 @@ class ProxyForwarder:
             if head[0].upper().startswith(b"CONNECT"):
                 await self._tunnel(head, reader, writer, up_reader, up_writer)
             else:
-                await _race(self._requests(head, reader, up_writer), _pipe(up_reader, writer))
+                await self._forward(head, reader, writer, up_reader, up_writer)
         except _Refused:
             logger.debug("ProxyForwarder refused a request without its credentials")
             await _refuse(reader, writer)
@@ -318,6 +321,36 @@ class ProxyForwarder:
             await up.drain()
             await _copy_body(head, reader, up)
             head = await _read_head(reader)
+
+    async def _forward(self, head, reader, writer, up_reader, up_writer) -> None:
+        """Plain HTTP requests one way, the upstream's responses the other.
+
+        A later request without the credentials stops the requests, but the
+        responses to those already forwarded go on until the upstream is
+        quiet for :data:`_REFUSED_DRAIN_TIMEOUT` (or closes): only then the
+        ``407``, never after a response cut short. An upstream still sending
+        after :data:`_IN_FLIGHT_LIMIT` seconds gets the connection closed,
+        with no ``407``."""
+        loop = asyncio.get_running_loop()
+        heard = [loop.time()]  # when the upstream last sent something
+        requests = asyncio.ensure_future(self._requests(head, reader, up_writer))
+        responses = asyncio.ensure_future(_pipe(up_reader, writer, heard))
+        try:
+            await asyncio.wait([requests, responses], return_when=asyncio.FIRST_COMPLETED)
+            if (
+                requests.done()
+                and not requests.cancelled()
+                and isinstance(requests.exception(), _Refused)
+                and not await _quiet(responses, heard)
+            ):
+                return  # still streaming: closed without a 407
+        finally:
+            for task in (requests, responses):
+                task.cancel()
+            await asyncio.gather(requests, responses, return_exceptions=True)
+        for task in (requests, responses):
+            if task.done() and not task.cancelled() and task.exception() is not None:
+                raise task.exception()  # _Refused: the 407; else the handler logs it
 
     async def _tunnel(self, head, reader, writer, up_reader, up_writer) -> None:
         up_writer.write(self._with_auth(head))
@@ -425,10 +458,32 @@ async def _copy_exact(reader: asyncio.StreamReader, up: asyncio.StreamWriter, n:
         n -= len(data)
 
 
-async def _pipe(src: asyncio.StreamReader, dst: asyncio.StreamWriter) -> None:
+async def _pipe(
+    src: asyncio.StreamReader, dst: asyncio.StreamWriter, heard: list[float] | None = None
+) -> None:
+    """*src* to *dst* until *src* ends; *heard[0]* gets the loop time of each read."""
+    loop = asyncio.get_running_loop()
     while data := await src.read(_CHUNK):
+        if heard is not None:
+            heard[0] = loop.time()
         dst.write(data)
         await dst.drain()
+
+
+async def _quiet(responses: asyncio.Future, heard: list[float]) -> bool:
+    """Wait until *responses* ends or its source has been silent for
+    :data:`_REFUSED_DRAIN_TIMEOUT`: True; False past :data:`_IN_FLIGHT_LIMIT`."""
+    loop = asyncio.get_running_loop()
+    limit = loop.time() + _IN_FLIGHT_LIMIT
+    while not responses.done():
+        now = loop.time()
+        if now - heard[0] >= _REFUSED_DRAIN_TIMEOUT:
+            return True
+        if now >= limit:
+            return False
+        wait = min(heard[0] + _REFUSED_DRAIN_TIMEOUT, limit) - now
+        await asyncio.wait([responses], timeout=wait)
+    return True
 
 
 async def _race(*coros) -> None:

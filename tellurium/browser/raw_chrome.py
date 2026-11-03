@@ -25,6 +25,7 @@ from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
+from tellurium.browser import process as process_module
 from tellurium.browser.launch_plan import LaunchPlan
 from tellurium.browser.process import BrowserProcess
 from tellurium.cdp.transport._base import CDPTransport
@@ -35,6 +36,11 @@ READY_TIMEOUT = 30.0
 #: Id of that first command: replies before the hand-over are read here, and
 #: whoever takes the pipe numbers its own commands.
 _PROBE_ID = 2**31 - 2
+#: Id of the ``Browser.close`` sent by :meth:`RawChrome.close` (its reply, if
+#: read, matches nothing: the relay draws its ids below ``2**31 - 16``).
+_CLOSE_ID = 2**31 - 3
+#: Seconds Chrome gets to exit on its own after ``Browser.close``, before the signals.
+CLOSE_GRACE = process_module.CLOSE_GRACE
 
 
 class RawChrome:
@@ -192,11 +198,41 @@ class RawChrome:
     async def close(self) -> None:
         """Stop Chrome, then release the pipe, the forwarder and the profile.
 
-        Bounded in time, safe to call more than once; a cancellation is
-        re-raised once every step is done.
+        Chrome is first asked over the pipe (``Browser.close``, the orderly
+        exit that writes the cookie store) and given :data:`CLOSE_GRACE`
+        seconds, then SIGTERM, then SIGKILL. Whoever reads the pipe should
+        keep reading meanwhile. Bounded in time, safe to call more than once;
+        a cancellation (which cuts the grace short) is re-raised once every
+        step is done.
         """
+        cancelled = False
+        if not self._closed and self.alive:
+            asking = asyncio.ensure_future(self._ask_to_close())
+            try:
+                await asyncio.shield(asking)
+            except asyncio.CancelledError:
+                cancelled = True
+                asking.cancel()
+                await asyncio.wait([asking])
         self._closed = True
-        await self._proc.close()
+        try:
+            await self._proc.close()
+        finally:
+            if cancelled:
+                raise asyncio.CancelledError
+
+    async def _ask_to_close(self) -> None:
+        """``Browser.close`` on the pipe, then up to :data:`CLOSE_GRACE` seconds
+        for Chrome to exit; a send that fails leaves it to the signals."""
+        message = json.dumps({"id": _CLOSE_ID, "method": "Browser.close"}).encode() + b"\0"
+        try:
+            await asyncio.wait_for(self._transport.send(message), 1.0)
+        except (TimeoutError, OSError, ConnectionError):
+            return
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + CLOSE_GRACE
+        while self.alive and loop.time() < deadline:
+            await asyncio.sleep(0.05)
 
     async def __aenter__(self) -> RawChrome:
         return self

@@ -632,6 +632,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   out of `examples/fingerprint_tests/`.
 - `Slots.total` (the cap of `SessionPool` and `Multiplexer` slots) is read-only: raising
   it would have woken nobody already queued.
+- `timezone=` (`Browser.launch`, `RawChrome.launch`, the multiplexer's launch options)
+  must be an IANA time zone known to Python's `zoneinfo`, else `ValueError` before
+  anything starts; Chrome used to take any string and report `Etc/Unknown`. Not checked
+  where Python has no time zone database.
+- `RawChrome.close()` first sends `Browser.close` on the pipe and gives Chrome up to
+  5 s (`CLOSE_GRACE`) to exit on its own, then SIGTERM and SIGKILL as before.
 
 ### Fixed
 
@@ -1036,6 +1042,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Multiplexer: the relay's own-session attach has one deadline for its two commands
   (`health.TIMEOUT` in all, not each); what is held for the client during it counts
   against `HIGH_WATER`, and with no client nothing is held.
+- GeoIP lookups through an HTTP proxy are bounded as a whole, not per read: a proxy that
+  sends a byte now and then no longer keeps the lookup's thread and socket alive for
+  hours (the socket is shut down at the request's deadline).
+- The proxy forwarder no longer writes its 407 after a response cut short: when a later
+  request of a keep-alive connection lacks the credentials, the responses already on
+  their way go through first (until the upstream is quiet for 1 s, at most 30 s).
 
 ## [0.1.0] - 2026-04-26
 

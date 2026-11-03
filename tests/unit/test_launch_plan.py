@@ -252,3 +252,23 @@ async def test_seed_used_is_the_seed_something_applies(browser, stealth, expecte
         if plan.stealth_engine is not None:
             plan.stealth_engine.close()
     assert plan.seed_used == expected
+
+
+@pytest.mark.parametrize("timezone", ["Mars/Olympus_Mons", "Europe/Romee", "../etc/passwd", ""])
+async def test_an_unknown_timezone_is_refused_before_anything_starts(timezone):
+    """Chrome would take it and report Etc/Unknown: refused with ValueError,
+    before the profile or the forwarder exist."""
+    proc = BrowserProcess()
+    plan = LaunchPlan(headless=True, timezone=timezone, proxy="http://u:p@127.0.0.1:9")
+    try:
+        with pytest.raises(ValueError, match="timezone"):
+            await plan.compose(proc)
+        assert plan.profile_dir == "" and proc.forwarder is None
+    finally:
+        await proc.close()
+
+
+@pytest.mark.parametrize("timezone", ["Europe/Rome", "UTC", "America/Argentina/Buenos_Aires"])
+async def test_a_known_timezone_is_taken(timezone):
+    flags = await _flags(timezone=timezone)
+    assert flags
