@@ -20,7 +20,7 @@ import pytest
 from tellurium.browser.launcher import LaunchError
 from tellurium.browser.process import BrowserProcess
 from tellurium.browser.raw_chrome import RawChrome
-from tests.integration.test_authenticated_proxy import GOOD_AUTH, PASSWORD, USER, FakeProxy
+from tests.integration.test_authenticated_proxy import PASSWORD, USER, FakeProxy
 
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith("linux"), reason="uses /proc to observe processes"
@@ -230,9 +230,10 @@ async def test_credentials_stay_in_the_forwarder(private_tempdir):
             assert not [a for a in line if PASSWORD in a]
             assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in line
 
+            # Nobody answers the forwarder's challenge on this raw pipe (S1-A; the
+            # multiplexer's relay does, S1-B): nothing reaches the upstream proxy.
             await _call(raw, "Target.createTarget", {"url": "http://site.test/"})
-            assert await _wait_until(lambda: proxy.requests), "nothing reached the proxy"
-            assert proxy.requests[0][1] == GOOD_AUTH
+            assert not await _wait_until(lambda: proxy.requests, 3), proxy.requests
 
 
 async def test_cancelled_geoip_lookups_do_not_starve_close(private_tempdir):

@@ -500,6 +500,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `Browser.launch(proxy=<with credentials>)`: Chrome answers the forwarder's challenge
+  through CDP `Fetch` on the browser session (`handleAuthRequests`, every URL), enabled
+  before `launch` returns and covering every context, popup, worker and service worker.
+  Each request is paused once and continued at once (about 0.14 ms a request); the
+  forwarder's challenge gets its secret once per request (a second round is cancelled),
+  any other challenge (a site's `401`, another proxy) Chrome's default answer.
+  `tab.intercept()` keeps working. Always on with credentials in the proxy; without
+  them there is no forwarder and no `Fetch`. Chrome's background traffic, which does
+  not go through DevTools, gets `407`. New `tellurium.browser.proxy_auth.ProxyAuth`,
+  owned by the launch's `BrowserProcess` and stopped by its `close()`.
 - `tellurium.stealth.geoip.exit_geo`, `resolve_exit_ip` and `resolve_geoip` take the
   credential forwarder itself (`forwarder=`, was `forwarder_port=`) and ask it with its
   secret (`ProxyForwarder.auth_header`). The `Proxy-Authorization` value of a lookup is

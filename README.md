@@ -1313,13 +1313,15 @@ browser = await Browser.launch(
 
 ### Authenticated proxies
 
-Chrome does not natively support proxies with credentials. When you provide a proxy URL with `user:pass@`, Tellurium automatically starts a local **ProxyForwarder** on `localhost` that handles authentication transparently:
+Chrome cannot answer a proxy's credential challenge on its own. When the proxy URL has `user:pass@` (HTTP or HTTPS proxies; SOCKS with credentials is refused), Tellurium starts a local **ProxyForwarder** on `127.0.0.1` that adds the credentials to every request:
 
 ```
-Chrome -> localhost:<random_port> (ProxyForwarder) -> user:pass@upstream_proxy
+Chrome -> 127.0.0.1:<random_port> (ProxyForwarder) -> user:pass@upstream_proxy
 ```
 
-This avoids using `Fetch.enable` via CDP (which would add a detectable surface).
+The forwarder is not an open proxy. Every request must carry a secret drawn for that launch (`Proxy-Authorization: Basic tellurium:<secret>`); any other local process gets `407` and nothing reaches the upstream proxy. Chrome answers that challenge through CDP `Fetch` on the browser session (`handleAuthRequests`), turned on before `Browser.launch` returns: it covers every context (`new_context()`), popup, worker and service worker, and `tab.intercept()` keeps working. A site's own `401` gets Chrome's default answer, as without a proxy. The GeoIP lookups go through the forwarder with the same secret.
+
+**Cost.** Every request is paused once on the browser session and continued at once, about 0.14 ms per request. Measured on a page with 200 requests (stock Chrome, headless): 104 ms before, 131 ms with `Fetch` at zero network latency; 1189 ms and 1222 ms (+3 %) with 30 ms of latency. It cannot be turned off: with credentials in the proxy the protection is always on, and a proxy without credentials has no forwarder and no `Fetch`. Chrome's own background traffic (component updater and the like) does not go through DevTools, so it gets `407` and fails.
 
 ### GeoIP exit IP resolution
 

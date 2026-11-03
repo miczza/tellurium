@@ -104,10 +104,10 @@ class Browser(CookieJar):
             Extra CLI flags passed to Chrome (with *stealth*, no ``--user-agent``:
             ``ValueError``, the profile's is the only User-Agent).
         proxy:
-            Proxy URL: ``http``, ``https``, ``socks4`` or ``socks5`` (scheme
-            kept for Chrome). With credentials (HTTP/HTTPS only) a local
-            :class:`ProxyForwarder` adds them, so Chrome only sees
-            ``127.0.0.1:<port>``.
+            Proxy URL: ``http``, ``https``, ``socks4`` or ``socks5`` (scheme kept).
+            With credentials (HTTP/HTTPS only) a local :class:`ProxyForwarder` on
+            ``127.0.0.1`` adds them; it wants a secret of its own, which Chrome sends
+            through ``Fetch`` on the browser session (one pause per request).
         stealth:
             Enable stealth heuristics (engine-level).
         stealth_idle:
@@ -166,9 +166,8 @@ class Browser(CookieJar):
 
         Launch is all-or-nothing: on failure or cancellation the process,
         pipe, temporary profile, downloads folder and proxy forwarder are
-        released. When
-        Chrome exits during launch, :class:`LaunchError` carries its exit
-        code and last output (e.g. a profile already in use).
+        released. When Chrome exits during launch, :class:`LaunchError`
+        carries its exit code and last output (e.g. a profile already in use).
         """
         from tellurium.stealth.human import MOUSE_PROFILES
 
@@ -209,11 +208,12 @@ class Browser(CookieJar):
             self._stealth_profile = plan.stealth_profile
             downloads = downloads_dir or self._proc.make_downloads_dir()
 
-            # 9-10. Launch Chrome, connect its pipe, route sessions
+            # 9-10. Launch Chrome, route sessions, answer the forwarder's 407 (proxy auth)
             transport = await self._proc.spawn(plan.chrome_path, plan.flags, chrome_log)
             self._router = SessionRouter(transport)
             self._dispatch_task = asyncio.create_task(self._router.run())
             self._proc.reader = self._dispatch_task
+            await self._proc.answer_proxy_auth(self._router.root)
             await self._downloads.start(
                 self._router.root, downloads, downloads_dir is None, self._dispatch_task
             )

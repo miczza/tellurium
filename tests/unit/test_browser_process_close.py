@@ -204,3 +204,57 @@ async def test_a_failing_send_goes_straight_to_the_signals(tmp_path):
 
     assert process.returncode == -15
     assert loop.time() - start < 2.0
+
+
+# --- the answer to the forwarder's challenge (S1) ---------------------------
+
+
+class _Session:
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+        self.handlers: dict[str, list] = {}
+
+    async def send(self, method, params=None, timeout=None):
+        self.sent.append(method)
+        return {}
+
+    def on(self, event, handler) -> None:
+        self.handlers.setdefault(event, []).append(handler)
+
+    def off(self, event, handler) -> None:
+        self.handlers[event].remove(handler)
+
+
+async def test_no_forwarder_no_fetch():
+    owner, session = BrowserProcess(), _Session()
+    await owner.answer_proxy_auth(session)
+    assert owner.proxy_auth is None and session.sent == []
+
+
+async def test_the_proxy_auth_is_owned_and_stopped_by_close(tmp_path):
+    from types import SimpleNamespace
+
+    owner = _owner(tmp_path, _Transport())
+    owner.forwarder.port = 41234
+    owner.forwarder.credentials = ("tellurium", "x" * 43)
+    session = _Session()
+    await owner.answer_proxy_auth(session)
+    auth = owner.proxy_auth
+    assert session.sent == ["Fetch.enable"]
+    stopped = []
+    real_stop = auth.stop
+
+    async def spy_stop():
+        stopped.append(SimpleNamespace(forwarder_stopped=owner.forwarder is None))
+        await real_stop()
+
+    auth.stop = spy_stop
+    closing = asyncio.ensure_future(owner.close())
+    for _ in range(3):
+        await asyncio.sleep(0.05)
+        closing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+    assert len(stopped) == 1 and not stopped[0].forwarder_stopped
+    assert owner.proxy_auth is None
+    assert not any(session.handlers.values())

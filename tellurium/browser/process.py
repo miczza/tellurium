@@ -1,8 +1,9 @@
 """The Chrome process and everything a launch creates around it.
 
-:class:`BrowserProcess` owns the proxy forwarder, the temporary profile and
-downloads folder, the Chrome process, its output sink and the CDP pipe transport, and releases them
-in a safe order whether the launch succeeded, failed or was cancelled.
+:class:`BrowserProcess` owns the proxy forwarder and Chrome's answer to its
+challenge, the temporary profile and downloads folder, the Chrome process, its
+output sink and the CDP pipe transport, and releases them in a safe order
+whether the launch succeeded, failed or was cancelled.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from tellurium.browser.launcher import LaunchError, launch_chrome_windows
+from tellurium.browser.proxy_auth import ProxyAuth
 from tellurium.cdp.transport import create_transport
 from tellurium.cdp.transport._base import CDPTransport
 
@@ -171,6 +173,7 @@ class BrowserProcess:
         self.reader: asyncio.Task | None = None  # the task dispatching CDP messages
         self.transport: CDPTransport | None = None
         self.forwarder: Any = None
+        self.proxy_auth: ProxyAuth | None = None  # Chrome's answer to the forwarder's 407
         self.temp_profile: str | None = None
         self.chrome_tmp: str | None = None  # Chrome's TMPDIR
         self.downloads_tmp: str | None = None  # default downloads folder
@@ -182,6 +185,14 @@ class BrowserProcess:
     async def start_forwarder(self, forwarder: Any) -> None:
         self.forwarder = forwarder
         await forwarder.start()
+
+    async def answer_proxy_auth(self, session: Any) -> None:
+        """With a forwarder, have Chrome answer its challenge through ``Fetch`` on
+        *session* (a browser-wide session), before any navigation. No-op without one."""
+        if self.forwarder is None:
+            return
+        self.proxy_auth = ProxyAuth(session, self.forwarder)
+        await self.proxy_auth.start()
 
     def make_temp_profile(self) -> str:
         self.temp_profile = tempfile.mkdtemp(prefix="tellurium_")
@@ -267,6 +278,9 @@ class BrowserProcess:
     async def close(self) -> None:
         """Stop Chrome, then release its pipe, output, forwarder and temp folders.
 
+        The answer to the forwarder's challenge keeps going while Chrome closes
+        and stops with the CDP reader.
+
         Chrome is first asked to close over CDP (``Browser.close``, the
         orderly exit that writes the cookie store) and given
         :data:`CLOSE_GRACE` seconds; then SIGTERM, then SIGKILL. The CDP
@@ -287,6 +301,9 @@ class BrowserProcess:
             reader, self.reader = self.reader, None
             reader.cancel()
             cancelled |= await _settle("stop the CDP reader", asyncio.wait([reader]))
+        if self.proxy_auth is not None:
+            proxy_auth, self.proxy_auth = self.proxy_auth, None
+            cancelled |= await _settle("stop answering the proxy challenge", proxy_auth.stop())
         if self.process is not None:
             cancelled |= await _settle("stop Chrome", asyncio.to_thread(_stop, self.process))
         if self.transport is not None:
