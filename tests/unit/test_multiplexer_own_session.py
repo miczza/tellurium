@@ -15,14 +15,30 @@ from tellurium.multiplexer.relay import CommandError, Relay  # noqa: E402
 from tests.unit.test_multiplexer_relay import FakePipe, FakeSocket, _until  # noqa: E402
 
 OWN = "OWN-SESSION"
+OWN_TARGET = "own-browser-target"
+ANNOUNCED = {
+    "method": "Target.attachedToTarget",
+    "params": {"sessionId": OWN, "targetInfo": {"targetId": OWN_TARGET, "type": "browser"}},
+}
 
 
-async def _attached(pipe: FakePipe, relay: Relay) -> OwnSession:
+async def _attached(pipe: FakePipe, relay: Relay, before_reply=()) -> OwnSession:
+    """Attach as Chrome does it: the session announced before the reply, then
+    its target id asked on it. *before_reply* also comes in between."""
+    sent = len(pipe.sent)
     attaching = asyncio.ensure_future(OwnSession.attach(relay, 2))
-    await _until(lambda: pipe.sent)
+    await _until(lambda: len(pipe.sent) == sent + 1)
     command = pipe.sent[-1]
     assert command["method"] == "Target.attachToBrowserTarget" and "sessionId" not in command
+    pipe.incoming.put_nowait(ANNOUNCED)
+    for message in before_reply:
+        pipe.incoming.put_nowait(message)
     pipe.incoming.put_nowait({"id": command["id"], "result": {"sessionId": OWN}})
+    await _until(lambda: len(pipe.sent) == sent + 2)
+    command = pipe.sent[-1]
+    assert command["method"] == "Target.getTargetInfo" and command["sessionId"] == OWN
+    info = {"targetInfo": {"targetId": OWN_TARGET, "type": "browser"}}
+    pipe.incoming.put_nowait({"id": command["id"], "result": info, "sessionId": OWN})
     return await attaching
 
 
@@ -48,7 +64,7 @@ async def test_commands_and_events_of_the_own_session_never_reach_the_client():
     session.on("Fetch.requestPaused", seen.append)
 
     sending = asyncio.ensure_future(session.send("Fetch.enable", {"a": 1}, timeout=2))
-    await _until(lambda: len(pipe.sent) == 2)
+    await _until(lambda: len(pipe.sent) == 3)
     command = pipe.sent[-1]
     assert command["sessionId"] == OWN and command["params"] == {"a": 1}
     pipe.incoming.put_nowait({"id": command["id"], "result": {"ok": 1}, "sessionId": OWN})
@@ -76,7 +92,7 @@ async def test_an_error_reply_raises_and_a_silent_chrome_times_out():
     pipe, ws, relay, serving = await _relay_with_client()
     session = await _attached(pipe, relay)
     sending = asyncio.ensure_future(session.send("Fetch.enable", timeout=2))
-    await _until(lambda: len(pipe.sent) == 2)
+    await _until(lambda: len(pipe.sent) == 3)
     error = {"code": -32602, "message": "Invalid parameters"}
     pipe.incoming.put_nowait({"id": pipe.sent[-1]["id"], "error": error, "sessionId": OWN})
     with pytest.raises(CommandError, match="Invalid parameters"):
@@ -94,16 +110,62 @@ async def test_the_client_cannot_drive_or_detach_the_own_session():
     ws.inbox.put_nowait(json.dumps({"id": 7, "method": "Fetch.disable", "sessionId": OWN}))
     detach = {"id": 8, "method": "Target.detachFromTarget", "params": {"sessionId": OWN}}
     ws.inbox.put_nowait(json.dumps(detach))
+    by_target = {"id": 10, "method": "Target.detachFromTarget", "params": {"targetId": OWN_TARGET}}
+    ws.inbox.put_nowait(json.dumps(by_target))
     ws.inbox.put_nowait(json.dumps({"id": 9, "method": "Browser.getVersion"}))
-    await _until(lambda: len(ws.out) == 2 and len(pipe.sent) == sent + 1)
-    assert [m["id"] for m in ws.out] == [7, 8]
+    await _until(lambda: len(ws.out) == 3 and len(pipe.sent) == sent + 1)
+    assert [m["id"] for m in ws.out] == [7, 8, 10]
     assert all(m["error"]["code"] == -32001 for m in ws.out)
     assert OWN not in json.dumps(ws.out)
     assert pipe.sent[-1]["method"] == "Browser.getVersion"
     # The relay does not count refused commands as waiting for Chrome.
     pipe.incoming.put_nowait({"id": pipe.sent[-1]["id"], "result": {}})
-    await _until(lambda: len(ws.out) == 3)
+    await _until(lambda: len(ws.out) == 4)
     assert ws.out[-1] == {"id": 9, "result": {}} and relay._inflight == 0
+    await _done(ws, relay, serving)
+
+
+async def test_the_announcement_before_the_reply_is_held_back_with_a_client_on():
+    """Chrome names the new session before its id is known: what comes for the
+    client meanwhile is held, in order, and released without the announcement."""
+    pipe, ws, relay, serving = await _relay_with_client()
+    ws.inbox.put_nowait(json.dumps({"id": 1, "method": "Target.getTargets"}))
+    await _until(lambda: pipe.sent)
+    client_command = pipe.sent[-1]["id"]
+    other = {"method": "Target.attachedToTarget", "params": {"sessionId": "C", "targetInfo": {}}}
+    reply = {"id": client_command, "result": {"targetInfos": []}}
+    await _attached(pipe, relay, before_reply=[other, reply])
+    pipe.incoming.put_nowait({"method": "Last", "params": {}})
+    await _until(lambda: len(ws.out) == 3)
+    assert ws.out == [
+        other,
+        {"id": 1, "result": {"targetInfos": []}},
+        {"method": "Last", "params": {}},
+    ]
+    assert OWN not in json.dumps(ws.out) and not relay.own.holding
+    await _done(ws, relay, serving)
+
+
+async def test_a_failed_attach_releases_what_it_held():
+    pipe, ws, relay, serving = await _relay_with_client()
+    attaching = asyncio.ensure_future(OwnSession.attach(relay, 2))
+    await _until(lambda: pipe.sent)
+    pipe.incoming.put_nowait({"method": "Some.event", "params": {}})
+    error = {"code": -32000, "message": "Not allowed"}
+    pipe.incoming.put_nowait({"id": pipe.sent[-1]["id"], "error": error})
+    with pytest.raises(CommandError, match="Not allowed"):
+        await attaching
+    await _until(lambda: ws.out)
+    assert ws.out == [{"method": "Some.event", "params": {}}] and not relay.own.holding
+    cancelled = asyncio.ensure_future(OwnSession.attach(relay, 2))
+    await _until(lambda: len(pipe.sent) == 2)
+    pipe.incoming.put_nowait({"method": "After.cancel", "params": {}})
+    await _until(lambda: relay.received == 3)
+    cancelled.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+    await _until(lambda: len(ws.out) == 2)
+    assert ws.out[-1]["method"] == "After.cancel" and not relay.own.holding
     await _done(ws, relay, serving)
 
 
@@ -117,7 +179,7 @@ async def test_proxy_auth_answers_on_the_own_session_and_the_client_sees_none_of
     session = await _attached(pipe, relay)
     auth = ProxyAuth(session, _Forwarder())
     starting = asyncio.ensure_future(auth.start())
-    await _until(lambda: len(pipe.sent) == 2)
+    await _until(lambda: len(pipe.sent) == 3)
     pipe.incoming.put_nowait({"id": pipe.sent[-1]["id"], "result": {}, "sessionId": OWN})
     await starting
 
@@ -132,8 +194,8 @@ async def test_proxy_auth_answers_on_the_own_session_and_the_client_sees_none_of
             "sessionId": OWN,
         }
     )
-    await _until(lambda: len(pipe.sent) == 4)
-    answers = pipe.sent[2:]
+    await _until(lambda: len(pipe.sent) == 5)
+    answers = pipe.sent[3:]
     assert [m["method"] for m in answers] == ["Fetch.continueRequest", "Fetch.continueWithAuth"]
     assert all(m["sessionId"] == OWN for m in answers)
     response = answers[1]["params"]["authChallengeResponse"]

@@ -512,11 +512,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   owned by the launch's `BrowserProcess` and stopped by its `close()`.
 - Multiplexer relay: it can keep browser sessions of its own on a Chrome's pipe
   (`tellurium.multiplexer.own_session.OwnSession`, opened with
-  `Target.attachToBrowserTarget`, with the relay's ids like the health probes). Their
-  replies, their events and the `Target.attachedToTarget`/`detachedFromTarget` events
-  naming them never reach the client; a client command on such a session (or a
-  `Target.detachFromTarget` of it) is answered with Chrome's "Session with given id not
-  found." error and never reaches Chrome. New `Relay.call()` and `CommandError`.
+  `Target.attachToBrowserTarget`, with the relay's ids like the health probes, kept from
+  the client by `OwnSessions`). Their replies, their events and the
+  `Target.attachedToTarget`/`detachedFromTarget` events naming them never reach the
+  client; Chrome announces a new session before its id is known, so while one attaches
+  what goes to the client is held, in order, for that round trip. A client command on
+  such a session, or a `Target.detachFromTarget` of it by session or target id, is
+  answered with Chrome's "Session with given id not found." error and never reaches
+  Chrome. New `Relay.call()` and `CommandError`.
 - `RawChrome` with credentials in the proxy: new `raw.needs_proxy_auth` and
   `await raw.answer_proxy_auth(session)`. RawChrome does not read the pipe, so whoever
   speaks CDP on it must call `answer_proxy_auth` with a browser session of its own

@@ -30,12 +30,11 @@ from typing import TYPE_CHECKING, Any
 from tellurium.browser.proxy import hide_credentials, redact_proxy_url
 from tellurium.browser.raw_chrome import RawChrome
 from tellurium.multiplexer import health
-from tellurium.multiplexer.own_session import OwnSession
+from tellurium.multiplexer.own_session import CommandError, OwnSession
 from tellurium.multiplexer.relay import (
     CLOSE_ERROR,
     CLOSE_GOING_AWAY,
     CLOSE_NORMAL,
-    CommandError,
     Relay,
     RelayClosed,
 )

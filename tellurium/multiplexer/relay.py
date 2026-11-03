@@ -8,11 +8,8 @@ without ``sessionId``, reach the client untouched; with no client they are
 dropped. A client message that is not a JSON object with an integer ``id``
 closes the connection with 1007.
 
-The relay may keep sessions of its own on the pipe (an
-:class:`~tellurium.multiplexer.own_session.OwnSession`): their events go to
-their handlers, their replies to their callers, and ``Target`` events that
-name them are dropped; a client command aimed at one is refused as Chrome
-refuses an unknown session. The client sees none of it.
+The relay may keep sessions of its own on the pipe, kept from the client by
+:class:`~tellurium.multiplexer.own_session.OwnSessions` (see there).
 
 Both ways are bounded in bytes, by back-pressure rather than by closing:
 past :data:`HIGH_WATER` bytes waiting for the client the relay stops reading
@@ -28,8 +25,9 @@ import asyncio
 import contextlib
 import json
 from collections import deque
-from collections.abc import Callable
 from typing import Any
+
+from tellurium.multiplexer.own_session import CommandError, OwnSessions
 
 #: Ids are drawn below this bound: ``RawChrome`` used ``2**31 - 2`` for its own probe.
 _ID_LIMIT = 2**31 - 16
@@ -61,14 +59,6 @@ class RelayClosed(Exception):
     """The pipe is gone: Chrome exited or the relay was closed."""
 
 
-class CommandError(Exception):
-    """Chrome answered one of the relay's own commands with an error."""
-
-
-#: Chrome's code for a command on a session it does not know.
-_NO_SESSION = -32001
-
-
 class Relay:
     """The pipe of one Chrome, with the id remapping and at most one client.
 
@@ -95,8 +85,8 @@ class Relay:
         self.ended: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         #: Whether the client asked Chrome to exit (``Browser.close``).
         self.closed_by_client = False
-        #: sessionId of each own session -> what takes its events.
-        self._own: dict[str, Callable[[dict], None]] = {}
+        #: The relay's own sessions, kept from the client.
+        self.own = OwnSessions()
 
     def start(self) -> None:
         self._reader = asyncio.ensure_future(self._read())
@@ -139,10 +129,8 @@ class Relay:
     def _dispatch(self, message: dict) -> None:
         own = message.get("id")
         if own is None:
-            if self._own and self._is_own_event(message):
-                return
-            if self._client is not None:
-                self._client.push(message)
+            if not self.own.take(message):
+                self._deliver(message)
             return
         entry = self._pending.pop(own, None) if type(own) is int else None
         if entry is None:
@@ -155,27 +143,20 @@ class Relay:
         self._inflight -= 1
         self._inflight_bytes -= size
         self._answered.set()
-        if self._client is not None:
-            message["id"] = client_id
+        message["id"] = client_id
+        self._deliver(message)
+
+    def _deliver(self, message: dict) -> None:
+        """*message* to the client, if any (held while an own session attaches)."""
+        if self.own.holding:
+            self.own.hold(message)
+        elif self._client is not None:
             self._client.push(message)
 
-    def _is_own_event(self, message: dict) -> bool:
-        """Whether *message* (an event) belongs to an own session: then it is
-        handed to that session, or dropped, and never reaches the client."""
-        handler = self._own.get(_session(message))
-        if handler is not None:
-            handler(message)
-            return True
-        params = message.get("params")
-        return (
-            message.get("method") in ("Target.attachedToTarget", "Target.detachedFromTarget")
-            and isinstance(params, dict)
-            and _session(params) in self._own
-        )
-
-    def adopt(self, session_id: str, handler: Callable[[dict], None]) -> None:
-        """Keep *session_id* from the client; its events go to *handler*."""
-        self._own[session_id] = handler
+    def release_held(self) -> None:
+        """An own attach is over: what was held goes to the client, in order."""
+        for message in self.own.end_attach():
+            self._deliver(message)
 
     def _end(self, reason: str) -> None:
         if not self.ended.done():
@@ -290,8 +271,9 @@ class Relay:
                         ws, CLOSE_BAD_DATA, "each message must be a JSON object with an integer id"
                     )
                     return
-                if self._own and self._aims_at_own(command):
-                    self._refuse(command)
+                refusal = self.own.refusal(command)
+                if refusal is not None:
+                    self._deliver(refusal)  # Chrome never sees it
                     continue
                 size = len(raw)
                 while self._inflight and (
@@ -316,22 +298,6 @@ class Relay:
         except Exception as exc:  # noqa: BLE001 - the client went away: nothing to relay
             if not _is_closed(exc):
                 raise
-
-    def _aims_at_own(self, command: dict) -> bool:
-        if _session(command) in self._own:
-            return True
-        params = command.get("params")
-        return (
-            command.get("method") == "Target.detachFromTarget"
-            and isinstance(params, dict)
-            and _session(params) in self._own
-        )
-
-    def _refuse(self, command: dict) -> None:
-        """Answer *command* as Chrome answers one on a session it does not know."""
-        if self._client is not None:
-            error = {"code": _NO_SESSION, "message": "Session with given id not found."}
-            self._client.push({"id": command["id"], "error": error})
 
     async def disconnect(self, code: int, reason: str) -> None:
         """Close the client's WebSocket, if any, with *code* and *reason*."""
@@ -360,12 +326,6 @@ def _command(raw: str | bytes) -> dict | None:
     if not isinstance(command, dict) or type(command.get("id")) is not int:
         return None
     return command
-
-
-def _session(fields: dict) -> str:
-    """The ``sessionId`` in *fields*, or "" (also when it is not a string)."""
-    value = fields.get("sessionId")
-    return value if isinstance(value, str) else ""
 
 
 async def close_client(ws: Any, code: int, reason: str) -> None:

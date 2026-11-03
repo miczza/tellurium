@@ -751,7 +751,7 @@ async def test_a_client_pausing_just_short_of_the_stall_does_not_get_chrome_kill
 
 
 def _own_sessions(mux: Multiplexer) -> set[str]:
-    return {s for p in mux._pool.places if p.relay is not None for s in p.relay._own}
+    return {s for p in mux._pool.places if p.relay is not None for s in p.relay.own._handlers}
 
 
 def _proxy_auth_tasks() -> list[asyncio.Task]:
@@ -848,3 +848,34 @@ async def test_a_lost_chrome_takes_its_answer_to_the_proxy_with_it():
                 assert await _wait_until(lambda: proxy.requests, 20)
                 assert proxy.requests[0] == ("GET http://site.test/ HTTP/1.1", GOOD_AUTH)
         assert not _proxy_auth_tasks()
+
+
+async def test_the_client_cannot_detach_the_own_session():
+    """Every way a client has to detach a session, tried on the relay's own:
+    refused, or harmless; Chrome still answers the proxy afterwards."""
+    async with FakeProxy() as proxy:
+        url = f"http://{USER}:{PASSWORD}@127.0.0.1:{proxy.port}"
+        async with serving(1, proxies=[url]) as mux, _client(mux) as ws:
+            (place,) = mux._pool.places
+            (own,) = _own_sessions(mux)
+            (own_target,) = place.relay.own._targets
+            root = (await _cdp(ws, 1, "Target.getTargetInfo"))["result"]["targetInfo"]
+            assert root["type"] == "browser" and root["targetId"] != own_target
+            tries = [
+                {"sessionId": own},
+                {"targetId": own_target},
+                {"targetId": root["targetId"]},  # the root's own: Chrome has no session for it
+                {},  # Chrome: "Session id must be specified"
+            ]
+            for n, params in enumerate(tries, 2):
+                reply = await _cdp(ws, n, "Target.detachFromTarget", params)
+                assert "error" in reply, (params, reply)
+            refused = await _cdp(ws, 7, "Fetch.disable", session=own)
+            assert refused["error"]["code"] == -32001
+            for n, flag in enumerate((True, False), 8):
+                await _cdp(ws, n, "Target.setAutoAttach",
+                           {"autoAttach": flag, "waitForDebuggerOnStart": False, "flatten": True})  # fmt: skip
+            assert await place.relay.call("Browser.getVersion", timeout=10, session_id=own)
+            await _cdp(ws, 10, "Target.createTarget", {"url": "http://site.test/"})
+            assert await _wait_until(lambda: proxy.requests, 20)
+            assert proxy.requests[0] == ("GET http://site.test/ HTTP/1.1", GOOD_AUTH)
