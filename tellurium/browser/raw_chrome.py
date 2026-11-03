@@ -50,6 +50,7 @@ class RawChrome:
         self._pid: int = proc.process.pid
         self._seed = plan.seed_used
         self._proxy = plan.proxy
+        self._closed = False
 
     @classmethod
     def launch(
@@ -151,12 +152,35 @@ class RawChrome:
     async def answer_proxy_auth(self, session: Any) -> None:
         """Have Chrome answer the forwarder's challenge through ``Fetch`` on *session*.
 
-        *session* is a browser-wide CDP session of the caller's own on this
-        pipe (``Target.attachToBrowserTarget``), with ``send(method, params,
-        timeout)``, ``on`` and ``off``; the caller keeps dispatching its events.
-        Call it before any navigation. ``Fetch`` stays on until :meth:`close`,
-        which stops it. No-op without credentials in the proxy.
+        Call it once, before any navigation. *session* is a browser-wide CDP
+        session of the caller's own on this pipe (from
+        ``Target.attachToBrowserTarget``) with:
+
+        - ``await send(method, params, timeout)``: sends *method* on that
+          session and returns the reply's ``result``, raising on an error
+          reply or after *timeout* seconds;
+        - ``on(event, handler)`` / ``off(event, handler)``: *handler* is called
+          with the event's ``params`` (not the whole message) for each *event*
+          on that session.
+
+        The caller keeps reading the pipe and dispatching that session's
+        events: a ``Fetch.requestPaused`` nobody hands over leaves its request
+        paused for good. A minimal adapter keeps a reader task on
+        ``transport.recv()`` that resolves a future per command ``id`` and,
+        for a message with no ``id`` and the session's ``sessionId``, calls
+        the handlers of its ``method`` with its ``params``.
+
+        ``Fetch`` stays on until :meth:`close`, which stops it. A second call
+        while it is on, or a call after :meth:`close`, raises
+        :class:`RuntimeError` and changes nothing; after a failed call
+        (``Fetch.enable`` refused) another may be made. No-op without
+        credentials in the proxy.
         """
+        if self._closed:
+            raise RuntimeError("this RawChrome is closed")
+        current = self._proc.proxy_auth
+        if current is not None and current.active:
+            raise RuntimeError("this Chrome already answers the proxy's challenge")
         await self._proc.answer_proxy_auth(session)
 
     @property
@@ -171,6 +195,7 @@ class RawChrome:
         Bounded in time, safe to call more than once; a cancellation is
         re-raised once every step is done.
         """
+        self._closed = True
         await self._proc.close()
 
     async def __aenter__(self) -> RawChrome:

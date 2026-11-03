@@ -49,6 +49,11 @@ class ProxyAuth:
     def __repr__(self) -> str:
         return f"<ProxyAuth forwarder=127.0.0.1:{self._port} active={self._active}>"
 
+    @property
+    def active(self) -> bool:
+        """True from :meth:`start` until :meth:`stop` (or a failed start)."""
+        return self._active
+
     async def start(self) -> None:
         """Enable ``Fetch`` on the session; on failure nothing stays wired."""
         self._session.on("Fetch.requestPaused", self._on_paused)

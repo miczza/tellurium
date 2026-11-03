@@ -525,7 +525,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   speaks CDP on it must call `answer_proxy_auth` with a browser session of its own
   (`send`/`on`/`off`, from `Target.attachToBrowserTarget`) before navigating; until then
   the forwarder answers `407` and nothing reaches the proxy. The answer is owned by the
-  Chrome's process and stopped by `raw.close()`. No-op without credentials.
+  Chrome's process and stopped by `raw.close()`. No-op without credentials. Once per
+  Chrome: a second call while the answer is on, or a call after `close()`, raises
+  `RuntimeError` and changes nothing (another call may follow a failed one). The
+  session's `send` returns the reply's `result`; its `on` handlers get the event's
+  `params`. New `ProxyAuth.active`.
 - `tellurium.Multiplexer` behind a proxy with credentials: each Chrome answers the
   forwarder's challenge through `Fetch` on a browser session of the relay's own, enabled
   before the place is handed to a client (warm places included). The client sees none
