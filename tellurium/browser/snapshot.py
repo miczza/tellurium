@@ -11,11 +11,19 @@ through their own session; an OOPIF that cannot be reached shows as
 page's own renderer: over it, an error). Refs come from the tab's
 :class:`~tellurium.browser.refs.RefMap`. No ``Runtime.enable``: only the
 Accessibility, DOM and Target domains.
+
+Snapshots of one document share its ``getFullAXTree``: one in flight, or in flight
+since a snapshot began (one abandoned past ``snapshot_timeout`` too), serves it as
+long as no command but a snapshot's went out on the browser's pipe after the request:
+a click, a key, an eval or a navigation may have changed the page, and the next
+snapshot asks for a tree of its own.
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
+import weakref
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin
@@ -62,10 +70,13 @@ class _TooLarge(Exception):
 @dataclass
 class _Bounds:
     """What the cross-site iframes of one snapshot may still take: until *deadline*
-    (loop time) to answer, *nodes* DOM nodes under ``max_nodes``."""
+    (loop time) to answer, *nodes* DOM nodes under ``max_nodes``. *known* holds the
+    tree requests in flight since the snapshot began, by session and key: answered
+    since, they are still as new as a request of its own (see :func:`_full_tree`)."""
 
     deadline: float | None = None
     nodes: float = float("inf")
+    known: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -93,11 +104,76 @@ class AXTree:
         return {"nodes": self.nodes, "frames": subs}
 
 
+# Commands the snapshots sent, by router: any other one (input, eval, navigation, by
+# any session of the browser) may have changed a page since a tree was asked for.
+_OWN_COMMANDS: weakref.WeakKeyDictionary[Any, int] = weakref.WeakKeyDictionary()
+# getFullAXTree requests in flight, by session then (frame id, document): the task and
+# the count of other commands when it was sent. A snapshot of that document joins one
+# in flight, or in flight when it began, while no other command went out since: one
+# abandoned past snapshot_timeout serves the next instead of queueing another.
+_IN_FLIGHT: weakref.WeakKeyDictionary[Any, dict[tuple, tuple[asyncio.Task, int]]] = (
+    weakref.WeakKeyDictionary()
+)
+# The *known* requests of the snapshots running, by router: each new request joins them.
+_RUNNING: weakref.WeakKeyDictionary[Any, list[dict]] = weakref.WeakKeyDictionary()
+# DOM.getDocument drops the node ids handed out before: one selector lookup at a time.
+_DOM_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = weakref.WeakKeyDictionary()
+
+
+def _others(router: Any) -> int:
+    """Commands sent on *router* by anyone but the snapshots (ids are allocated
+    synchronously on send, so the two counts move together)."""
+    return router._next_msg_id - _OWN_COMMANDS.get(router, 0)
+
+
 async def _send(session: Session, method: str, params: dict, timeout: float) -> dict:
+    router = session.router
+    _OWN_COMMANDS[router] = _OWN_COMMANDS.get(router, 0) + 1
     try:
         return await session.send(method, params, timeout=timeout)
     except TimeoutError:
         raise TimeoutError(f"{method} got no answer within {timeout}s") from None
+
+
+def _drop_request(requests: dict, key: tuple, task: asyncio.Task) -> None:
+    if requests.get(key, (None,))[0] is task:
+        del requests[key]
+    if not task.cancelled():
+        task.exception()  # retrieved: an abandoned request is never logged as unhandled
+
+
+def _usable(entry: tuple[asyncio.Task, int] | None, others: int) -> bool:
+    if entry is None or entry[1] != others:  # something else was sent since
+        return False
+    task = entry[0]
+    return not task.done() or (not task.cancelled() and task.exception() is None)
+
+
+async def _full_tree(
+    session: Session, frame_id: str | None, document: Any, timeout: float, known: dict
+) -> dict:
+    """``getFullAXTree`` of *document* (``None``: not shared): the request in flight
+    for it, or in flight since the snapshot began (*known*), if nothing but snapshots
+    was sent since it went out; else a new one, which later snapshots may join."""
+    params = {"frameId": frame_id} if frame_id else {}
+    if document is None:
+        return await _send(session, "Accessibility.getFullAXTree", params, timeout)
+    requests, key = _IN_FLIGHT.setdefault(session, {}), (frame_id or "", document)
+    others = _others(session.router)
+    entry = next(
+        (e for e in (requests.get(key), known.get((session, key))) if _usable(e, others)), None
+    )
+    if entry is None:
+        request = _send(session, "Accessibility.getFullAXTree", params, timeout)
+        task = asyncio.ensure_future(request)
+        entry = requests[key] = (task, _others(session.router))
+        for running in _RUNNING.get(session.router, ()):
+            running[(session, key)] = entry
+        task.add_done_callback(functools.partial(_drop_request, requests, key))
+    try:
+        return await asyncio.wait_for(asyncio.shield(entry[0]), timeout)
+    except TimeoutError:
+        raise TimeoutError(f"Accessibility.getFullAXTree got no answer within {timeout}s") from None
 
 
 def _document_url(nodes: list[dict[str, Any]]) -> str:
@@ -168,8 +244,9 @@ async def _oopif_tree(
     if slot is not None and not await slot[0].admit(slot[1], count):
         raise _TooLarge(count)
     loaded = await _send(child, "Page.getFrameTree", {}, timeout)
-    tree = await fetch_tree(child, **sub, _owner=child.session_id or "")
-    tree.document = str(loaded["frameTree"]["frame"].get("loaderId") or "")
+    document = str(loaded["frameTree"]["frame"].get("loaderId") or "")
+    tree = await fetch_tree(child, **sub, _owner=child.session_id or "", _document=document or None)
+    tree.document = document
     return tree
 
 
@@ -219,7 +296,8 @@ async def _frame_in(
         except (CDPError, ConnectionError, KeyError):
             return url
     try:
-        return await fetch_tree(session, frame_id=frame_id, **sub, _owner=owner)
+        document = node["contentDocument"].get("backendNodeId")
+        return await fetch_tree(session, frame_id=frame_id, **sub, _owner=owner, _document=document)
     except CDPError:  # the frame went away between the two calls
         return None
 
@@ -233,15 +311,18 @@ async def fetch_tree(
     _nesting: int = 0,
     _owner: str = "",
     _bounds: _Bounds | None = None,
+    _document: Any = None,
 ) -> AXTree:
     """Fetch the AX tree of a document (the main frame by default) and its iframes,
     cross-site ones too; with *root* (a backend node id) only that node's subtree
-    (``queryAXTree``)."""
+    (``queryAXTree``). The whole tree of a *_document* (its identity) is shared
+    with the snapshots asking for it at the same time (:func:`_full_tree`)."""
     if root is not None:
-        method, params = "Accessibility.queryAXTree", {"backendNodeId": root}
+        query = {"backendNodeId": root}
+        result = await _send(session, "Accessibility.queryAXTree", query, timeout)
     else:
-        method, params = "Accessibility.getFullAXTree", {"frameId": frame_id} if frame_id else {}
-    result = await _send(session, method, params, timeout)
+        known = _bounds.known if _bounds is not None else {}
+        result = await _full_tree(session, frame_id, _document, timeout, known)
     nodes = result.get("nodes", [])
     frames = [n for n in nodes if _role(n) == "Iframe" and not n.get("ignored")]
     iframes = [bid for n in frames if (bid := n.get("backendDOMNodeId"))]
@@ -260,9 +341,8 @@ async def fetch_tree(
     return tree
 
 
-async def _backend_id_of(session: Session, selector: str, timeout: float) -> int:
-    doc = await _send(session, "DOM.getDocument", {"depth": 0}, timeout)
-    query = {"nodeId": doc["root"]["nodeId"], "selector": selector}
+async def _backend_id_of(session: Session, document: int, selector: str, timeout: float) -> int:
+    query = {"nodeId": document, "selector": selector}
     node_id = (await _send(session, "DOM.querySelector", query, timeout)).get("nodeId", 0)
     if not node_id:
         raise LookupError(f"No element matching {selector!r}")
@@ -292,7 +372,11 @@ async def _snapshot_once(
     from the first command: shadow roots escape the node count, and a renderer busy
     with an earlier tree delays them all."""
     deadline = asyncio.get_running_loop().time() + limits[1] * _OOPIF_SHARE
+    known = {(s, k): e for s, r in list(_IN_FLIGHT.items()) for k, e in r.items()}
     seen: dict[str, Any] = {"count": "no", "scope": None, "sessions": {}, "deadline": deadline}
+    seen["known"] = known
+    running = _RUNNING.setdefault(session.router, [])
+    running.append(known)
     steps = _steps(session, selector, limits[0], seen, timeout, opts)
     try:
         return await asyncio.wait_for(steps, limits[1]), seen["sessions"]
@@ -302,6 +386,8 @@ async def _snapshot_once(
             f"The snapshot took over snapshot_timeout={limits[1]:g} s ({seen['count']} DOM nodes"
             f" counted; shadow DOM is not): pass {hint}a higher snapshot_timeout="
         ) from None
+    finally:
+        running[:] = [k for k in running if k is not known]  # by identity: dicts compare equal
 
 
 def _sessions_of(tree: AXTree) -> dict[str, tuple[Session, str]]:
@@ -317,8 +403,10 @@ async def _steps(
     session: Session, selector: str | None, max_nodes: Any, seen: dict, timeout: float, opts: dict
 ) -> list[SnapshotNode]:
     """Whole tree within *max_nodes* (linear), else the selector's subtree (superlinear)."""
-    root = await _backend_id_of(session, selector, timeout) if selector else None
-    count = await _count_nodes(session, timeout) if max_nodes is not None else 0
+    async with _DOM_LOCKS.setdefault(session, asyncio.Lock()):
+        doc = (await _send(session, "DOM.getDocument", {"depth": 0}, timeout))["root"]
+        root = await _backend_id_of(session, doc["nodeId"], selector, timeout) if selector else None
+        count = await _count_nodes(session, timeout) if max_nodes is not None else 0
     seen["count"] = count or "no"
     over = max_nodes is not None and count > max_nodes
     if over and root is None:
@@ -326,8 +414,11 @@ async def _steps(
     scope = seen["scope"] = root if over else None
     limit = float("inf") if max_nodes is None else max_nodes
     # each cross-site iframe gets what is left; over it, its line says it was left out
-    bounds = _Bounds(seen["deadline"], limit - (0 if scope else count))
-    tree = await fetch_tree(session, root=scope, timeout=timeout, _bounds=bounds)
+    bounds = _Bounds(seen["deadline"], limit - (0 if scope else count), seen["known"])
+    document = doc.get("backendNodeId")
+    tree = await fetch_tree(
+        session, root=scope, timeout=timeout, _bounds=bounds, _document=document
+    )
     seen["sessions"] = _sessions_of(tree)
     if scope and (dom := sum(1 for n in tree.nodes if n.get("backendDOMNodeId"))) > limit:
         raise _too_large(dom, "The selected part", max_nodes)
@@ -375,7 +466,7 @@ async def take_snapshot_nodes(
     finally:
         # Chrome keeps the AX tree up to date while it is on: turn it off.
         try:
-            await session.send("Accessibility.disable", {}, timeout=_DISABLE_TIMEOUT)
+            await _send(session, "Accessibility.disable", {}, _DISABLE_TIMEOUT)
         except Exception:  # noqa: BLE001 — housekeeping on a page that may be gone
             pass
 

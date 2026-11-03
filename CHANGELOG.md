@@ -656,6 +656,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Snapshots of one document share its `Accessibility.getFullAXTree`: concurrent
+  `snapshot(selector=...)` calls on a page whose tree must be read whole (shadow DOM)
+  send one request, and a snapshot abandoned past `snapshot_timeout` leaves its request
+  to the next one instead of queueing a second ~120k-node tree behind it. A request is
+  shared only while nothing but snapshots was sent to Chrome after it (a click, a key,
+  an eval, a navigation: the next snapshot asks again) and only for the same document.
+  Concurrent snapshots of one tab no longer fail with "Could not find node with given
+  id": their `DOM.getDocument` and selector lookups take turns.
 - The `max_nodes` budget of a snapshot's cross-site iframes goes in document order: the
   iframes of a document are counted, then admitted one after the other, so with several
   large ones the same one is left out (`[oopif: too large, N nodes]`) whichever renderer
