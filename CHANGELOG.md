@@ -505,6 +505,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `Tab.eval_on`: only a value whose getter throws while Chrome serializes it (CDP
+  `-32603` on returning the value) raises `RuntimeError`; any other `-32603` of
+  `Runtime.callFunctionOn` now comes out as the `CDPError` Chrome gave. The function runs
+  once, as before; its result is read back by value in a second call.
+
 - `Browser.launch(proxy=<with credentials>)`: Chrome answers the forwarder's challenge
   through CDP `Fetch` on the browser session (`handleAuthRequests`, every URL), enabled
   before `launch` returns and covering every context, popup, worker and service worker.
@@ -637,6 +642,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   out of `examples/fingerprint_tests/`.
 
 ### Fixed
+
+- `Tab.screenshot(full_page=True)` before the tab's first navigation has the CSS size
+  under a device pixel ratio and gives the scrollbar back, as after a navigation: the
+  main frame's id, not yet known from a `Page.frameNavigated`, is asked of Chrome.
 
 - The local forwarder in front of an authenticated proxy is no longer an open proxy on
   `127.0.0.1`: every request head (plain requests and `CONNECT`, each one on a keep-alive

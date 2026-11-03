@@ -603,6 +603,8 @@ data = await tab.eval("JSON.parse(document.body.dataset.config)")
 
 # Evaluate on a specific element
 text = await tab.eval_on("h1", "el => el.textContent")
+# a JS exception, also from a getter of the value returned, raises RuntimeError;
+# a value Chrome cannot return (cyclic, BigInt) or any other CDP failure, CDPError
 
 # Inject script (runs on every page load)
 await tab.add_script("window.__injected = true;")

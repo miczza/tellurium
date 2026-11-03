@@ -192,3 +192,31 @@ async def test_cancelled_mid_capture_the_scrollbar_still_comes_back(browser, loc
     await tab.eval(_FRAMES)
     assert await tab.eval(_LAYOUT) == before
     assert tab._background == set()
+
+
+# tall_block.html's body, built in the tab's first document (no navigation at all; the
+# document may ask for Trusted Types, so no innerHTML)
+_TALL_BODY = """(() => {
+  const box = (css) => Object.assign(document.createElement('div'), {style: css});
+  const page = box('position:relative;height:4000px;background:#fff');
+  page.append(box('position:absolute;top:0;right:0;width:10px;height:100px;background:#00f'));
+  page.append(box('position:absolute;left:0;right:0;bottom:0;height:200px;background:#f00'));
+  document.body.style.margin = '0';
+  document.body.replaceChildren(page);
+  return location.href;
+})()"""
+
+
+@pytest.mark.parametrize("ratio", [None, 2])
+async def test_full_page_before_the_first_navigation_is_like_after_it(browser, ratio):
+    """No navigation yet, so no main frame id known from one: the capture still has the
+    CSS size and gives the scrollbar back (P3 [10])."""
+    tab = browser.main_tab
+    await tab.eval(_TALL_BODY)
+    if ratio:
+        await _emulate(tab, ratio)
+    else:
+        width, inner = await tab.eval("[document.documentElement.clientWidth, innerWidth]")
+        assert width < inner  # the premise: a vertical scrollbar takes room
+    assert tab._frame_id == ""  # the premise: no Page.frameNavigated seen
+    await _check_full_page(tab)

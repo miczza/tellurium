@@ -81,16 +81,24 @@ async def _isolated_value(tab: Tab, expression: str, timeout: float | None) -> A
     fake nor see it; ``None`` when there is none (never in the page's own world)."""
     from tellurium.stealth._isolated import get_hsim_world
 
+    frame_id = tab._frame_id or await _main_frame_id(tab, timeout)
     for _ in range(2):  # a world gone with its document: once more, in a fresh one
-        if (world := await get_hsim_world(tab, frame_id=tab._frame_id)) is None:
+        if (world := await get_hsim_world(tab, frame_id=frame_id)) is None:
             return None
         params = {"expression": expression, "returnByValue": True, "contextId": world}
         try:
             res = await tab._session.send("Runtime.evaluate", params, timeout=timeout)
             return res.get("result", {}).get("value")
         except CDPError:
-            tab._hsim_worlds.pop(tab._frame_id, None)
+            tab._hsim_worlds.pop(frame_id, None)
     return None
+
+
+async def _main_frame_id(tab: Tab, timeout: float | None) -> str:
+    """The main frame's id, asked of Chrome: before the tab's first navigation no
+    ``Page.frameNavigated`` told it (``""`` if Chrome does not say)."""
+    tree = await tab._session.send("Page.getFrameTree", {}, timeout=timeout)
+    return str(tree.get("frameTree", {}).get("frame", {}).get("id", ""))
 
 
 def _numbers(value: Any, highs: tuple[float, ...]) -> list[float] | None:
