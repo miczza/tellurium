@@ -647,11 +647,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `matrix3d`), cross-site or not and at any depth, reaches its element instead of raising
   `ElementNotHittableError`: a cross-site frame's points are mapped through the
   projective map from its box's four corners to where Chrome draws them, exact in
-  perspective too. A frame seen edge-on (no area, or folded) still takes no click.
+  perspective too, and for a mirrored frame (`scaleX(-1)`, `scaleY(-1)`). A frame seen
+  edge-on (no area, or folded) still takes no click.
 - A human click into a same-process iframe under a CSS `zoom` on one of its ancestors
   lands on its element: Chrome reports that frame's boxes divided by its zoom, which is
   now undone (the two `devicePixelRatio` are read in the isolated world); it used to aim
-  at the wrong point and raise `ElementNotHittableError`.
+  at the wrong point and raise `ElementNotHittableError`. A same-process frame of
+  another origin than the root's keeps the old refusal: its zoom cannot be read there.
+- A human click on a node of another origin than the hit frame's world no longer fails
+  with `KeyError: 'objectId'`: Chrome resolves it to no object, read as "not inside".
 - `Tab.screenshot(full_page=True)` before the tab's first navigation has the CSS size
   under a device pixel ratio and gives the scrollbar back, as after a navigation: the
   main frame's id, not yet known from a `Page.frameNavigated`, is asked of Chrome.

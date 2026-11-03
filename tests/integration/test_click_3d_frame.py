@@ -25,6 +25,10 @@ _STAGES = {
     "tilted-back": "&perspective=400px&transform=rotateX(-25deg)",
     "zoomed-ancestor": "&zoom=1.5&left=60&top=40",
     "zoomed-and-perspective": "&zoom=1.5&left=60&top=40" + _PERSPECTIVE,
+    # mirrored: the map turns the frame over (a negative determinant)
+    "mirrored-x": "&transform=scaleX(-1)",
+    "mirrored-y": "&transform=scaleY(-1)",
+    "mirrored-in-perspective": "&perspective=400px&transform=" + quote("scaleX(-1) rotateY(20deg)"),
 }
 
 
@@ -97,3 +101,46 @@ async def test_a_frame_seen_edge_on_takes_no_click(browser, local_server, site, 
         await button.click(human=True)
     assert '"idle"' in await _clicked(tab)
     assert await tab.eval("document.title") == "Stage"
+
+
+@pytest.fixture(scope="module")
+def other_port():
+    """The fixtures from 127.0.0.1 on another port: another origin, the same site, so
+    the frame stays in the tab's process."""
+    import http.server
+    import threading
+
+    from tests.integration.conftest import _FixtureHandler
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _FixtureHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+
+
+async def test_a_zoomed_same_process_frame_of_another_origin_is_refused(
+    browser, local_server, other_port
+):
+    """The root's world cannot read the zoom of a cross-origin frame: the box stays
+    divided by it, the aim point is off the button and the hit test sends nothing
+    (no click lands elsewhere)."""
+    tab = browser.main_tab
+    text = await _open(
+        tab, _stage(local_server, f"{other_port}/oopif_grid.html", "&zoom=1.5&left=60&top=40")
+    )
+    assert "[oopif]" not in text  # the premise: one process, no cross-site frame
+    button = await tab.ref(_ref_of(text, '- button "Hotel"'))
+    with pytest.raises(ElementNotHittableError):
+        await button.click(human=True)
+    assert '"idle"' in await _clicked(tab)
+    assert await tab.eval("document.title") == "Stage"
+
+
+@pytest.mark.parametrize("stage", ["", _PERSPECTIVE])
+async def test_a_same_process_frame_of_another_origin_without_zoom_takes_the_click(
+    browser, local_server, other_port, stage
+):
+    tab = browser.main_tab
+    text = await _open(tab, _stage(local_server, f"{other_port}/oopif_grid.html", stage))
+    assert "[oopif]" not in text
+    await _click_each(tab, text)

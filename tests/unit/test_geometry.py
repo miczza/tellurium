@@ -185,3 +185,17 @@ async def test_a_frame_map_starts_at_the_content_corner():
     assert owner == 9
     assert homography.apply(0, 0) == pytest.approx((110, 60))
     assert homography.invert(120, 70) == pytest.approx((10, 10))
+
+
+@pytest.mark.parametrize(
+    "quad",
+    [
+        [(500.0, 50.0), (100.0, 50.0), (100.0, 350.0), (500.0, 350.0)],  # scaleX(-1)
+        [(100.0, 350.0), (500.0, 350.0), (500.0, 50.0), (100.0, 50.0)],  # scaleY(-1)
+        [(420.0, 90.0), (100.0, 50.0), (100.0, 350.0), (420.0, 290.0)],  # mirrored, tilted
+    ],
+)
+def test_a_mirrored_frame_map_inverts(quad):
+    homography = geometry._Homography.of_rect(400, 300, quad)
+    for u, v in [(10, 10), (200, 150), (390, 290)]:
+        assert homography.invert(*homography.apply(u, v)) == pytest.approx((u, v))

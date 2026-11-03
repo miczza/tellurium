@@ -151,7 +151,10 @@ asyncio.run(main("http://127.0.0.1:8000/download.html"))
   work like any other; a cross-site iframe shows as `- iframe "<url>" [oopif]`.
   A human click reaches an element in an iframe that is zoomed (CSS `zoom`, on it
   or an ancestor), turned, or drawn in 3D (`perspective`, `matrix3d`), at any
-  depth; a frame seen edge-on takes no click (`ElementNotHittableError`).
+  depth, mirrored too; a frame seen edge-on takes no click (`ElementNotHittableError`).
+  One limit: a zoom over a same-process frame of another origin than the tab's
+  (`127.0.0.1:8001` in `127.0.0.1:8000`) cannot be read from the isolated world, so
+  that click is refused (`ElementNotHittableError`), never sent elsewhere.
 - **Downloads**: `tab.expect_download(timeout=30)` takes the next download of
   the tab (its iframes included). `download.url`, `suggested_filename`,
   `await download.path()`, `await download.save_as(path)`, `await

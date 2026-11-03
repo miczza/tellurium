@@ -35,6 +35,8 @@ _RATIO = """function() {
   try { return this.ownerDocument.defaultView.devicePixelRatio / devicePixelRatio; }
   catch (e) { return 1; }
 }"""
+# Seconds a release of a handle may take: best effort, never worth a long wait.
+_RELEASE = 2.0
 # Frames climbed at most from the hit node up to the element's document.
 _MAX_FRAMES = 8
 # A frame scaled below this area per CSS pixel² (edge-on, scale(0)) takes no clicks.
@@ -148,7 +150,12 @@ class _Homography:
             f * g - d * i, a * i - c * g, c * d - a * f,
             d * h - e * g, b * g - a * h, a * e - b * d,
         )  # fmt: skip
-        return _Homography(adjugate).apply(x, y)
+        det = a * adjugate[0] + b * adjugate[3] + c * adjugate[6]
+        if abs(det) < 1e-12:
+            raise _degenerate()
+        # the inverse itself, not only the adjugate: a frame turned over (scaleX(-1))
+        # has a negative determinant, which would flip the sign of w
+        return _Homography(tuple(k / det for k in adjugate)).apply(x, y)
 
 
 def _degenerate() -> ElementNotHittableError:
@@ -208,14 +215,16 @@ async def _zoom(element: Element) -> float:
     node = await _send(element, "DOM.describeNode", {"objectId": await element._resolve()})
     where = {"backendNodeId": node["node"]["backendNodeId"], "executionContextId": context}
     try:
-        resolved = (await _send(element, "DOM.resolveNode", where))["object"]["objectId"]
-    except CDPError:  # a node the root's world cannot reach
+        resolved = (await _send(element, "DOM.resolveNode", where))["object"].get("objectId")
+    except CDPError:
+        resolved = None
+    if resolved is None:  # a node the root's world cannot reach (another origin)
         return 1.0
     try:
         call = {"objectId": resolved, "functionDeclaration": _RATIO, "returnByValue": True}
         ratio = (await _send(element, "Runtime.callFunctionOn", call))["result"].get("value")
     finally:
-        await session.send("Runtime.releaseObject", {"objectId": resolved})
+        await session.send("Runtime.releaseObject", {"objectId": resolved}, timeout=_RELEASE)
     return float(ratio) if isinstance(ratio, int | float) and ratio > 0 else 1.0
 
 
@@ -292,6 +301,8 @@ async def _holds(element: Element, target: int, node: int, frame_id: str) -> boo
         ids = []
         for backend in (target, node):
             resolved = await _send(element, "DOM.resolveNode", {"backendNodeId": backend, **where})
+            if "objectId" not in resolved["object"]:  # another origin's node: not reachable
+                return False
             ids.append(resolved["object"]["objectId"])
         call = {"objectId": ids[0], "functionDeclaration": _HOLDS, "returnByValue": True}
         answer = await _send(
@@ -301,7 +312,8 @@ async def _holds(element: Element, target: int, node: int, frame_id: str) -> boo
         return False
     finally:
         for object_id in ids:
-            await element._session.send("Runtime.releaseObject", {"objectId": object_id})
+            release = {"objectId": object_id}
+            await element._session.send("Runtime.releaseObject", release, timeout=_RELEASE)
     return answer.get("result", {}).get("value") is True
 
 
