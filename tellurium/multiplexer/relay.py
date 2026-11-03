@@ -8,6 +8,12 @@ without ``sessionId``, reach the client untouched; with no client they are
 dropped. A client message that is not a JSON object with an integer ``id``
 closes the connection with 1007.
 
+The relay may keep sessions of its own on the pipe (an
+:class:`~tellurium.multiplexer.own_session.OwnSession`): their events go to
+their handlers, their replies to their callers, and ``Target`` events that
+name them are dropped; a client command aimed at one is refused as Chrome
+refuses an unknown session. The client sees none of it.
+
 Both ways are bounded in bytes, by back-pressure rather than by closing:
 past :data:`HIGH_WATER` bytes waiting for the client the relay stops reading
 the pipe (Chrome keeps the rest, as it does for a slow WebSocket client of
@@ -22,6 +28,7 @@ import asyncio
 import contextlib
 import json
 from collections import deque
+from collections.abc import Callable
 from typing import Any
 
 #: Ids are drawn below this bound: ``RawChrome`` used ``2**31 - 2`` for its own probe.
@@ -54,6 +61,14 @@ class RelayClosed(Exception):
     """The pipe is gone: Chrome exited or the relay was closed."""
 
 
+class CommandError(Exception):
+    """Chrome answered one of the relay's own commands with an error."""
+
+
+#: Chrome's code for a command on a session it does not know.
+_NO_SESSION = -32001
+
+
 class Relay:
     """The pipe of one Chrome, with the id remapping and at most one client.
 
@@ -80,6 +95,8 @@ class Relay:
         self.ended: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         #: Whether the client asked Chrome to exit (``Browser.close``).
         self.closed_by_client = False
+        #: sessionId of each own session -> what takes its events.
+        self._own: dict[str, Callable[[dict], None]] = {}
 
     def start(self) -> None:
         self._reader = asyncio.ensure_future(self._read())
@@ -122,6 +139,8 @@ class Relay:
     def _dispatch(self, message: dict) -> None:
         own = message.get("id")
         if own is None:
+            if self._own and self._is_own_event(message):
+                return
             if self._client is not None:
                 self._client.push(message)
             return
@@ -139,6 +158,24 @@ class Relay:
         if self._client is not None:
             message["id"] = client_id
             self._client.push(message)
+
+    def _is_own_event(self, message: dict) -> bool:
+        """Whether *message* (an event) belongs to an own session: then it is
+        handed to that session, or dropped, and never reaches the client."""
+        handler = self._own.get(_session(message))
+        if handler is not None:
+            handler(message)
+            return True
+        params = message.get("params")
+        return (
+            message.get("method") in ("Target.attachedToTarget", "Target.detachedFromTarget")
+            and isinstance(params, dict)
+            and _session(params) in self._own
+        )
+
+    def adopt(self, session_id: str, handler: Callable[[dict], None]) -> None:
+        """Keep *session_id* from the client; its events go to *handler*."""
+        self._own[session_id] = handler
 
     def _end(self, reason: str) -> None:
         if not self.ended.done():
@@ -177,18 +214,42 @@ class Relay:
         silent and :class:`RelayClosed` when the pipe is gone. A late reply is
         dropped.
         """
+        reply = await self._ask({"method": "Browser.getVersion"}, timeout)
+        return reply.get("result") or {}
+
+    async def call(
+        self,
+        method: str,
+        params: dict | None = None,
+        *,
+        timeout: float,
+        session_id: str | None = None,
+    ) -> dict:
+        """A command of the relay's own (on *session_id*, else the root): its
+        ``result``. Raises as :meth:`probe` does, and :class:`CommandError`
+        when Chrome answers with an error. The reply never reaches the client."""
+        command: dict[str, Any] = {"method": method, "params": params or {}}
+        if session_id is not None:
+            command["sessionId"] = session_id
+        reply = await self._ask(command, timeout)
+        error = reply.get("error")
+        if error is not None:
+            message = error.get("message") if isinstance(error, dict) else error
+            raise CommandError(f"{method}: {message}")
+        return reply.get("result") or {}
+
+    async def _ask(self, command: dict, timeout: float) -> dict:
         own = self._own_id()
         future: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
         self._pending[own] = future
         try:
-            await self._send({"id": own, "method": "Browser.getVersion"})
-            reply = await asyncio.wait_for(future, timeout)
+            await self._send({"id": own, **command})
+            return await asyncio.wait_for(future, timeout)
         except TimeoutError:
             raise TimeoutError(f"Chrome did not answer within {timeout:g} s") from None
         finally:
             if self._pending.get(own) is future:
                 del self._pending[own]
-        return reply.get("result") or {}
 
     async def serve(self, ws: Any) -> None:
         """Relay between *ws* and Chrome until either side goes away.
@@ -229,6 +290,9 @@ class Relay:
                         ws, CLOSE_BAD_DATA, "each message must be a JSON object with an integer id"
                     )
                     return
+                if self._own and self._aims_at_own(command):
+                    self._refuse(command)
+                    continue
                 size = len(raw)
                 while self._inflight and (
                     self._inflight >= MAX_PENDING
@@ -252,6 +316,22 @@ class Relay:
         except Exception as exc:  # noqa: BLE001 - the client went away: nothing to relay
             if not _is_closed(exc):
                 raise
+
+    def _aims_at_own(self, command: dict) -> bool:
+        if _session(command) in self._own:
+            return True
+        params = command.get("params")
+        return (
+            command.get("method") == "Target.detachFromTarget"
+            and isinstance(params, dict)
+            and _session(params) in self._own
+        )
+
+    def _refuse(self, command: dict) -> None:
+        """Answer *command* as Chrome answers one on a session it does not know."""
+        if self._client is not None:
+            error = {"code": _NO_SESSION, "message": "Session with given id not found."}
+            self._client.push({"id": command["id"], "error": error})
 
     async def disconnect(self, code: int, reason: str) -> None:
         """Close the client's WebSocket, if any, with *code* and *reason*."""
@@ -280,6 +360,12 @@ def _command(raw: str | bytes) -> dict | None:
     if not isinstance(command, dict) or type(command.get("id")) is not int:
         return None
     return command
+
+
+def _session(fields: dict) -> str:
+    """The ``sessionId`` in *fields*, or "" (also when it is not a string)."""
+    value = fields.get("sessionId")
+    return value if isinstance(value, str) else ""
 
 
 async def close_client(ws: Any, code: int, reason: str) -> None:

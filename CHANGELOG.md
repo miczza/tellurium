@@ -510,6 +510,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   them there is no forwarder and no `Fetch`. Chrome's background traffic, which does
   not go through DevTools, gets `407`. New `tellurium.browser.proxy_auth.ProxyAuth`,
   owned by the launch's `BrowserProcess` and stopped by its `close()`.
+- Multiplexer relay: it can keep browser sessions of its own on a Chrome's pipe
+  (`tellurium.multiplexer.own_session.OwnSession`, opened with
+  `Target.attachToBrowserTarget`, with the relay's ids like the health probes). Their
+  replies, their events and the `Target.attachedToTarget`/`detachedFromTarget` events
+  naming them never reach the client; a client command on such a session (or a
+  `Target.detachFromTarget` of it) is answered with Chrome's "Session with given id not
+  found." error and never reaches Chrome. New `Relay.call()` and `CommandError`.
 - **Breaking:** `tellurium.stealth.geoip.exit_geo`, `resolve_exit_ip` and
   `resolve_geoip` take the credential forwarder itself (`forwarder=`, was
   `forwarder_port=`) and ask it with its secret (`ProxyForwarder.auth_header`); a port
