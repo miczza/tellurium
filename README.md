@@ -753,7 +753,8 @@ either the `--headless` flag on its command line or `HeadlessChrome` in its
 user agent says so. The banner is removed however the
 wait ends. The timeout holds within about a second even on a page whose main
 thread is busy: every CDP call takes at most what is left of the wait; on such
-a page the banner's cleanup ends in the background just after the wait. The
+a page the banner's cleanup ends in the background, so the banner may stay on
+screen for a second or two after the wait has returned. The
 banner also shows on SVG and XML documents; if its script fails on a page, a
 warning on the `tellurium` logger says why.
 
@@ -1300,7 +1301,10 @@ if await tab.is_allowed("https://example.com/search?q=x"):
   robots.txt is asked again after a minute.
 - With `stealth=True` it carries the pages' `User-Agent`: on the stock backend Chrome is
   launched with the profile's (`args` may not hold a `--user-agent` then: `ValueError`),
-  on the patched one both are the binary's own. It sends no `Sec-CH-UA*` client hints,
+  on the patched one both are the binary's own. On the stock backend the flag needs the
+  version `chrome --version` prints; when it cannot be read Chrome starts without it and,
+  headless, robots.txt leaves with `HeadlessChrome` (a warning on the `tellurium` logger
+  says so at launch). It sends no `Sec-CH-UA*` client hints,
   which Chrome adds to page requests only. Without stealth it is Chrome's own
   (`HeadlessChrome` when headless).
 - Without `respect_robots` no navigation ever requests robots.txt; `is_allowed` still

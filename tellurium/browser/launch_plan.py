@@ -286,6 +286,14 @@ class LaunchPlan:
             ua_flag = self.stealth_engine.user_agent_flag() if found else None
             if ua_flag:
                 flags.append(ua_flag)
+            elif self.headless and self.stealth_engine.user_agent_flag():
+                logger.warning(
+                    "stealth: `%s --version` did not tell Chrome's version, so Chrome is "
+                    "launched without --user-agent: what the browser loads itself, "
+                    "robots.txt included, leaves with Chrome's own User-Agent "
+                    "(HeadlessChrome), while the pages show the profile's",
+                    self.chrome_path,
+                )
             stealth_ext = self.stealth_engine.build_extension()
         if stealth_ext or user_exts:
             flags.append(

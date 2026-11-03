@@ -6,6 +6,7 @@ so robots.txt) leaves with Chrome's own User-Agent unless ``--user-agent`` sets 
 """
 
 import asyncio
+import logging
 
 import pytest
 
@@ -14,7 +15,7 @@ from tellurium.browser import engine as engine_mod
 from tellurium.stealth.profile import StealthProfile
 
 
-def _launch_flags(monkeypatch, version, engine="StockEngine", **kw) -> list[str]:
+def _launch_flags(monkeypatch, version, engine="StockEngine", headless=True, **kw) -> list[str]:
     captured: dict = {}
 
     def fake_build_chrome_flags(**flags):
@@ -30,7 +31,7 @@ def _launch_flags(monkeypatch, version, engine="StockEngine", **kw) -> list[str]
         "tellurium.browser.launch_plan._detect_chrome_version", lambda path: version
     )
     with pytest.raises(RuntimeError, match="stop-here"):
-        asyncio.run(browser_mod.Browser.launch(headless=True, seed=1, **kw))
+        asyncio.run(browser_mod.Browser.launch(headless=headless, seed=1, **kw))
     return captured["extra_args"]
 
 
@@ -47,6 +48,42 @@ def test_an_undetected_version_gives_no_flag(monkeypatch):
     real one: flag and override would disagree."""
     flags = _launch_flags(monkeypatch, None, stealth=True)
     assert not any(f.startswith("--user-agent=") for f in flags)
+
+
+def _headless_warnings(caplog) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "tellurium"
+        and r.levelno == logging.WARNING
+        and "HeadlessChrome" in r.getMessage()
+    ]
+
+
+def test_an_undetected_version_headless_says_robots_txt_leaves_as_headless(monkeypatch, caplog):
+    """No flag, so what the browser loads itself (robots.txt) carries Chrome's
+    own headless User-Agent while the pages carry the profile's: said once."""
+    with caplog.at_level(logging.WARNING, logger="tellurium"):
+        _launch_flags(monkeypatch, None, stealth=True)
+    (message,) = _headless_warnings(caplog)
+    assert "robots.txt" in message
+    assert "--version" in message
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        {"version": (156, 0, 8078, 47), "stealth": True},
+        {"version": None, "stealth": True, "headless": False},
+        {"version": None, "stealth": False},
+        {"version": None, "stealth": True, "engine": "PatchedEngine", "browser": "patched"},
+    ],
+    ids=["version-read", "headed", "no-stealth", "patched"],
+)
+def test_no_headless_warning_when_robots_txt_has_the_page_user_agent(monkeypatch, caplog, case):
+    with caplog.at_level(logging.WARNING, logger="tellurium"):
+        _launch_flags(monkeypatch, **case)
+    assert _headless_warnings(caplog) == []
 
 
 @pytest.mark.parametrize("flag", ["--user-agent=Mine/1.0", "-user-agent=Mine/1.0"])

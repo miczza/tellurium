@@ -656,6 +656,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Stock stealth, headless: when `chrome --version` cannot be read, the launch logs a
+  warning on `tellurium` that Chrome starts without `--user-agent`, so robots.txt (and
+  anything else the browser loads itself) leaves with `HeadlessChrome` while the pages
+  show the profile's User-Agent.
 - Stock stealth: service and shared workers report the page's client hints
   (`architecture`, `bitness`, `fullVersionList`, `uaFullVersion`, brands): their targets
   get the same `Emulation.setUserAgentOverride` as the page (with `--user-agent` they were
