@@ -107,8 +107,11 @@ async def open_frame(browser: Any, context_id: str) -> Frame:
         params["browserContextId"] = context_id
     # The reply is watched with no clock: a hidden target lives as long as the
     # session that made it (the pipe), and so does the wait for it (Chrome
-    # fails it when the pipe closes). Only this caller's wait is bounded.
+    # fails it when the pipe closes), a task of the browser, which cancels it
+    # when it closes. Only this caller's wait is bounded.
     create = asyncio.ensure_future(root.send("Target.createTarget", params, timeout=math.inf))
+    browser._background.add(create)
+    create.add_done_callback(browser._background.discard)
     try:
         target_id = (await asyncio.wait_for(asyncio.shield(create), _OPEN_TIMEOUT))["targetId"]
     except BaseException:

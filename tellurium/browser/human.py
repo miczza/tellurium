@@ -48,10 +48,6 @@ MIN_CALL = 0.05
 CLEANUP_GRACE = 0.5
 DONE_LABEL = "Done"
 
-# Background work of the waits that are over (cleanup, a late early script):
-# held here so that it is not collected before it ends.
-_background: set[asyncio.Future] = set()
-
 # Run in the banner's isolated world, at every new document (before the
 # page's own scripts) and again every round of the wait. It (1) puts a click
 # listener on window in the capture phase, so on a document loaded during the
@@ -247,10 +243,11 @@ def _call_timeout(deadline: float) -> float:
     return min(CALL_TIMEOUT, max(left, MIN_CALL))
 
 
-def _keep(future: asyncio.Future) -> None:
-    """Hold *future* until it ends and read its outcome (no "never retrieved")."""
-    _background.add(future)
-    future.add_done_callback(_background.discard)
+def _keep(future: asyncio.Future, owner: set[asyncio.Future]) -> None:
+    """Have *owner* hold *future* until it ends, and read its outcome (no
+    "never retrieved")."""
+    owner.add(future)
+    future.add_done_callback(owner.discard)
     future.add_done_callback(lambda f: f.cancelled() or f.exception())
 
 
@@ -313,6 +310,9 @@ class _Banner:
         token = secrets.token_hex(8)
         self._tab = tab
         self._session = tab._session
+        # Background work of the wait (cleanup, a late early script) is the
+        # browser's: it ends with the session, and the browser cancels it on close.
+        self._owner = tab._browser._background
         self._deadline = deadline
         self._world = f"__tl_human_{token}"
         self._binding = f"__tl_done_{token}"
@@ -353,7 +353,7 @@ class _Banner:
                 timeout=math.inf,
             )
         )
-        _keep(self._adding)
+        _keep(self._adding, self._owner)
 
     async def show(self, frame: dict) -> None:
         """Make sure the current document shows the banner."""
@@ -404,11 +404,13 @@ class _Banner:
         if adding is not None and adding.done():
             steps.append(self._remove_script(adding))
         elif adding is not None:
-            adding.add_done_callback(lambda f: _keep(asyncio.ensure_future(self._remove_script(f))))
+            adding.add_done_callback(
+                lambda f: _keep(asyncio.ensure_future(self._remove_script(f)), self._owner)
+            )
         if self._bound:
             steps.append(self._send("Runtime.removeBinding", {"name": self._binding}, CALL_TIMEOUT))
         cleanup = asyncio.ensure_future(asyncio.gather(*steps, return_exceptions=True))
-        _keep(cleanup)
+        _keep(cleanup, self._owner)
         left = self._deadline - asyncio.get_running_loop().time()
         await asyncio.wait({cleanup}, timeout=max(min(CALL_TIMEOUT, left), CLEANUP_GRACE))
 

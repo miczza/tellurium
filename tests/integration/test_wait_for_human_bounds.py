@@ -199,3 +199,41 @@ async def test_a_cookie_set_headless_is_there_headed_on_the_same_profile(tmp_pat
         assert "sso=1" in await b.main_tab.eval("document.cookie")
     finally:
         await b.close()
+
+
+# --- Closing the browser mid-wait ------------------------------------------------
+
+
+def _other_tasks() -> set[asyncio.Task]:
+    return asyncio.all_tasks() - {asyncio.current_task()}
+
+
+async def _settled(seconds: float = 2) -> set[asyncio.Task]:
+    """The tasks still there once those that are ending have ended."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    while _other_tasks() and loop.time() < deadline:
+        await asyncio.sleep(0.01)
+    return _other_tasks()
+
+
+@needs_display
+async def test_closing_the_browser_mid_wait_leaves_no_task(local_server):
+    """The late early script's reply and the cleanup are awaited in the
+    background with no clock of their own: the browser that owns them ends
+    them when it closes."""
+    from tellurium import Browser
+
+    b = await Browser.launch(headless=False)
+    try:
+        tab = b.main_tab
+        await tab.get(f"{local_server}/human_busy.html")
+        await tab.eval("busy(4000)")
+        await asyncio.sleep(0.3)
+        task = asyncio.create_task(tab.wait_for_human("Go on", timeout=30))
+        await asyncio.sleep(0.5)
+    finally:
+        await asyncio.wait_for(b.close(), 15)
+    with pytest.raises(ConnectionError):
+        await asyncio.wait_for(task, 5)
+    assert await _settled() == set()

@@ -656,6 +656,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Browser.close()` cancels the work it still runs in the background: the waits with no
+  clock of their own for a late Chrome reply (the early script of `wait_for_human` on a
+  busy page, the hidden robots.txt target) and the banner's cleanup are tasks of the
+  browser, so none is left once it is closed, even mid-wait.
 - A hidden robots.txt target whose `Target.createTarget` reply comes after the caller gave
   up is closed as soon as the reply lands, however late (it was watched for 30 s only);
   the wait for it lasts as long as the pipe, which is also the hidden target's lifetime.

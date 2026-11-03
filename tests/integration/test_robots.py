@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from pathlib import Path
 
 import pytest
 
+import tellurium
 from tellurium import Browser, NavigationError, RobotsDisallowedError
 
 pytestmark = pytest.mark.asyncio
@@ -447,6 +449,19 @@ async def test_closing_the_browser_mid_download(site):
     await asyncio.wait_for(browser.close(), 10)
     with pytest.raises(ConnectionError):
         await waiting
+    package = str(Path(tellurium.__file__).parent)
+
+    def of_tellurium() -> list[asyncio.Task]:  # the test's proxy is still serving
+        coros = [(t, t.get_coro()) for t in asyncio.all_tasks()]
+        return [
+            t for t, c in coros if getattr(c, "cr_code", None) and package in c.cr_code.co_filename
+        ]
+
+    for _ in range(200):  # nothing of the browser left running
+        if not of_tellurium():
+            break
+        await asyncio.sleep(0.01)
+    assert of_tellurium() == []
 
 
 async def test_a_page_with_a_strict_csp_does_not_block_the_download(site):

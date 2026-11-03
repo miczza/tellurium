@@ -34,7 +34,7 @@ class _SlowRoot:
 
 async def test_a_hidden_target_created_after_the_caller_gave_up_is_closed(monkeypatch):
     root = _SlowRoot()
-    browser = SimpleNamespace(_router=SimpleNamespace(root=root))
+    browser = SimpleNamespace(_router=SimpleNamespace(root=root), _background=set())
     monkeypatch.setattr(robots, "_OPEN_TIMEOUT", 0.05)
     with pytest.raises(TimeoutError):
         await robots.open_frame(browser, "")
@@ -45,3 +45,20 @@ async def test_a_hidden_target_created_after_the_caller_gave_up_is_closed(monkey
             break
         await asyncio.sleep(0.01)
     assert root.closed == ["late"]
+
+
+async def test_the_late_reply_is_owned_by_the_browser(monkeypatch):
+    """The wait for a reply with no clock is a task of the browser, which
+    cancels it when it closes."""
+    root = _SlowRoot()
+    browser = SimpleNamespace(_router=SimpleNamespace(root=root), _background=set())
+    monkeypatch.setattr(robots, "_OPEN_TIMEOUT", 0.05)
+    with pytest.raises(TimeoutError):
+        await robots.open_frame(browser, "")
+    (create,) = browser._background
+    assert not create.done()
+    create.cancel()
+    await asyncio.wait({create})
+    await asyncio.sleep(0)  # the done callbacks
+    assert browser._background == set()
+    assert root.closed == []
