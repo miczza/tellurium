@@ -656,6 +656,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Stock stealth: service and shared workers report the page's client hints
+  (`architecture`, `bitness`, `fullVersionList`, `uaFullVersion`, brands): their targets
+  get the same `Emulation.setUserAgentOverride` as the page (with `--user-agent` they were
+  empty, and the brands were Chrome's own). A service worker is no longer held 10 s at
+  start and is patched before its script runs: frozen, it answers no command, so its patch
+  is sent and the worker resumed before the replies are read.
 - `Browser.close()` cancels the work it still runs in the background: the waits with no
   clock of their own for a late Chrome reply (the early script of `wait_for_human` on a
   busy page, the hidden robots.txt target) and the banner's cleanup are tasks of the

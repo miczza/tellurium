@@ -7,12 +7,14 @@ import logging
 import weakref
 
 from tellurium.browser.engine import BrowserEngine
+from tellurium.cdp.transport._pipeline import CommandPipeline
 from tellurium.stealth.extension import (
     create_stealth_extension,
     load_script,
     remove_stealth_extension,
 )
 from tellurium.stealth.profile import StealthProfile
+from tellurium.stealth.user_agent_override import user_agent_override
 
 logger = logging.getLogger("tellurium")
 
@@ -26,6 +28,8 @@ _STEALTH_TARGET_FILTER: list[dict] = [
     {"type": "service_worker", "exclude": False},
     {"type": "shared_worker", "exclude": False},
 ]
+# Workers of the browser itself and of extensions: not page-visible, left as they are.
+_INTERNAL_WORKERS = ("chrome-extension://", "chrome://", "devtools://")
 
 
 def refuse_user_agent_arg(args: list[str] | None) -> None:
@@ -213,6 +217,7 @@ class StealthEngine:
         iframe or worker frozen forever.
         """
         session = self._get_session(session_id)
+        pipeline = None
         try:
             if target_type == "iframe":
                 # T7.7: Page.enable is mandatory on a fresh OOPIF session.
@@ -226,7 +231,23 @@ class StealthEngine:
                 # T7: also push runtime JS overrides into the OOPIF.
                 await self.apply_page_scripts(session)
             elif target_type in ("worker", "service_worker", "shared_worker"):
-                await self.apply_worker_scripts(session, target_url)
+                target = session
+                if target_type == "service_worker":
+                    # Frozen at start, a service worker answers no command until
+                    # it runs (Chrome 156: no reply in 10 s), yet runs what it was
+                    # sent, in order, before its own script: send now, read the
+                    # replies once it is resumed.
+                    target = pipeline = CommandPipeline(session)
+                if (
+                    target_type != "worker"
+                    and "native_navigator" not in self._caps
+                    and not target_url.startswith(_INTERNAL_WORKERS)
+                ):
+                    # Unlike a dedicated worker, a service or shared worker does
+                    # not inherit the page's override: with --user-agent its
+                    # architecture, bitness and fullVersionList would be empty.
+                    await self._set_ua_override(target)
+                await self.apply_worker_scripts(target, target_url)
         except Exception:
             logger.debug("Failed to patch target %s", session_id, exc_info=True)
         finally:
@@ -238,6 +259,8 @@ class StealthEngine:
                 )
             except Exception:
                 logger.debug("Failed to resume target %s", session_id, exc_info=True)
+            if pipeline is not None:
+                await pipeline.drain(session_id)
 
     async def _resume_target(self, session_id: str) -> None:
         try:
@@ -389,7 +412,7 @@ class StealthEngine:
         ``Runtime.enable`` is never called (architectural guard in
         ``tellurium/cdp/transport/_session.py``).
         """
-        if target_url.startswith(("chrome-extension://", "chrome://", "devtools://")):
+        if target_url.startswith(_INTERNAL_WORKERS):
             # Browser-internal / extension workers: not page-visible, leave
             # them untouched (still resumed by the caller's finally).
             return
@@ -405,46 +428,7 @@ class StealthEngine:
 
     async def _set_ua_override(self, session) -> None:
         """Set User-Agent and Client Hints via CDP."""
-        p = self._profile
-        major = p.browser_version.split(".")[0]
-
-        grease_brand = p.grease_brand or "Not_A Brand"
-        grease_version = p.grease_version or "24"
-        grease_version_full = p.grease_version + ".0.0.0" if p.grease_version else "24.0.0.0"
-
-        await session.send(
-            "Emulation.setUserAgentOverride",
-            {
-                "userAgent": p.user_agent,
-                # Empty = keep Chrome's own Accept-Language (set via --accept-lang
-                # at launch). A non-empty value leaks into navigator.languages.
-                "acceptLanguage": "",
-                "platform": p.platform,
-                "userAgentMetadata": {
-                    "brands": [
-                        {"brand": "Chromium", "version": major},
-                        {"brand": "Google Chrome", "version": major},
-                        {"brand": grease_brand, "version": grease_version},
-                    ],
-                    # Chrome fills the full version itself only without
-                    # --user-agent, which stealth launches with (robots.txt
-                    # must leave with the page's UA): give it explicitly.
-                    "fullVersion": p.browser_version,
-                    "fullVersionList": [
-                        {"brand": "Chromium", "version": p.browser_version},
-                        {"brand": "Google Chrome", "version": p.browser_version},
-                        {"brand": grease_brand, "version": grease_version_full},
-                    ],
-                    "platform": p.ch_ua_platform,
-                    "platformVersion": p.platform_version,
-                    "architecture": p.ch_ua_arch,
-                    "bitness": p.ch_ua_bitness,
-                    "mobile": p.ch_ua_mobile,
-                    "model": "",
-                    "wow64": False,
-                },
-            },
-        )
+        await session.send("Emulation.setUserAgentOverride", user_agent_override(self._profile))
 
     async def _apply_headless_fixes(self, session, is_oopif: bool = False) -> None:
         """Apply headless-specific CDP fixes.
