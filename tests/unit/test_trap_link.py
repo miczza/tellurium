@@ -76,9 +76,32 @@ async def test_the_check_is_one_call_that_forces_nothing():
     assert not [m for m in methods if m.startswith("CSS.")]
 
 
-def test_the_check_is_the_script_shipped_with_the_stealth_scripts():
+async def test_the_check_is_the_script_shipped_with_the_stealth_scripts():
+    """What reaches Chrome is one function, with the style checks inside it."""
     from tellurium.stealth.extension import SCRIPTS_DIR
 
-    script = (SCRIPTS_DIR / "trap_link.js").read_text()
-    style = (SCRIPTS_DIR / "trap_link_style.js").read_text()
-    assert trap_link._REASONS_JS == script.replace("{{STYLE}}", style)
+    session = _Session()
+    await trap_link.reasons(_element(session))
+    sent = next(p for m, p in session.calls if m == "Runtime.callFunctionOn")
+    shipped = sent["functionDeclaration"]
+    script = (SCRIPTS_DIR / "trap_link.js").read_text().splitlines()
+    style = (SCRIPTS_DIR / "trap_link_style.js").read_text().splitlines()
+    lines = shipped.splitlines()
+    assert "{{" not in shipped  # no placeholder left unfilled
+    # The function of trap_link.js, up to its placeholder, then every line of
+    # trap_link_style.js in order, then the function's closing brace.
+    head = len(script) - 2
+    assert lines[:head] == script[:head]
+    assert lines[head : head + len(style)] == style
+    assert [line for line in lines[head + len(style) :] if line.strip()] == ["}"]
+    for name in ("reveals", "focusRules", "specificity", "clearMask", "alpha", "size"):
+        assert sum(line.lstrip().startswith(f"function {name}(") for line in lines) == 1, name
+
+
+def test_the_style_file_names_no_placeholder():
+    """The placeholder is in trap_link.js once, and nowhere else (a comment that
+    spelled it would be filled too)."""
+    from tellurium.stealth.extension import SCRIPTS_DIR
+
+    assert (SCRIPTS_DIR / "trap_link.js").read_text().count("{{STYLE}}") == 1
+    assert "{{" not in (SCRIPTS_DIR / "trap_link_style.js").read_text()

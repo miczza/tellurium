@@ -656,6 +656,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `trap_link`: a `mask-image` gradient that fades into an `oklch()`, `lab()` or `color()`
+  color is no longer taken for a transparent mask (a link was flagged `transparent`),
+  and one whose colors all have alpha 0 in those forms is; a color whose alpha cannot be
+  told counts as showing.
+- `trap_link`: a `:focus` rule brings a hidden link back only if it wins the cascade
+  against the rules that hide it (`!important`, `@layer`, specificity, order): a link
+  hidden with `!important` or by a more specific selector stays a trap.
 - Stock stealth, headless: when `chrome --version` cannot be read, the launch logs a
   warning on `tellurium` that Chrome starts without `--user-agent`, so robots.txt (and
   anything else the browser loads itself) leaves with `HeadlessChrome` while the pages

@@ -240,8 +240,12 @@ STATIC_TRAPS = {
     "trap-ancestor": ["off-page"],
     "trap-shy": ["off-page"],
     "trap-faint": ["transparent"],
+    "trap-important": ["off-page"],
+    "trap-specific": ["off-page"],
+    "trap-layer": ["off-page"],
 }
 STATIC_NORMAL = ["ok-loud", "ok-imported", "ok-media", "ok-nested", "ok-panel", "ok-layered"]
+STATIC_NORMAL += ["ok-both-important", "ok-later"]
 
 
 async def test_focus_rules_are_read_never_applied(browser, counting_server):
@@ -270,6 +274,8 @@ CSS_TRAPS = {
     "trap-almost": ["transparent"],
     "trap-mask": ["transparent"],
     "trap-webkit-mask": ["transparent"],
+    "trap-oklch-mask": ["transparent"],
+    "trap-color-mask": ["transparent"],
     "trap-contain": ["clipped"],
     "trap-strict": ["clipped"],
     "trap-contain-abs": ["clipped"],
@@ -278,7 +284,7 @@ CSS_TRAPS = {
 }
 # ok-covered-below: hit-testing it would take a scroll, so it is not looked at (README).
 CSS_NORMAL = ["ok-half", "ok-filter", "ok-mask", "ok-contain", "ok-glass", "ok-badge"]
-CSS_NORMAL += ["ok-wrapped", "ok-covered-below"]
+CSS_NORMAL += ["ok-wrapped", "ok-covered-below", "ok-oklch-mask", "ok-color-mask", "ok-mix-mask"]
 
 
 async def test_paint_effects_that_hide_a_link(browser, local_server):
