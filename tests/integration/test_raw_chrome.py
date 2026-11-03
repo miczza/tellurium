@@ -20,7 +20,7 @@ import pytest
 from tellurium.browser.launcher import LaunchError
 from tellurium.browser.process import BrowserProcess
 from tellurium.browser.raw_chrome import RawChrome
-from tests.integration.test_authenticated_proxy import PASSWORD, USER, FakeProxy
+from tests.integration.test_authenticated_proxy import GOOD_AUTH, PASSWORD, USER, FakeProxy
 
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith("linux"), reason="uses /proc to observe processes"
@@ -216,12 +216,65 @@ async def test_chrome_exiting_at_launch_is_explained(private_tempdir, tmp_path):
     assert not _profiles(private_tempdir)
 
 
+class _PipeSession:
+    """What a client of RawChrome does: read the pipe itself and keep a browser
+    session (``send``/``on``/``off``) for :meth:`RawChrome.answer_proxy_auth`."""
+
+    def __init__(self, raw: RawChrome) -> None:
+        self._raw = raw
+        self._next = 0
+        self._waiting: dict[int, asyncio.Future] = {}
+        self._handlers: dict[str, list] = {}
+        self.id = ""
+        self._reader = asyncio.ensure_future(self._read())
+
+    async def _read(self) -> None:
+        while True:
+            message = await self._raw.transport.recv()
+            future = self._waiting.pop(message.get("id"), None)
+            if future is not None and not future.done():
+                future.set_result(message)
+            elif "method" in message and message.get("sessionId") == self.id:
+                for handler in list(self._handlers.get(message["method"], [])):
+                    handler(message.get("params", {}))
+
+    async def call(self, method: str, params=None, timeout=10.0, session: str = "") -> dict:
+        self._next += 1
+        future = asyncio.get_running_loop().create_future()
+        self._waiting[self._next] = future
+        message = {"id": self._next, "method": method, "params": params or {}}
+        if session:
+            message["sessionId"] = session
+        await self._raw.transport.send(json.dumps(message).encode() + b"\0")
+        reply = await asyncio.wait_for(future, timeout)
+        assert "error" not in reply, reply
+        return reply["result"]
+
+    async def attach(self) -> _PipeSession:
+        self.id = (await self.call("Target.attachToBrowserTarget"))["sessionId"]
+        return self
+
+    async def send(self, method: str, params=None, timeout=10.0) -> dict:
+        return await self.call(method, params, timeout, session=self.id)
+
+    def on(self, event: str, handler) -> None:
+        self._handlers.setdefault(event, []).append(handler)
+
+    def off(self, event: str, handler) -> None:
+        self._handlers.get(event, []).remove(handler)
+
+    async def close(self) -> None:
+        self._reader.cancel()
+        await asyncio.wait([self._reader])
+
+
 async def test_credentials_stay_in_the_forwarder(private_tempdir):
     async with FakeProxy() as proxy:
         url = f"http://{USER}:{PASSWORD}@127.0.0.1:{proxy.port}"
         async with RawChrome.launch(headless=True, proxy=url, geoip=False, seed=5) as raw:
             assert raw.proxy == url
             assert raw.seed is None  # stock Chrome takes no seed
+            assert raw.needs_proxy_auth
             line = _cmdline(raw.pid)
             servers = [a for a in line if a.startswith("--proxy-server=")]
             assert len(servers) == 1
@@ -230,10 +283,27 @@ async def test_credentials_stay_in_the_forwarder(private_tempdir):
             assert not [a for a in line if PASSWORD in a]
             assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in line
 
-            # Nobody answers the forwarder's challenge on this raw pipe (S1-A; the
-            # multiplexer's relay does, S1-B): nothing reaches the upstream proxy.
-            await _call(raw, "Target.createTarget", {"url": "http://site.test/"})
-            assert not await _wait_until(lambda: proxy.requests, 3), proxy.requests
+            # Whoever reads the pipe answers the forwarder's challenge through
+            # RawChrome, on a browser session of its own, before navigating.
+            session = await _PipeSession(raw).attach()
+            try:
+                await raw.answer_proxy_auth(session)
+                await session.call("Target.createTarget", {"url": "http://site.test/"})
+                assert await _wait_until(lambda: proxy.requests, 15), "nothing reached the proxy"
+            finally:
+                await session.close()
+            assert proxy.requests[0] == ("GET http://site.test/ HTTP/1.1", GOOD_AUTH)
+            assert raw._proc.proxy_auth is not None
+        # close() stopped the answer with Chrome: nothing of it is left running.
+        assert raw._proc.proxy_auth is None
+        assert not [t for t in asyncio.all_tasks() if "ProxyAuth" in repr(t.get_coro())]
+
+
+async def test_without_credentials_there_is_nothing_to_answer(private_tempdir):
+    async with RawChrome.launch(headless=True, geoip=False) as raw:
+        assert not raw.needs_proxy_auth
+        await raw.answer_proxy_auth(object())  # no forwarder: nothing happens
+        assert raw._proc.proxy_auth is None
 
 
 async def test_cancelled_geoip_lookups_do_not_starve_close(private_tempdir):

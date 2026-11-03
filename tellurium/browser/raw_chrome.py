@@ -9,6 +9,12 @@ from the same :class:`~tellurium.browser.launch_plan.LaunchPlan` as
 inside the proxy, and the time zone and languages of the proxy's exit IP. The
 time zone (manual or the exit IP's) also goes in Chrome's ``TZ`` environment
 variable: stock Chrome has no flag for it, and nothing here sets it over CDP.
+
+With credentials in the proxy, the forwarder asks Chrome for its own secret
+(``407``) and Chrome answers only through CDP ``Fetch``. RawChrome does not
+read the pipe, so it does not answer by itself: whoever speaks CDP on the
+pipe must call :meth:`RawChrome.answer_proxy_auth` with a browser session of
+its own (``Target.attachToBrowserTarget``) before any navigation.
 """
 
 from __future__ import annotations
@@ -135,6 +141,23 @@ class RawChrome:
     def proxy(self) -> str | None:
         """The proxy as given to :meth:`launch`, credentials included."""
         return self._proxy
+
+    @property
+    def needs_proxy_auth(self) -> bool:
+        """Whether Chrome goes through the credential forwarder, which wants its
+        secret: then nothing loads until :meth:`answer_proxy_auth` is called."""
+        return self._proc.forwarder is not None
+
+    async def answer_proxy_auth(self, session: Any) -> None:
+        """Have Chrome answer the forwarder's challenge through ``Fetch`` on *session*.
+
+        *session* is a browser-wide CDP session of the caller's own on this
+        pipe (``Target.attachToBrowserTarget``), with ``send(method, params,
+        timeout)``, ``on`` and ``off``; the caller keeps dispatching its events.
+        Call it before any navigation. ``Fetch`` stays on until :meth:`close`,
+        which stops it. No-op without credentials in the proxy.
+        """
+        await self._proc.answer_proxy_auth(session)
 
     @property
     def alive(self) -> bool:

@@ -517,6 +517,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   naming them never reach the client; a client command on such a session (or a
   `Target.detachFromTarget` of it) is answered with Chrome's "Session with given id not
   found." error and never reaches Chrome. New `Relay.call()` and `CommandError`.
+- `RawChrome` with credentials in the proxy: new `raw.needs_proxy_auth` and
+  `await raw.answer_proxy_auth(session)`. RawChrome does not read the pipe, so whoever
+  speaks CDP on it must call `answer_proxy_auth` with a browser session of its own
+  (`send`/`on`/`off`, from `Target.attachToBrowserTarget`) before navigating; until then
+  the forwarder answers `407` and nothing reaches the proxy. The answer is owned by the
+  Chrome's process and stopped by `raw.close()`. No-op without credentials.
 - **Breaking:** `tellurium.stealth.geoip.exit_geo`, `resolve_exit_ip` and
   `resolve_geoip` take the credential forwarder itself (`forwarder=`, was
   `forwarder_port=`) and ask it with its secret (`ProxyForwarder.auth_header`); a port
