@@ -14,6 +14,7 @@ import http.server
 import json
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -148,23 +149,22 @@ async def test_oopif_and_worker_are_patched(oopif_site):
 
 
 #: How many times new_tab+get without the freeze it may take with it.
-FREEZE_COST = 2.0
+FREEZE_COST = 1.3
 
 
 @pytest.mark.asyncio
 async def test_freezing_targets_does_not_slow_navigation(oopif_site, monkeypatch):
-    """waitForDebuggerOnStart must not double the time of new_tab+get.
+    """waitForDebuggerOnStart costs at most 30 % on new_tab+get.
 
     The comparison is stealth-with-freeze vs stealth-without-freeze (the
     pre-T7.7 auto-attach configuration), so it isolates the cost of the
     freeze itself rather than re-measuring the whole stealth pipeline. Both
-    browsers are open at once and measured in strict turns (A/B, five
-    rounds of six, the best of each): a loaded machine slows both alike, so
-    the ratio holds where a margin in milliseconds would not. Measured on
-    this page (40-60 ms): the freeze costs 15-30 % on an idle machine and up
-    to 75 % at load 14-23, since a held target waits for this process to
-    resume it; the old bound (10 % + 15 ms) allowed about 40 % idle and
-    failed under load. A freeze that stalls a target costs seconds.
+    browsers are open at once and measured in strict turns (A/B, sixty
+    rounds, the best of each): a loaded machine slows both alike, so the
+    ratio holds where a margin in milliseconds would not. Measured on this
+    page (about 40 ms): 0.97-1.19 idle, 0.96-1.12 with two runs in
+    parallel; holding each target 8 ms more before its resume (about twice
+    what the freeze costs) gives 1.28-1.44.
     """
     from tellurium import Browser
     from tellurium.stealth.engine import _STEALTH_TARGET_FILTER, StealthEngine
@@ -206,7 +206,7 @@ async def test_freezing_targets_does_not_slow_navigation(oopif_site, monkeypatch
             )
             await (await browsers[freeze].new_tab(oopif_site)).close()  # warm-up
         samples: dict[bool, list[float]] = {False: [], True: []}
-        for n in range(30):
+        for n in range(60):
             order = (False, True) if n % 2 == 0 else (True, False)
             for freeze in order:
                 start = time.monotonic()
@@ -219,6 +219,18 @@ async def test_freezing_targets_does_not_slow_navigation(oopif_site, monkeypatch
 
     baseline = min(samples[False])
     stealthy = min(samples[True])
+    metrics = Path(__file__).parents[2] / "build" / "metrics"
+    metrics.mkdir(parents=True, exist_ok=True)
+    (metrics / "freeze-navigation.json").write_text(
+        json.dumps(
+            {
+                "plain_min_ms": round(baseline * 1000, 1),
+                "frozen_min_ms": round(stealthy * 1000, 1),
+                "ratio": round(stealthy / baseline, 3),
+                "limit_ratio": FREEZE_COST,
+            }
+        )
+    )
     assert stealthy <= baseline * FREEZE_COST, (
         f"freeze regressed new_tab+navigate: {stealthy * 1000:.1f}ms vs {baseline * 1000:.1f}ms"
     )

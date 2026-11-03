@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import statistics
+import sys
 import time
 from pathlib import Path
 
@@ -201,32 +202,44 @@ _COUNT_NODES = """(() => {
 })()"""
 
 
-#: How many times Chrome's own AX tree may take, at most, for the whole snapshot.
-SNAPSHOT_OVER_AX_TREE = 2.0
+#: tellurium's own work in a snapshot, in CPU time of this process, at most this
+#: many times the CPU it spends on receiving Chrome's AX tree alone: a guard
+#: against a gross slowdown; the work itself is bounded by its count below.
+OWN_OVER_AX_TREE = 3.0
 
 
 async def test_five_thousand_node_page_snapshot_time(browser, local_server):
-    """The snapshot of a 5000-node page against Chrome's own cost for its AX
-    tree, measured in turns in the same test (A/B, five rounds, the best of
-    each): a loaded machine slows both, so the ratio holds where a limit in
-    milliseconds would not."""
+    """tellurium's own work in the snapshot of a 5000-node page against the
+    work of receiving Chrome's AX tree alone (the snapshot fetches it too),
+    measured in turns in the same test (A/B, sixteen rounds, the best of
+    each), in CPU time of this process: a loaded machine delays both but
+    adds no CPU to either, and a CPU slowed by its neighbours slows both, so
+    the ratio holds where a limit in milliseconds would not. Measured: own
+    work 0.8-1.3 times the AX tree's idle, up to 2.0 with the integration
+    suite run twice in parallel (the CPU of a thread grows with the load,
+    the AX tree's decoding less): doubling build_nodes and render (1.7-2.1
+    idle) shows here only under no load, so the count of the work is the
+    test that catches it (see the next one)."""
     tab = browser.main_tab
     await tab.get(f"{local_server}/snapshot_list.html")
     elements = await tab.eval("document.getElementsByTagName('*').length")
     dom_nodes = await tab.eval(_COUNT_NODES)
     assert dom_nodes >= 5000
     refs = _watched(tab)
-    await take_snapshot(tab._session, refs)  # warm-up: Chrome builds its AX tree once
-    references, runs = [], []
-    for _ in range(5):
-        start = time.perf_counter()
-        await tab._session.send("Accessibility.getFullAXTree", {})
-        references.append((time.perf_counter() - start) * 1000)
-        start = time.perf_counter()
-        text = await take_snapshot(tab._session, refs)
+    session = tab._session
+    await take_snapshot(session, refs)  # warm-up: Chrome builds its AX tree once
+    references, snapshots, runs = [], [], []
+    for _ in range(16):
+        cpu = time.process_time()
+        await session.send("Accessibility.getFullAXTree", {})
+        references.append((time.process_time() - cpu) * 1000)
+        start, cpu = time.perf_counter(), time.process_time()
+        text = await take_snapshot(session, refs)
+        snapshots.append((time.process_time() - cpu) * 1000)
         runs.append((time.perf_counter() - start) * 1000)
-    # the best of five: a busy machine only ever adds time, never takes it away
-    best, reference = min(runs), min(references)
+    # the best of each: a busy machine only ever adds time, never takes it away
+    reference = min(references)
+    own = min(snapshots) - reference
     METRICS.mkdir(parents=True, exist_ok=True)
     (METRICS / "A1-snapshot.json").write_text(
         json.dumps(
@@ -236,16 +249,60 @@ async def test_five_thousand_node_page_snapshot_time(browser, local_server):
                 "elements": elements,
                 "lines": text.count("\n") + 1,
                 "runs_ms": [round(r, 1) for r in runs],
-                "min_ms": round(best, 1),
+                "min_ms": round(min(runs), 1),
                 "median_ms": round(statistics.median(runs), 1),
-                "ax_tree_min_ms": round(reference, 1),
-                "limit_ratio": SNAPSHOT_OVER_AX_TREE,
+                "cpu_snapshot_min_ms": round(min(snapshots), 1),
+                "cpu_ax_tree_min_ms": round(reference, 1),
+                "cpu_own_ms": round(own, 1),
+                "own_ratio": round(own / reference, 3),
+                "limit_ratio": OWN_OVER_AX_TREE,
             }
         )
     )
-    assert best <= reference * SNAPSHOT_OVER_AX_TREE, (
-        f"snapshot best {best:.0f} ms, AX tree best {reference:.0f} ms: {runs} / {references}"
+    assert own <= reference * OWN_OVER_AX_TREE, (
+        f"tellurium's own CPU {own:.1f} ms against {reference:.1f} ms for the AX tree alone:"
+        f" {snapshots} / {references}"
     )
+
+
+#: Calls into tellurium's code during one snapshot, at most this many per node of
+#: Chrome's AX tree: the work itself, counted, which no load changes.
+CALLS_PER_AX_NODE = 11.0
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="threading.setprofile_all_threads")
+async def test_five_thousand_node_page_snapshot_work(browser, local_server):
+    """tellurium's own work in the snapshot of a 5000-node page, counted as
+    calls into its code (every thread) per node of Chrome's AX tree: a
+    count no machine load changes, so the bound can sit close to what is
+    measured (9.3 per node) and still catch the work doubling (doubling
+    build_nodes and render gives 16.9)."""
+    import threading
+
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/snapshot_list.html")
+    session = tab._session
+    refs = _watched(tab)
+    await take_snapshot(session, refs)  # warm-up
+    ax_nodes = len((await session.send("Accessibility.getFullAXTree", {}))["nodes"])
+    package = str(Path(__file__).parents[2] / "tellurium")
+    calls = [0]
+
+    def count(frame, event, arg):
+        if event == "call" and frame.f_code.co_filename.startswith(package):
+            calls[0] += 1
+
+    threading.setprofile_all_threads(count)
+    try:
+        await take_snapshot(session, refs)
+    finally:
+        threading.setprofile_all_threads(None)
+    per_node = calls[0] / ax_nodes
+    METRICS.mkdir(parents=True, exist_ok=True)
+    (METRICS / "A1-snapshot-work.json").write_text(
+        json.dumps({"calls": calls[0], "ax_nodes": ax_nodes, "per_node": round(per_node, 2)})
+    )
+    assert per_node <= CALLS_PER_AX_NODE, f"{calls[0]} calls for {ax_nodes} AX nodes"
 
 
 async def test_ref_of_a_rerendered_node_is_stale_not_another_element(browser, local_server):
