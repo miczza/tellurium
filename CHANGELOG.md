@@ -523,6 +523,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`send`/`on`/`off`, from `Target.attachToBrowserTarget`) before navigating; until then
   the forwarder answers `407` and nothing reaches the proxy. The answer is owned by the
   Chrome's process and stopped by `raw.close()`. No-op without credentials.
+- `tellurium.Multiplexer` behind a proxy with credentials: each Chrome answers the
+  forwarder's challenge through `Fetch` on a browser session of the relay's own, enabled
+  before the place is handed to a client (warm places included). The client sees none
+  of it (no `Fetch` event, no reply, no `Target` event of that session). A Chrome that
+  cannot enable it counts as a failed launch; a crash, a restart or a shutdown stops it
+  with the Chrome. Without credentials nothing changes.
 - **Breaking:** `tellurium.stealth.geoip.exit_geo`, `resolve_exit_ip` and
   `resolve_geoip` take the credential forwarder itself (`forwarder=`, was
   `forwarder_port=`) and ask it with its secret (`ProxyForwarder.auth_header`); a port

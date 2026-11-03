@@ -25,6 +25,13 @@ from tellurium.multiplexer import health  # noqa: E402
 from tellurium.multiplexer import multiplexer as multiplexer_module  # noqa: E402
 from tellurium.multiplexer import pool as pool_module  # noqa: E402
 from tellurium.multiplexer import server as server_module  # noqa: E402
+from tests.integration.test_authenticated_proxy import (  # noqa: E402, F401 - a fixture
+    GOOD_AUTH,
+    PASSWORD,
+    USER,
+    FakeProxy,
+    tls_context,
+)
 from tests.integration.test_raw_chrome import (  # noqa: E402, F401 - private_tempdir is autouse
     _alive,
     _cmdline,
@@ -736,3 +743,108 @@ async def test_a_client_pausing_just_short_of_the_stall_does_not_get_chrome_kill
                     os.kill(pid, signal.SIGCONT)
             assert code == 1011 and "health probes" in reason
             assert mux.status()["hangs"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# Authenticated proxy: the relay's own session (S1-B)
+# --------------------------------------------------------------------------- #
+
+
+def _own_sessions(mux: Multiplexer) -> set[str]:
+    return {s for p in mux._pool.places if p.relay is not None for s in p.relay._own}
+
+
+def _proxy_auth_tasks() -> list[asyncio.Task]:
+    return [t for t in asyncio.all_tasks() if "ProxyAuth" in repr(t.get_coro())]
+
+
+def _sessions_named(message: dict) -> set[str]:
+    params = message.get("params") or {}
+    return {s for s in (message.get("sessionId"), params.get("sessionId")) if s}
+
+
+async def test_the_relay_answers_the_proxy_and_its_session_never_reaches_the_client(
+    tls_context,  # noqa: F811
+):
+    async with FakeProxy(tunnels=True, tls=tls_context) as proxy:
+        url = f"http://{USER}:{PASSWORD}@127.0.0.1:{proxy.port}"
+        options = {"proxies": [url], "args": ["--ignore-certificate-errors"]}
+        async with serving(1, warm=1, **options) as mux:
+            # A warm Chrome answers the proxy before any client takes it.
+            assert await _wait_until(lambda: mux.status()["slots"][0]["state"] == "ready", 60)
+            (place,) = mux._pool.places
+            assert place.chrome._proc.proxy_auth is not None
+            (own,) = _own_sessions(mux)
+            seen: list[dict] = []
+            async with _client(mux) as ws:
+
+                async def until(method: str, session: str = "") -> dict:
+                    while True:
+                        message = json.loads(await ws.recv())
+                        seen.append(message)
+                        if message.get("method") == method and (
+                            not session or message.get("sessionId") == session
+                        ):
+                            return message
+
+                await ws.send(json.dumps({"id": 1, "method": "Target.setDiscoverTargets",
+                                          "params": {"discover": True}}))  # fmt: skip
+                await ws.send(json.dumps({"id": 2, "method": "Target.setAutoAttach", "params": {
+                    "autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True}}))  # fmt: skip
+                await ws.send(json.dumps({"id": 3, "method": "Target.createTarget",
+                                          "params": {"url": "about:blank"}}))  # fmt: skip
+                target = (await asyncio.wait_for(until_reply(ws, 3, seen), 20))["result"]
+                await ws.send(json.dumps({"id": 9, "method": "Target.attachToTarget",
+                                          "params": {**target, "flatten": True}}))  # fmt: skip
+                page = (await asyncio.wait_for(until_reply(ws, 9, seen), 20))["result"]
+                page = page["sessionId"]
+                for n, method in enumerate(("Page.enable", "Network.enable"), 4):
+                    await ws.send(json.dumps({"id": n, "method": method, "sessionId": page}))
+                for n, target in enumerate(("http://site.test/", "https://secure.test/"), 6):
+                    await ws.send(json.dumps({"id": n, "method": "Page.navigate",
+                                              "params": {"url": target}, "sessionId": page}))  # fmt: skip
+                    await asyncio.wait_for(until("Page.loadEventFired", page), 20)
+                await ws.send(json.dumps({"id": 8, "method": "Runtime.evaluate",
+                                          "params": {"expression": "document.title"},
+                                          "sessionId": page}))  # fmt: skip
+                title = await asyncio.wait_for(until_reply(ws, 8, seen), 20)
+                assert title["result"]["result"]["value"] == "proxied"
+            assert ("GET http://site.test/ HTTP/1.1", GOOD_AUTH) in proxy.requests
+            assert ("CONNECT secure.test:443 HTTP/1.1", GOOD_AUTH) in proxy.requests
+            assert "GET https://secure.test/ (tunnel)" in proxy.lines()
+            assert not [m for m in seen if own in _sessions_named(m)]
+            assert not [m for m in seen if str(m.get("method", "")).startswith("Fetch.")]
+            assert own not in json.dumps(seen)
+            # The Chrome the client left is gone, with its answer to the proxy.
+            assert await _wait_until(lambda: own not in _own_sessions(mux), 30)
+        assert not _proxy_auth_tasks()
+
+
+async def until_reply(ws, id: int, seen: list[dict]) -> dict:
+    while True:
+        message = json.loads(await ws.recv())
+        seen.append(message)
+        if message.get("id") == id:
+            return message
+
+
+async def test_a_lost_chrome_takes_its_answer_to_the_proxy_with_it():
+    async with FakeProxy() as proxy:
+        url = f"http://{USER}:{PASSWORD}@127.0.0.1:{proxy.port}"
+        async with serving(1, proxies=[url]) as mux:
+            async with _client(mux) as ws:
+                await _cdp(ws, 1, "Browser.getVersion")
+                (place,) = mux._pool.places
+                auth = place.chrome._proc.proxy_auth
+                assert auth is not None and _own_sessions(mux)
+                os.kill(place.chrome.pid, signal.SIGKILL)
+                code, _ = await _closed(ws)
+                assert code == 1011
+            # The client is told first; then the Chrome is closed, with its answer.
+            assert await _wait_until(lambda: not auth._active and not auth._tasks, 30)
+            async with _client(mux) as ws:  # the new Chrome answers again
+                created = await _cdp(ws, 1, "Target.createTarget", {"url": "http://site.test/"})
+                assert created["result"]["targetId"]
+                assert await _wait_until(lambda: proxy.requests, 20)
+                assert proxy.requests[0] == ("GET http://site.test/ HTTP/1.1", GOOD_AUTH)
+        assert not _proxy_auth_tasks()

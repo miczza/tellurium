@@ -9,6 +9,12 @@ a hang closes the client's WebSocket with 1011 and the reason, and the
 Chrome is killed and replaced. A failed launch does not take the place: it
 is retried with a growing pause while the place is wanted, and the error
 shows in the status.
+
+Behind a proxy with credentials, Chrome answers the forwarder's challenge
+through ``Fetch`` on an :class:`~tellurium.multiplexer.own_session.OwnSession`
+of the relay, enabled before the place is handed to a client (warm places
+too). The answer belongs to the Chrome's process: closing the Chrome, after
+a crash, a restart or a shutdown, stops it.
 """
 
 from __future__ import annotations
@@ -24,10 +30,12 @@ from typing import TYPE_CHECKING, Any
 from tellurium.browser.proxy import hide_credentials, redact_proxy_url
 from tellurium.browser.raw_chrome import RawChrome
 from tellurium.multiplexer import health
+from tellurium.multiplexer.own_session import OwnSession
 from tellurium.multiplexer.relay import (
     CLOSE_ERROR,
     CLOSE_GOING_AWAY,
     CLOSE_NORMAL,
+    CommandError,
     Relay,
     RelayClosed,
 )
@@ -191,14 +199,17 @@ class Place:
         return None
 
     async def _open(self, chrome: RawChrome) -> Relay | None:
-        """Start the relay and read the version; None (Chrome closed) if it fails."""
+        """Start the relay, read the version and have Chrome answer its proxy;
+        None (Chrome closed) if it fails."""
         self.chrome, self.launches = chrome, self.launches + 1
         relay = None
         try:
             relay = self.relay = Relay(chrome.transport)
             relay.start()
             self._pool.learn_version(await relay.probe(health.TIMEOUT))
-        except (TimeoutError, RelayClosed) as exc:
+            if chrome.needs_proxy_auth:
+                await chrome.answer_proxy_auth(await OwnSession.attach(relay, health.TIMEOUT))
+        except (TimeoutError, RelayClosed, CommandError) as exc:
             self.failures += 1
             self.error = hide_credentials(
                 f"Chrome did not answer after its launch: {exc}", chrome.proxy
