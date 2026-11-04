@@ -1,5 +1,5 @@
-"""Text of a snapshot: the AX nodes pruned into :class:`SnapshotNode` trees, the
-fusion of the page text pieces between them, and the
+"""Text of a snapshot: the AX nodes (:class:`AXTree`) pruned into :class:`SnapshotNode`
+trees, the fusion of the page text pieces between them, and the
 ``- role "name" [state] [ref=eN]: "value"`` lines. Pure functions, no CDP.
 
 Page text is quoted as JSON with control and bidi characters escaped and long
@@ -12,10 +12,7 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from tellurium.browser.snapshot import AXTree
+from typing import Any
 
 _SPACES = re.compile(r"\s+")
 # Page text longer than this is cut in the rendering, with a ``[+N chars]`` signal.
@@ -38,6 +35,31 @@ _INTERACTIVE = frozenset(
     "button link textbox searchbox checkbox radio switch combobox listbox option menuitem"
     " menuitemcheckbox menuitemradio slider spinbutton tab treeitem DisclosureTriangle".split()
 )
+
+
+@dataclass
+class AXTree:
+    """The AX nodes of one document; *frames* maps an ``<iframe>``'s backend node id
+    to its document's tree or its URL (an OOPIF that could not be reached).
+    *owner* names the renderer session read (``""``: the one snapshotted),
+    *session* is that session, *document* the loader id of an OOPIF's document,
+    read before its tree; none of them is in the JSON."""
+
+    nodes: list[dict[str, Any]]
+    frames: dict[int, AXTree | str] = field(default_factory=dict)
+    owner: str = ""
+    session: Any = field(default=None, repr=False, compare=False)
+    document: str = ""
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> AXTree:
+        frames = data.get("frames", {}).items()
+        subs = {int(k): v if isinstance(v, str) else cls.from_json(v) for k, v in frames}
+        return cls(nodes=data["nodes"], frames=subs)
+
+    def to_json(self) -> dict[str, Any]:
+        subs = {str(k): v if isinstance(v, str) else v.to_json() for k, v in self.frames.items()}
+        return {"nodes": self.nodes, "frames": subs}
 
 
 class Unread(str):

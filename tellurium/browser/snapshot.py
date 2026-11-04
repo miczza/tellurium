@@ -28,6 +28,7 @@ from urllib.parse import urljoin
 from tellurium.browser import geometry
 from tellurium.browser.handles import StaleElementError
 from tellurium.browser.refs import pending_ref
+from tellurium.browser.snapshot_text import AXTree as AXTree  # re-exported
 from tellurium.browser.snapshot_text import SnapshotNode as SnapshotNode  # re-exported
 from tellurium.browser.snapshot_text import Unread as _Unread
 from tellurium.browser.snapshot_text import ax_props as _props
@@ -73,31 +74,6 @@ class _Bounds:
     deadline: float | None = None
     nodes: float = float("inf")
     known: dict = field(default_factory=dict)
-
-
-@dataclass
-class AXTree:
-    """The AX nodes of one document; *frames* maps an ``<iframe>``'s backend node id
-    to its document's tree or its URL (an OOPIF that could not be reached).
-    *owner* names the renderer session read (``""``: the one snapshotted),
-    *session* is that session, *document* the loader id of an OOPIF's document,
-    read before its tree; none of them is in the JSON."""
-
-    nodes: list[dict[str, Any]]
-    frames: dict[int, AXTree | str] = field(default_factory=dict)
-    owner: str = ""
-    session: Any = field(default=None, repr=False, compare=False)
-    document: str = ""
-
-    @classmethod
-    def from_json(cls, data: dict[str, Any]) -> AXTree:
-        frames = data.get("frames", {}).items()
-        subs = {int(k): v if isinstance(v, str) else cls.from_json(v) for k, v in frames}
-        return cls(nodes=data["nodes"], frames=subs)
-
-    def to_json(self) -> dict[str, Any]:
-        subs = {str(k): v if isinstance(v, str) else v.to_json() for k, v in self.frames.items()}
-        return {"nodes": self.nodes, "frames": subs}
 
 
 # Commands sent by the snapshots, by router (the router's last id less these counts
