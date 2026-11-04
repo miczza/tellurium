@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 
 import pytest
 
@@ -358,6 +359,9 @@ async def test_headless_is_told_apart_even_with_a_user_agent_of_headed_chrome():
         await b.close()
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="a #!/bin/sh wrapper is not an executable on Windows"
+)
 async def test_headless_is_told_apart_when_a_wrapper_adds_the_flag(tmp_path):
     """A wrapper script that adds --headless=new: its own command line says
     nothing, Chrome's user agent does."""
