@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Nested download inner</title></head>
+<body>
+  <a id="get" href="/download/inner.csv">Get</a>
+  <script>
+    // Started by the page itself once loaded: nobody outside can reach this frame.
+    window.addEventListener('load', () => setTimeout(() => document.getElementById('get').click(), 100));
+  </script>
+</body>
+</html>

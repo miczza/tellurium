@@ -690,6 +690,32 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The `wait_for_human` banner shows on SVG and XML documents (its elements are made in the
   HTML namespace); an exception of the banner's script is logged once as a warning
   instead of being swallowed.
+- `Tab.expect_download()` takes a download started by an iframe nested inside a
+  cross-site iframe (same site as it or a third one, at any depth, or one whose src is
+  the download), stealth or not: such frames are reported to the cross-site iframe's
+  own session only, so when a download of a frame no tab knows begins, each waiting
+  tab looks it up in the frame trees of its cross-site iframes (`Target.getTargets`,
+  then `Page.getFrameTree` through the session already attached or one attached then,
+  which Chrome detaches with the frame), within 5 s. Progress reported meanwhile is
+  kept; another tab's waiter does not take it.
+- Snapshots of one document share its `Accessibility.getFullAXTree`: concurrent
+  `snapshot(selector=...)` calls on a page whose tree must be read whole (shadow DOM)
+  send one request, and a snapshot abandoned past `snapshot_timeout` leaves its request
+  to the next one instead of queueing a second ~120k-node tree behind it. A request is
+  shared only while nothing but snapshots was sent to Chrome after it (a click, a key,
+  an eval, a navigation: the next snapshot asks again), only if no other command was
+  still awaiting its answer when it went out (an input answered while the tree is built
+  may act on the page after it, e.g. a cross-site iframe posting to its parent), and
+  only for the same document.
+  A snapshot command refused by a closed session (a cross-site iframe or a tab gone)
+  sent nothing and does not count as sent, so an input after it still makes the next
+  snapshot ask again. Concurrent snapshots of one tab no longer fail with "Could not find node with given
+  id": their `DOM.getDocument` and selector lookups take turns.
+- The `max_nodes` budget of a snapshot's cross-site iframes goes in document order: the
+  iframes of a document are counted, then admitted one after the other, so with several
+  large ones the same one is left out (`[oopif: too large, N nodes]`) whichever renderer
+  answers first. One that is not counted within half of the time left (a stuck renderer)
+  shows as not responding and does not hold the ones after it.
 - A human click (and `hover()`) into an iframe drawn in 3D (`perspective`, `rotateX/Y`,
   `matrix3d`), cross-site or not and at any depth, reaches its element instead of raising
   `ElementNotHittableError`: a cross-site frame's points are mapped through the

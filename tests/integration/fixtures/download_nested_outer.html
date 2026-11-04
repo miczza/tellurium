@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Nested download outer</title></head>
+<body>
+  <p>Cross-site frame</p>
+  <iframe id="inner" title="Inner"></iframe>
+  <script>
+    // inner=<url>: a download (the frame never commits), a page of this site (same
+    // renderer) or of a third site (an OOPIF inside the OOPIF).
+    const inner = new URLSearchParams(location.search).get('inner');
+    document.getElementById('inner').src = inner || '/download/never.csv';
+  </script>
+</body>
+</html>

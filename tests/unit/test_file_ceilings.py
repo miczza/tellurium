@@ -71,5 +71,6 @@ def test_the_snapshot_text_lives_in_its_own_module():
     from tellurium.browser import snapshot, snapshot_text
 
     assert snapshot.SnapshotNode is snapshot_text.SnapshotNode
+    assert snapshot.AXTree is snapshot_text.AXTree
     assert snapshot.build_nodes is snapshot_text.build_nodes
     assert snapshot.render is snapshot_text.render

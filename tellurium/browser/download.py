@@ -4,12 +4,15 @@ Chrome saves every download under the folder of its browser context, named by
 the download's GUID (``Browser.setDownloadBehavior`` with ``allowAndName``),
 and reports it on the browser session with ``Browser.downloadWillBegin`` and
 ``Browser.downloadProgress``. :class:`Downloads` hands each new download to the
-first :class:`DownloadWaiter` whose filter accepts the frame that started it.
+first :class:`DownloadWaiter` whose filter accepts the frame that started it; when
+none does at once, to the first whose owner then finds the frame among its own
+(a tab, inside its cross-site iframes: :meth:`TabFrames.owns`).
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import shutil
 from collections.abc import Awaitable, Callable
@@ -21,6 +24,11 @@ DEFAULT_TIMEOUT = 30.0
 
 #: Deadline of each cancel sent while a browser or context closes, in seconds.
 STOP_TIMEOUT = 2.0
+
+#: Deadline of each owner's search for the frame of a download no filter took.
+CLAIM_TIMEOUT = 5.0
+
+logger = logging.getLogger(__name__)
 
 _ANY = object()  # every browser context, for Downloads.stop
 
@@ -153,9 +161,11 @@ class DownloadWaiter:
         accepts: Callable[[str], bool] | None,
         context_id: str | None,
         timeout: float,
+        owns: Callable[[str], Awaitable[bool]] | None = None,
     ) -> None:
         self._downloads = downloads
         self._accepts = accepts
+        self._owns = owns
         self.context_id = context_id
         self._timeout = timeout
         self._deadline = 0.0
@@ -226,6 +236,8 @@ class Downloads:
         self._folders: dict[str | None, tuple[Path, bool]] = {}  # context -> (folder, owned)
         self._active: dict[str, Download] = {}
         self._waiters: list[DownloadWaiter] = []
+        self._unclaimed: dict[str, list[dict]] = {}  # guid -> its progress, while claimed
+        self._claims: set[asyncio.Task] = set()
 
     def folder(self, context_id: str | None = None) -> Path:
         """Where the downloads of *context_id* (``None``: the default context) go."""
@@ -281,11 +293,13 @@ class Downloads:
         *,
         context_id: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
+        owns: Callable[[str], Awaitable[bool]] | None = None,
     ) -> DownloadWaiter:
         """A waiter for the next download started by a frame *accepts* takes
-        (any frame when ``None``). *context_id* is the browser context of
-        those frames, used when the frame is not a known tab."""
-        return DownloadWaiter(self, accepts, context_id, timeout)
+        (any frame when ``None``), or that *owns* finds its own once no filter took
+        it. *context_id* is the browser context of those frames, used when the
+        frame is not a known tab."""
+        return DownloadWaiter(self, accepts, context_id, timeout, owns)
 
     def expect_frames(
         self, frames: TabFrames, *, timeout: float = DEFAULT_TIMEOUT
@@ -293,22 +307,58 @@ class Downloads:
         """A waiter for the next download of one tab: started by one of its *frames*,
         saved in the folder of the browser context of its main frame."""
         located = self._locate(frames.main) if self._locate is not None else None
-        return self.expect(frames.__contains__, context_id=located or None, timeout=timeout)
+        return self.expect(
+            frames.__contains__, context_id=located or None, timeout=timeout, owns=frames.owns
+        )
 
     def _on_will_begin(self, params: dict) -> None:
         frame_id = params.get("frameId", "")
         waiter = next((w for w in self._waiters if w.accepts(frame_id)), None)
-        if waiter is None:
-            return  # nobody waits for it: Chrome still saves it in the folder
+        if waiter is not None:
+            self._hand(waiter, params, [])
+            return
+        owners = [w for w in self._waiters if w._owns is not None and not w._future.done()]
+        if owners and params.get("guid"):  # a frame its owner may not have been told of
+            self._unclaimed[params["guid"]] = []
+            claim = asyncio.get_running_loop().create_task(self._claim(params, owners))
+            self._claims.add(claim)
+            claim.add_done_callback(self._claims.discard)
+        # else nobody waits for it: Chrome still saves it in the folder
+
+    def _hand(self, waiter: DownloadWaiter, params: dict, progress: list[dict]) -> None:
+        frame_id = params.get("frameId", "")
         located = self._locate(frame_id) if self._locate is not None else None
         context_id = waiter.context_id if located is None else (located or None)
         folder, _ = self._folders.get(context_id) or self._folders[None]
         download = Download(self, params, context_id, folder)
         self._active[download.guid] = download
+        for update in progress:  # reported while its owner was being found
+            download._progress(update)
         waiter._resolve(download)
 
+    async def _claim(self, params: dict, owners: list[DownloadWaiter]) -> None:
+        """Hand the download to the first of *owners* that finds its frame its own."""
+        guid, frame_id = params["guid"], params.get("frameId", "")
+        try:
+            for waiter in owners:
+                if waiter._future.done() or waiter._owns is None:
+                    continue
+                try:
+                    owned = await asyncio.wait_for(waiter._owns(frame_id), CLAIM_TIMEOUT)
+                except Exception:  # noqa: BLE001 - a page that went away, a frame gone
+                    logger.debug("No owner found for frame %s", frame_id, exc_info=True)
+                    owned = False
+                if owned and not waiter._future.done():
+                    self._hand(waiter, params, self._unclaimed.pop(guid, []))
+                    return
+        finally:
+            self._unclaimed.pop(guid, None)
+
     def _on_progress(self, params: dict) -> None:
-        download = self._active.get(params.get("guid", ""))
+        guid = params.get("guid", "")
+        if guid in self._unclaimed:
+            self._unclaimed[guid].append(params)
+        download = self._active.get(guid)
         if download is not None:
             download._progress(params)
 
@@ -331,6 +381,8 @@ class Downloads:
     def _lost(self) -> None:
         """The pipe to Chrome is gone: nothing will ever be reported again."""
         reason = "Chrome closed or crashed"
+        for claim in list(self._claims):
+            claim.cancel()
         for waiter in list(self._waiters):
             waiter._fail(DownloadError(reason))
         for download in list(self._active.values()):
@@ -340,18 +392,20 @@ class Downloads:
 
 class TabFrames:
     """The frame ids of one tab's page, kept from its ``Page`` frame events, so a
-    download started by one of its same-process iframes reaches the tab's waiter.
+    download started by one of its iframes reaches the tab's waiter.
 
     An iframe joins on ``Page.frameAttached``: one that never commits a document
     (its src is a download, or a page of another site, an OOPIF from the start)
     sends no ``Page.frameNavigated`` to the tab's session. Iframes nested inside
-    a cross-site iframe are reported to that iframe's own session only, and are
-    not covered. Frame ids are unique across the browser: a kept id never names
-    another tab's frame. A removed iframe leaves the set; a main-frame
-    navigation drops the old document's frames.
+    a cross-site iframe are reported to that iframe's own session only (none in a
+    browser without stealth): :meth:`owns` looks them up when one starts a download.
+    Frame ids are unique across the browser: a kept id never names another tab's
+    frame. A removed iframe leaves the set; a main-frame navigation drops the old
+    document's frames.
     """
 
     def __init__(self, session: Any, main_frame_id: str) -> None:
+        self._session = session
         self._main = main_frame_id
         self._ids = {main_frame_id}
         session.on("Page.frameAttached", self._on_attached)
@@ -365,6 +419,34 @@ class TabFrames:
 
     def __contains__(self, frame_id: object) -> bool:
         return bool(frame_id) and frame_id in self._ids
+
+    async def owns(self, frame_id: str, timeout: float = CLAIM_TIMEOUT) -> bool:
+        """Whether *frame_id* is a frame nested inside one of the tab's cross-site
+        iframes, at any depth: read from their frame trees, through the session
+        already attached to each (stealth, a snapshot) or one attached here, which
+        Chrome detaches with the frame or the tab. Found frames join the set."""
+        router = self._session.router
+        infos = await router.root.send("Target.getTargets", {}, timeout=timeout)
+        iframes = [i for i in infos["targetInfos"] if i.get("type") == "iframe"]
+        kept = self._ids  # replaced by a main-frame navigation meanwhile
+        ours, read = set(kept), set()
+        while frame_id not in ours and (
+            todo := [
+                i["targetId"]
+                for i in iframes
+                if i["targetId"] not in read
+                and (i["targetId"] in ours or i.get("parentFrameId") in ours)
+            ]
+        ):
+            for target in todo:
+                read.add(target)
+                session = router.session_for_target(target)
+                if session is None:
+                    session = await router.attach(target, via=self._session, timeout=timeout)
+                tree = await session.send("Page.getFrameTree", {}, timeout=timeout)
+                ours |= _frame_ids(tree["frameTree"])
+        kept |= ours  # the next download of these frames is taken at once
+        return frame_id in ours
 
     def _on_navigated(self, params: dict) -> None:
         frame = params.get("frame", {})
@@ -382,3 +464,11 @@ class TabFrames:
         # "swap": the frame moves to another process under the same id, still ours
         if params.get("reason") != "swap" and params.get("frameId") != self._main:
             self._ids.discard(params.get("frameId", ""))
+
+
+def _frame_ids(tree: dict) -> set[str]:
+    """The ids of the frames of a ``Page.getFrameTree`` tree."""
+    ids = {tree["frame"]["id"]}
+    for child in tree.get("childFrames", ()):
+        ids |= _frame_ids(child)
+    return ids
