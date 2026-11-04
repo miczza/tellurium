@@ -78,6 +78,11 @@ def no_display(monkeypatch):
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="a Linux without X11 or Wayland: on Windows there is always a display, and "
+    "faking sys.platform sends the session lock to fcntl",
+)
 async def test_without_a_display_the_error_says_so(tmp_path, launched, done, no_display):
     session = _session(str(tmp_path), False)
     with pytest.raises(SessionLoginFailedError, match="display"):
