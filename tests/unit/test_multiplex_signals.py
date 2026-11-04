@@ -15,7 +15,11 @@ import pytest
 
 from tellurium.multiplexer import command
 
-pytestmark = pytest.mark.skipif(not hasattr(os, "kill"), reason="sends itself a signal")
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32" or not hasattr(os, "kill"),
+    reason="simulates Windows on POSIX: on Windows SIGHUP and pthread_sigmask do not exist "
+    "to delete, and os.kill(own pid, SIGINT) is TerminateProcess, not a signal",
+)
 
 
 def test_the_cli_imports_without_sighup_nor_pthread_sigmask():
