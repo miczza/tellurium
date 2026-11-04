@@ -656,6 +656,40 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `trap_link`: a `mask-image` gradient that fades into an `oklch()`, `lab()` or `color()`
+  color is no longer taken for a transparent mask (a link was flagged `transparent`),
+  and one whose colors all have alpha 0 in those forms is; a color whose alpha cannot be
+  told counts as showing.
+- `trap_link`: a `:focus` rule brings a hidden link back only if it wins the cascade
+  against the rules that hide it (`!important`, `@layer`, specificity, order): a link
+  hidden with `!important` or by a more specific selector stays a trap.
+- Stock stealth, headless: when `chrome --version` cannot be read, the launch logs a
+  warning on `tellurium` that Chrome starts without `--user-agent`, so robots.txt (and
+  anything else the browser loads itself) leaves with `HeadlessChrome` while the pages
+  show the profile's User-Agent.
+- Stock stealth: service and shared workers report the page's client hints
+  (`architecture`, `bitness`, `fullVersionList`, `uaFullVersion`, brands): their targets
+  get the same `Emulation.setUserAgentOverride` as the page (with `--user-agent` they were
+  empty, and the brands were Chrome's own). A service worker is no longer held 10 s at
+  start and is patched before its script runs: frozen, it answers no command, so its patch
+  is sent and the worker resumed before the replies are read.
+- `Browser.close()` cancels the work it still runs in the background: the waits with no
+  clock of their own for a late Chrome reply (the early script of `wait_for_human` on a
+  busy page, the hidden robots.txt target) and the banner's cleanup are tasks of the
+  browser, so none is left once it is closed, even mid-wait.
+- A hidden robots.txt target whose `Target.createTarget` reply comes after the caller gave
+  up is closed as soon as the reply lands, however late (it was watched for 30 s only);
+  the wait for it lasts as long as the pipe, which is also the hidden target's lifetime.
+- `wait_for_human` keeps one deadline: every CDP call takes at most what is left of the
+  wait (5 s at most), so `timeout=3` on a page busy in 2 s ticks ends in under 4 s, and a
+  timeout that expires inside `until` says `within N s` too. The banner's cleanup waits at
+  most 0.5 s once the time is over and ends in the background, each call bounded. The
+  early script Chrome confirms only after the wait (a busy page) is taken away as soon as
+  its identifier arrives, also when `close()` is cancelled: no inert isolated world per
+  document for the rest of the tab's life.
+- The `wait_for_human` banner shows on SVG and XML documents (its elements are made in the
+  HTML namespace); an exception of the banner's script is logged once as a warning
+  instead of being swallowed.
 - A human click (and `hover()`) into an iframe drawn in 3D (`perspective`, `rotateX/Y`,
   `matrix3d`), cross-site or not and at any depth, reaches its element instead of raising
   `ElementNotHittableError`: a cross-site frame's points are mapped through the

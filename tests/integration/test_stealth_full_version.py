@@ -51,9 +51,7 @@ async def test_the_full_version_is_the_same_everywhere(headless):
                 )
             )
             worker = json.loads(await tab.eval(_IN_WORKER))
-            product = (await browser._router.root.send("Browser.getVersion", {}, timeout=10))[
-                "product"
-            ]
+            product = (await tab.send_cdp("Browser.getVersion"))["product"]
         finally:
             await browser.close()
     real = product.split("/", 1)[1]

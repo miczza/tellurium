@@ -43,7 +43,7 @@ async def _done_button(tab, timeout: float = 10) -> int:
     while True:
         for root in await _closed_roots(tab):
             for node in _walk(root):
-                if node.get("nodeName") == "BUTTON":
+                if node.get("nodeName", "").upper() == "BUTTON":  # lower case in XML
                     return node["nodeId"]
         if loop.time() > deadline:
             raise AssertionError("no banner button appeared")

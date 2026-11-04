@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import secrets
 from collections.abc import Awaitable, Callable
@@ -34,10 +35,17 @@ if TYPE_CHECKING:
 #: an async callable taking the tab and returning a truthy value when done.
 Until = str | Callable[["Tab"], Awaitable[Any]] | None
 
+logger = logging.getLogger("tellurium")
+
 #: Seconds between two checks of the condition (and of the banner).
 POLL = 0.3
-#: Bound on each CDP call: a hung tab must not stall the wait past its timeout.
+#: Bound on each CDP call, cut to what is left of the wait when that is less.
 CALL_TIMEOUT = 5.0
+#: Least time a CDP call is given when the wait's deadline is nearer.
+MIN_CALL = 0.05
+#: How long the banner's cleanup holds up a wait that ran out of time; on a
+#: busy page the rest goes on in the background, each call bounded.
+CLEANUP_GRACE = 0.5
 DONE_LABEL = "Done"
 
 # Run in the banner's isolated world, at every new document (before the
@@ -75,21 +83,26 @@ _SHOW_JS = """
   const HOST = {all: 'initial', position: 'fixed', top: '0', left: '0', right: '0',
                 display: 'block', visibility: 'visible', opacity: '1',
                 'pointer-events': 'auto', 'z-index': '2147483647'};
+  // HTML elements even in an SVG or XML document (createElement makes no
+  // HTML there, and attachShadow would throw): the top layer shows them.
+  const make = function (tag) {
+    return document.createElementNS('http://www.w3.org/1999/xhtml', tag);
+  };
   const build = function () {
-    const host = document.createElement('div');
+    const host = make('div');
     const shadow = host.attachShadow({mode: 'closed'});
     // A form: its submit event is not composed, so it never leaves the shadow
     // root and no listener of the page can stop it.
-    const form = document.createElement('form');
+    const form = make('form');
     form.method = 'dialog';
     dress(form, {display: 'flex', 'align-items': 'center', gap: '12px', margin: '0',
                  padding: '10px 16px', background: '#1f2933', color: '#f5f7fa',
                  font: '14px/1.4 system-ui, sans-serif',
                  'box-shadow': '0 2px 8px rgba(0,0,0,.35)'});
-    const text = document.createElement('span');
+    const text = make('span');
     dress(text, {flex: '1', 'white-space': 'pre-wrap'});
     text.textContent = reason;
-    const button = document.createElement('button');
+    const button = make('button');
     button.type = 'submit';
     button.textContent = label;
     dress(button, {font: '600 14px system-ui, sans-serif', padding: '6px 18px', border: '0',
@@ -163,25 +176,30 @@ async def wait_for_human(
     without query and fragment (``**/dashboard`` does not match
     ``/login?next=/dashboard`` nor ``/#/dashboard``), or an async callable
     ``(tab) -> bool``. On expiry of *timeout* seconds (``None``: no limit)
-    ``TimeoutError`` names *reason*. The banner is removed on every way out,
-    cancellation included.
+    ``TimeoutError`` names *reason*; it comes within about *timeout* even
+    on a busy page, as every CDP call takes at most what is left. The banner
+    is removed on every way out, cancellation included (on a page too busy
+    to answer at once, just after the wait is over).
     """
     check = _condition(until)
-    headless = await _headless(tab)
-    if headless and check is None:
-        raise ValueError("wait_for_human in headless Chrome needs until=: nobody can click Done")
     loop = asyncio.get_running_loop()
     deadline = math.inf if timeout is None else loop.time() + timeout
-    banner = None if headless else _Banner(tab, reason)
+    headless = await _headless(tab, deadline)
+    if headless and check is None:
+        raise ValueError("wait_for_human in headless Chrome needs until=: nobody can click Done")
+    banner = None if headless else _Banner(tab, reason, deadline)
     try:
         if banner is not None:
-            await banner.open()
+            banner.open()
         while True:
-            frame = await _main_frame(tab)
+            frame = await _main_frame(tab, deadline)
             if banner is not None and banner.done.is_set():
                 return
             if frame is not None:  # None: the page is busy, look again next round
-                if check is not None and await _bounded(check(tab, frame), deadline, reason):
+                held = check is not None and await _bounded(
+                    check(tab, frame), deadline, reason, timeout
+                )
+                if held:
                     return
                 if banner is not None:
                     await banner.show(frame)
@@ -219,7 +237,21 @@ def _condition(until: Until) -> Callable[[Tab, dict], Awaitable[bool]] | None:
     raise TypeError(f"until must be a URL pattern or an async callable, not {until!r}")
 
 
-async def _headless(tab: Tab) -> bool:
+def _call_timeout(deadline: float) -> float:
+    """The bound of one CDP call: ``CALL_TIMEOUT``, or what is left before *deadline*."""
+    left = deadline - asyncio.get_running_loop().time()
+    return min(CALL_TIMEOUT, max(left, MIN_CALL))
+
+
+def _keep(future: asyncio.Future, owner: set[asyncio.Future]) -> None:
+    """Have *owner* hold *future* until it ends, and read its outcome (no
+    "never retrieved")."""
+    owner.add(future)
+    future.add_done_callback(owner.discard)
+    future.add_done_callback(lambda f: f.cancelled() or f.exception())
+
+
+async def _headless(tab: Tab, deadline: float = math.inf) -> bool:
     """Whether *tab*'s Chrome is headless: yes if any witness says so.
     :attr:`Browser.headless` knows the flags tellurium launched it with, on
     every platform; Chrome's user agent and product say ``HeadlessChrome``
@@ -228,20 +260,23 @@ async def _headless(tab: Tab) -> bool:
     shell does not)."""
     if tab._browser.headless:
         return True
-    info = await tab._browser._router.root.send("Browser.getVersion", {}, timeout=CALL_TIMEOUT)
+    root = tab._browser._router.root
+    info = await root.send("Browser.getVersion", {}, timeout=_call_timeout(deadline))
     return any("HeadlessChrome" in info.get(key, "") for key in ("product", "userAgent"))
 
 
-async def _main_frame(tab: Tab) -> dict | None:
+async def _main_frame(tab: Tab, deadline: float) -> dict | None:
     """The main frame as Chrome reports it; ``None`` if the page is too busy to say."""
     try:
-        tree = await tab._session.send("Page.getFrameTree", {}, timeout=CALL_TIMEOUT)
+        tree = await tab._session.send("Page.getFrameTree", {}, timeout=_call_timeout(deadline))
     except TimeoutError:
         return None
     return tree["frameTree"]["frame"]
 
 
-async def _bounded(awaitable: Awaitable[bool], deadline: float, reason: str) -> bool:
+async def _bounded(
+    awaitable: Awaitable[bool], deadline: float, reason: str, timeout: float | None
+) -> bool:
     """*awaitable*'s result, or the wait's ``TimeoutError`` past *deadline*."""
     left = deadline - asyncio.get_running_loop().time()
     if left == math.inf:
@@ -250,7 +285,7 @@ async def _bounded(awaitable: Awaitable[bool], deadline: float, reason: str) -> 
         return await asyncio.wait_for(awaitable, max(left, 0))
     except TimeoutError:
         if asyncio.get_running_loop().time() >= deadline:
-            raise _timeout(reason, None) from None
+            raise _timeout(reason, timeout) from None
         raise
 
 
@@ -271,18 +306,23 @@ class _Banner:
     """The banner of one wait: an isolated world per document, the "Done"
     binding in it (a fresh name per wait), and the event that it was clicked."""
 
-    def __init__(self, tab: Tab, reason: str) -> None:
+    def __init__(self, tab: Tab, reason: str, deadline: float) -> None:
         token = secrets.token_hex(8)
         self._tab = tab
         self._session = tab._session
+        # Background work of the wait (cleanup, a late early script) is the
+        # browser's: it ends with the session, and the browser cancels it on close.
+        self._owner = tab._browser._background
+        self._deadline = deadline
         self._world = f"__tl_human_{token}"
         self._binding = f"__tl_done_{token}"
         self._context: int | None = None
         self._loader: str | None = None  # the document the context belongs to
         self._bound = False
+        self._warned: set[str] = set()  # errors of the banner's script, logged once
         # Chrome's reply to the early script (run at every new document): its
         # identifier, needed to take it away.
-        self._adding: asyncio.Task | None = None
+        self._adding: asyncio.Future | None = None
         self._expression = _SHOW_JS % (
             json.dumps(reason),
             json.dumps(self._binding),
@@ -294,24 +334,26 @@ class _Banner:
         if params.get("name") == self._binding:
             self.done.set()
 
-    async def open(self) -> None:
+    def open(self) -> None:
         """Listen for "Done" and have every new document run the banner's
         script in its world before the page's own scripts.
 
-        A page whose main thread is busy answers late: the reply is awaited
-        in the background (bounded by :meth:`close`), never by the wait,
-        which a busy page must not shorten. Meanwhile :meth:`show` puts the
-        banner up round by round, as it does anyway."""
+        A page whose main thread is busy answers late (Chrome replies once
+        the page is free): the reply is awaited in the background, never by
+        the wait, which a busy page must not shorten nor stretch. It is not
+        bounded by a clock but by the tab's session: Chrome fails it when the
+        session goes, and the session's early scripts go with it; a reply
+        that comes after the wait has the script taken away (:meth:`close`).
+        Meanwhile :meth:`show` puts the banner up round by round."""
         self._session.on("Runtime.bindingCalled", self._on_binding)
-        self._adding = asyncio.create_task(
+        self._adding = asyncio.ensure_future(
             self._session.send(
                 "Page.addScriptToEvaluateOnNewDocument",
                 {"source": self._expression, "worldName": self._world},
                 timeout=math.inf,
             )
         )
-        # Read its outcome even if close() is cut short: no "never retrieved".
-        self._adding.add_done_callback(lambda t: t.cancelled() or t.exception())
+        _keep(self._adding, self._owner)
 
     async def show(self, frame: dict) -> None:
         """Make sure the current document shows the banner."""
@@ -336,7 +378,8 @@ class _Banner:
                 # A navigation may have committed meanwhile, so the world and
                 # the binding may sit in different documents: keep them only
                 # if the document is still the one they were made for.
-                if (await _main_frame(self._tab) or {}).get("loaderId") != frame.get("loaderId"):
+                now = await _main_frame(self._tab, self._deadline) or {}
+                if now.get("loaderId") != frame.get("loaderId"):
                     return
                 self._context, self._loader = world["executionContextId"], frame.get("loaderId")
             if await self._evaluate(self._expression) == "unbound":
@@ -347,46 +390,48 @@ class _Banner:
             self._context = None  # the document went meanwhile: a new world next round
 
     async def close(self) -> None:
-        """Take the banner out and the binding away; never raises (the tab may be gone)."""
+        """Take the banner out, the binding and the early script away; never
+        raises (the tab may be gone). It waits at most ``CALL_TIMEOUT``, or
+        ``CLEANUP_GRACE`` once the wait's time is over; the rest, each call
+        bounded, goes on in the background, as it does if *close* is cancelled.
+        An early script Chrome has not confirmed yet is taken away as soon as
+        it does."""
         self._session.off("Runtime.bindingCalled", self._on_binding)
+        steps = []
         if self._context is not None:
-            try:
-                await self._evaluate(_HIDE_JS)
-            except Exception:  # noqa: BLE001 - document or tab gone: nothing left to hide
-                pass
-        script = await self._early_script()
-        if script is not None:
-            try:
-                await self._send("Page.removeScriptToEvaluateOnNewDocument", {"identifier": script})
-            except Exception:  # noqa: BLE001 - tab gone
-                pass
+            steps.append(self._evaluate(_HIDE_JS, CALL_TIMEOUT))
+        adding = self._adding
+        if adding is not None and adding.done():
+            steps.append(self._remove_script(adding))
+        elif adding is not None:
+            adding.add_done_callback(
+                lambda f: _keep(asyncio.ensure_future(self._remove_script(f)), self._owner)
+            )
         if self._bound:
-            try:
-                await self._send("Runtime.removeBinding", {"name": self._binding})
-            except Exception:  # noqa: BLE001 - tab gone
-                pass
+            steps.append(self._send("Runtime.removeBinding", {"name": self._binding}, CALL_TIMEOUT))
+        cleanup = asyncio.ensure_future(asyncio.gather(*steps, return_exceptions=True))
+        _keep(cleanup, self._owner)
+        left = self._deadline - asyncio.get_running_loop().time()
+        await asyncio.wait({cleanup}, timeout=max(min(CALL_TIMEOUT, left), CLEANUP_GRACE))
 
-    async def _early_script(self) -> str | None:
-        """The early script's identifier, waiting at most ``CALL_TIMEOUT`` more
-        for Chrome's reply; ``None`` if it never came (tab gone or still busy:
-        the script, if Chrome adds it later, finds no binding and shows nothing)."""
-        task = self._adding
-        if task is None:
-            return None
-        if not task.done():
-            await asyncio.wait({task}, timeout=CALL_TIMEOUT)
-        if not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-            return None
-        if task.cancelled() or task.exception() is not None:
-            return None
-        return task.result().get("identifier")
+    async def _remove_script(self, adding: asyncio.Future) -> None:
+        if adding.cancelled() or adding.exception() is not None:
+            return  # the tab went: its early scripts with it
+        script = adding.result().get("identifier")
+        if script is not None:
+            params = {"identifier": script}
+            await self._send("Page.removeScriptToEvaluateOnNewDocument", params, CALL_TIMEOUT)
 
-    async def _evaluate(self, expression: str) -> Any:
+    async def _evaluate(self, expression: str, timeout: float | None = None) -> Any:
         params = {"expression": expression, "contextId": self._context, "returnByValue": True}
-        resp = await self._send("Runtime.evaluate", params)
+        resp = await self._send("Runtime.evaluate", params, timeout)
+        if details := resp.get("exceptionDetails"):
+            error = details.get("exception", {}).get("description") or details.get("text", "?")
+            if error not in self._warned:
+                self._warned.add(error)
+                logger.warning("wait_for_human: the banner could not be shown: %s", error)
         return resp.get("result", {}).get("value")
 
-    async def _send(self, method: str, params: dict) -> dict:
-        return await self._session.send(method, params, timeout=CALL_TIMEOUT)
+    async def _send(self, method: str, params: dict, timeout: float | None = None) -> dict:
+        limit = _call_timeout(self._deadline) if timeout is None else timeout
+        return await self._session.send(method, params, timeout=limit)

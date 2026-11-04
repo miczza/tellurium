@@ -751,7 +751,12 @@ an async `(tab) -> bool`;
 `until` is required (`ValueError` otherwise); Chrome counts as headless when
 either the `--headless` flag on its command line or `HeadlessChrome` in its
 user agent says so. The banner is removed however the
-wait ends.
+wait ends. The timeout holds within about a second even on a page whose main
+thread is busy: every CDP call takes at most what is left of the wait; on such
+a page the banner's cleanup ends in the background, so the banner may stay on
+screen for a second or two after the wait has returned. The
+banner also shows on SVG and XML documents; if its script fails on a page, a
+warning on the `tellurium` logger says why.
 
 The banner sits in a closed shadow root built from an isolated world, so the
 page cannot read it, and it is styled through the CSSOM, so a `style-src` CSP
@@ -883,7 +888,7 @@ wears a honeypot marker. The signals `trap_link.reasons(link)` names:
 |---|---|
 | `not-rendered` | `display: none` on it or an ancestor, a closed `<details>` |
 | `visibility-hidden` | `visibility: hidden` / `collapse` |
-| `transparent` | under 5% of it showing: `opacity` and `filter: opacity()` of it and its ancestors multiplied (`opacity: 0`, `0.01`, `0.2` inside `0.2`), or a `mask-image` of gradients that are transparent throughout |
+| `transparent` | under 5% of it showing: `opacity` and `filter: opacity()` of it and its ancestors multiplied (`opacity: 0`, `0.01`, `0.2` inside `0.2`), or a `mask-image` of gradients that are transparent throughout (every color, `oklch()`, `lab()` and `color()` included, with alpha 0) |
 | `zero-size` | under 2 CSS px wide or tall (`width: 0`, `1px`, `scale(0)`), content that overflows visibly included |
 | `off-page` | wholly outside what scrolling can reach (`left: -9999px`), or outside the viewport when `position: fixed` or along an axis the page does not scroll (`overflow: hidden` on the root, as while a modal is open). The reach is that of every box that scrolls the link, inner to outer: an app scrolling in its own box under `html, body { overflow: hidden }` and a carousel with `overflow-x: auto` are reachable |
 | `clipped` | nothing left inside the ancestors that clip it (`overflow: hidden` or `contain: paint`/`strict` on a 0-height box, `clip`, a `clip-path` that leaves nothing: `inset(50%)`, `circle(0)`, `ellipse(0 0)`, a `polygon()` of no area) |
@@ -907,9 +912,11 @@ focus does not move. What counts is the value they declare against what hides th
 link: `left`/`top` that put it back on the page, `clip: auto`, `clip-path: none`, a
 size or `font-size` again, an `opacity` above zero. So `a:focus { transform:
 translateY(-1px) }` brings back no hidden link, and a link stays a trap when the only
-rule that would show it is in a cross-origin sheet (it cannot be read), is beaten by
-an inline style, sits on an ancestor's `:focus` (only the link takes the focus), or
-when the link is out of the tab order (`tabindex="-1"`).
+rule that would show it is in a cross-origin sheet (it cannot be read), loses the
+cascade (to an inline style, a `!important` that hides the link, a more specific
+selector, an unlayered rule over a layered one, a later rule), sits on an ancestor's
+`:focus` (only the link takes the focus), or when the link is out of the tab order
+(`tabindex="-1"`).
 
 The check is conservative and has one threshold, the 5% of `transparent`: a link of a **closed**
 menu is a trap (a person does not click it without opening the menu), so open the
@@ -929,9 +936,9 @@ What it can still miss, or get wrong:
   A box painting over the link with `pointer-events: none` lets the hit-test through.
 - **Masks and shapes it cannot read**: a `mask-image: url(...)`, a `clip-path` with
   `path()`, `url()` or `calc()`, text over an image or a gradient (no `same-color`).
-- **Focus rules, read not applied**: specificity against the other rules is not
-  computed (a `:focus` rule a more specific selector beats still counts), and a reveal
-  that goes through `transform`, `:has()`, a sibling's focus, `@container` or a script
+- **Focus rules, read not applied**: the cascade is worked out from the readable
+  sheets only (importance, layers in the order they are first met, specificity, order;
+  rules inside `@container` or `@scope` are not counted), and a reveal that goes through `transform`, `:has()`, a sibling's focus, `@container` or a script
   is not seen: those links stay traps (false positives). A skip link whose only focus
   rule is in a cross-origin sheet stays a trap too.
 - **Known false positives**: a `position: fixed` link inside an ancestor with a
@@ -1296,7 +1303,10 @@ if await tab.is_allowed("https://example.com/search?q=x"):
   robots.txt is asked again after a minute.
 - With `stealth=True` it carries the pages' `User-Agent`: on the stock backend Chrome is
   launched with the profile's (`args` may not hold a `--user-agent` then: `ValueError`),
-  on the patched one both are the binary's own. It sends no `Sec-CH-UA*` client hints,
+  on the patched one both are the binary's own. On the stock backend the flag needs the
+  version `chrome --version` prints; when it cannot be read Chrome starts without it and,
+  headless, robots.txt leaves with `HeadlessChrome` (a warning on the `tellurium` logger
+  says so at launch). It sends no `Sec-CH-UA*` client hints,
   which Chrome adds to page requests only. Without stealth it is Chrome's own
   (`HeadlessChrome` when headless).
 - Without `respect_robots` no navigation ever requests robots.txt; `is_allowed` still

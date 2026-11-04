@@ -24,11 +24,8 @@ logger = logging.getLogger("tellurium")
 
 
 class Browser(CookieJar):
-    """High-level browser controller.
-
-    Use :meth:`launch` (or ``async with Browser.launch(...) as browser:``) to
-    create an instance backed by a real Chrome/Chromium process communicating
-    over CDP pipes.
+    """High-level browser controller: :meth:`launch` (or ``async with
+    Browser.launch(...) as browser:``) starts a Chrome talking CDP over pipes.
     """
 
     def __init__(self) -> None:
@@ -42,7 +39,7 @@ class Browser(CookieJar):
         self._adopted: dict[str, asyncio.Future] = {}
         self._contexts: dict[str, BrowserContext] = {}
         self._tabs_changed = asyncio.Event()
-        self._background: set[asyncio.Task] = set()
+        self._background: set[asyncio.Future] = set()  # cancelled by close()
         self._user_data_dir: str | None = None
         self._stealth_engine = None
         self._stealth_profile = None
@@ -552,6 +549,8 @@ class Browser(CookieJar):
             finally:  # the stealth extension's temp dir, now rather than at GC
                 if self._stealth_engine is not None:
                     self._stealth_engine.close()
+                for task in list(self._background):  # late replies Chrome will never send
+                    task.cancel()
 
     async def __aenter__(self) -> Browser:
         return self

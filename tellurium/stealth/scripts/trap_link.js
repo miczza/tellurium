@@ -31,10 +31,7 @@ function (frame) {
         const p = ((/^rgba?\(([^)]*)\)$/.exec(c || '') || [])[1] || '').split(/[\s,\/]+/).filter(Boolean).map(Number);
         return p.length < 3 || p.some(isNaN) ? null : [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
     };
-    // A mask of gradients only, every color of them transparent: nothing of the box shows.
-    const clear = (mask) => !/url\(|^none$/.test(mask || 'none') && /gradient\(/.test(mask)
-        && (mask.match(/rgba?\([^)]*\)|transparent/g) || ['?']).every((c) => (
-            c === 'transparent' || (rgba(c) || [0, 0, 0, 1])[3] === 0));
+    const clear = (mask) => clearMask(mask || 'none');
     const fade = (n, value) => {
         let shows = parseFloat(value(n, 'opacity'));
         for (const [, x, pct] of (value(n, 'filter') || '').matchAll(/opacity\(\s*([\d.]+)(%?)\s*\)/g)) {

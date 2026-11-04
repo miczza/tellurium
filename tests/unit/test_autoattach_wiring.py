@@ -3,6 +3,7 @@ and a listener is registered for Target.attachedToTarget."""
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -107,12 +108,16 @@ async def test_patch_and_resume_injects_worker_scripts(target_type):
 
     await se._patch_and_resume("sess-w", target_type, "blob:http://x/abc")
 
-    sent = [c.args[0] for c in child.send.await_args_list]
+    calls = child.send.await_args_list
+    sent = [c.args[0] for c in calls]
     assert "Page.addScriptToEvaluateOnNewDocument" not in sent
     assert sent.count("Runtime.evaluate") == 1
     assert sent[-1] == "Runtime.runIfWaitingForDebugger"
+    # A service or shared worker does not inherit the page's override (P3 [24]).
+    overrides = sent.count("Emulation.setUserAgentOverride")
+    assert overrides == (0 if target_type == "worker" else 1)
 
-    source = child.send.await_args_list[0].args[1]["expression"]
+    source = next(c.args[1]["expression"] for c in calls if c.args[0] == "Runtime.evaluate")
     # Marker / toString-mask scheme (same as webdriver.js)
     assert "hardwareConcurrency" in source
     # Never define navigator.webdriver in worker scope — WorkerNavigator has
@@ -120,6 +125,31 @@ async def test_patch_and_resume_injects_worker_scripts(target_type):
     # what must be absent is a defineProperty for it.)
     code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("//"))
     assert "webdriver" not in code
+
+
+@pytest.mark.asyncio
+async def test_a_frozen_service_worker_is_patched_without_waiting_for_its_replies():
+    """A service worker frozen at start answers nothing until it runs: its
+    patch is sent, then the resume, and only then are the replies read."""
+    se, child = _stock_engine_with_mock_router()
+    resumed = asyncio.Event()
+    order: list[str] = []
+
+    async def send(method, params=None, timeout=None):
+        order.append(method)
+        if method == "Runtime.runIfWaitingForDebugger":
+            resumed.set()
+        else:
+            await resumed.wait()
+        return {}
+
+    child.send = send
+    await asyncio.wait_for(se._patch_and_resume("sess-s", "service_worker", "http://x/sw.js"), 2)
+    assert order == [
+        "Emulation.setUserAgentOverride",
+        "Runtime.evaluate",
+        "Runtime.runIfWaitingForDebugger",
+    ]
 
 
 @pytest.mark.asyncio

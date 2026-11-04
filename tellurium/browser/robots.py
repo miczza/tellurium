@@ -12,6 +12,7 @@ import asyncio
 import base64
 import json
 import logging
+import math
 import time
 import urllib.parse
 from collections import OrderedDict
@@ -42,7 +43,6 @@ CACHE_SIZE = 256  # origins kept per browser, least recently used out first
 _READ_CHUNK = 64 * 1024
 _CLOSE_TIMEOUT = 2.0
 _OPEN_TIMEOUT = 5.0  # creating and attaching the hidden target
-_LATE_REPLY_TIMEOUT = 30.0  # how long a timed-out createTarget is still watched
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 _TRIMMED = "".join(map(chr, range(0x21)))  # C0 controls and space, cut off the ends
@@ -105,13 +105,18 @@ async def open_frame(browser: Any, context_id: str) -> Frame:
     params: dict[str, Any] = {"url": "about:blank", "hidden": True}
     if context_id:
         params["browserContextId"] = context_id
-    create = asyncio.ensure_future(
-        root.send("Target.createTarget", params, timeout=_LATE_REPLY_TIMEOUT)
-    )
+    # The reply is watched with no clock: a hidden target lives as long as the
+    # session that made it (the pipe), and so does the wait for it (Chrome
+    # fails it when the pipe closes), a task of the browser, which cancels it
+    # when it closes. Only this caller's wait is bounded.
+    create = asyncio.ensure_future(root.send("Target.createTarget", params, timeout=math.inf))
+    browser._background.add(create)
+    create.add_done_callback(browser._background.discard)
     try:
         target_id = (await asyncio.wait_for(asyncio.shield(create), _OPEN_TIMEOUT))["targetId"]
     except BaseException:
-        # Chrome may still create it: whoever gave up on it closes it on arrival.
+        # Chrome may still create it: whoever gave up on it closes it on arrival,
+        # however late that is.
         create.add_done_callback(lambda t: _close_created(root, t))
         raise
     try:

@@ -41,6 +41,16 @@
   .faint:focus-within { color: red; }
   @layer base { @supports (display: grid) { .layered:focus { left: 0 !important; } } }
   .layered:focus { left: -9999px; }
+  /* The cascade decides, not the mere :focus: importance, layers, specificity. */
+  .pinned { left: -9999px !important; }
+  .pinned:focus { left: 0; }
+  #trap-specific { left: -9999px; }
+  .specific:focus { left: 0; }
+  @layer base { .weak:focus { left: 0; } }
+  .both { left: -9999px !important; }
+  .both:focus { left: 0 !important; }
+  a.off.sharp { left: -9999px; }
+  a.sharp:focus { left: 0; }
 </style>
 </head>
 <body>
@@ -56,6 +66,11 @@
 <div class="panel"><a id="ok-panel" href="#main">In a panel that shows on focus</a></div>
 <div class="faint"><a id="trap-faint" href="/t/faint">in a panel that stays transparent</a></div>
 <a id="ok-layered" class="off layered" href="#main">Layered skip</a>
+<a id="trap-important" class="off pinned" href="/t/important">hidden with !important</a>
+<a id="trap-specific" class="off specific" href="/t/specific">hidden by an id</a>
+<a id="trap-layer" class="off weak" href="/t/layer">a layered focus rule</a>
+<a id="ok-both-important" class="off both" href="#main">Important both ways</a>
+<a id="ok-later" class="off sharp" href="#main">As specific, later</a>
 <main id="main"><p>Content</p></main>
 </body>
 </html>
