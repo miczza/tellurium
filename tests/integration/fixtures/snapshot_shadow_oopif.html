@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Shadow and a cross-site frame</title></head>
+<body>
+  <h1>Before</h1>
+  <iframe id="remote" title="Remote frame"></iframe>
+  <div id="host"></div>
+  <script>
+    // The frame comes from localhost (the page from 127.0.0.1): its own renderer.
+    // What it posts reaches this renderer after its own commands, through the browser.
+    addEventListener('message', (e) => {
+      if (e.data === 'after') document.querySelector('h1').textContent = 'After';
+    });
+    document.getElementById('remote').src =
+      'http://localhost:' + location.port + '/snapshot_child.html';
+    // 40000 buttons behind a closed shadow root: a tree that takes a while to build.
+    const root = document.getElementById('host').attachShadow({ mode: 'closed' });
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < 40000; i++) {
+      const b = document.createElement('button');
+      b.textContent = 'Shadow ' + i;
+      frag.append(b);
+    }
+    root.append(frag);
+  </script>
+</body>
+</html>

@@ -12,8 +12,8 @@ page's own renderer: over it, an error). Refs come from the tab's
 :class:`~tellurium.browser.refs.RefMap`. No ``Runtime.enable``: only the
 Accessibility, DOM and Target domains.
 
-Snapshots of one document share its ``getFullAXTree`` (:func:`_full_tree`) until a
-command other than a snapshot's (a click, a key, an eval) goes out after it.
+Snapshots of one document share its ``getFullAXTree`` (:func:`_full_tree`) asked for
+while no other command (a click, a key, an eval) awaited its answer, until one goes out.
 """
 
 from __future__ import annotations
@@ -77,22 +77,37 @@ class _Bounds:
 
 
 # Commands sent by the snapshots, by router (the router's last id less these counts
-# the others); getFullAXTree in flight, by session then (frame id, document): (task,
-# other commands when sent); the *known* of the snapshots running, by router; one
-# selector lookup at a time (DOM.getDocument drops the node ids given), by session.
+# the others), and the ids of those unanswered; getFullAXTree in flight, by session
+# then (frame id, document): (task, other commands when sent); the *known* of the
+# snapshots running, by router; one selector lookup at a time (DOM.getDocument drops
+# the node ids given), by session.
 _OWN_COMMANDS: weakref.WeakKeyDictionary[Any, int] = weakref.WeakKeyDictionary()
+_OWN_PENDING: weakref.WeakKeyDictionary[Any, set[int]] = weakref.WeakKeyDictionary()
 _IN_FLIGHT: weakref.WeakKeyDictionary[Any, dict[tuple, tuple]] = weakref.WeakKeyDictionary()
 _RUNNING: weakref.WeakKeyDictionary[Any, list[dict]] = weakref.WeakKeyDictionary()
 _DOM_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = weakref.WeakKeyDictionary()
 
 
 async def _send(session: Session, method: str, params: dict, timeout: float) -> dict:
-    if not session.closed:  # a closed one raises before allocating: no id to count
-        _OWN_COMMANDS[session.router] = _OWN_COMMANDS.get(session.router, 0) + 1
+    # send allocates the next id before it first waits; a closed session raises first
+    router, msg_id = session.router, session.router._next_msg_id + 1
+    pending = _OWN_PENDING.setdefault(router, set())
+    if not session.closed:
+        _OWN_COMMANDS[router] = _OWN_COMMANDS.get(router, 0) + 1
+        pending.add(msg_id)
     try:
         return await session.send(method, params, timeout=timeout)
     except TimeoutError:
         raise TimeoutError(f"{method} got no answer within {timeout}s") from None
+    finally:  # one cancelled still awaits its answer: its id stays (ids are not reused)
+        if msg_id not in getattr(session, "_pending", ()):
+            pending.discard(msg_id)
+
+
+def _others_pending(router: Any) -> bool:
+    """Whether a command not a snapshot's awaits its answer, on any session."""
+    own = _OWN_PENDING.get(router, ())
+    return any(i not in own for s in list(router._sessions.values()) for i in s._pending)
 
 
 def _drop_request(requests: dict, key: tuple, task: asyncio.Task) -> None:
@@ -111,8 +126,9 @@ async def _full_tree(
 ) -> dict:
     """``getFullAXTree`` of *document* (``None``: not shared): the request in flight
     for it, or in flight since the snapshot began (*known*: one abandoned past its
-    snapshot_timeout too), if nothing but snapshots was sent since it went out (a
-    click, a key, an eval may have changed the page); else a new one."""
+    snapshot_timeout too), if nothing but snapshots was sent since it went out, nor
+    awaited its answer then (a click, a key, an eval may change the page, through
+    another renderer even after answering); else a new one."""
     params = {"frameId": frame_id} if frame_id else {}
     if document is None:
         return await _send(session, "Accessibility.getFullAXTree", params, timeout)
@@ -121,6 +137,8 @@ async def _full_tree(
     entry = next(
         (e for e in (requests.get(key), known.get((session, key))) if _usable(e, others)), None
     )
+    if entry is None and _others_pending(session.router):  # for this snapshot only
+        return await _send(session, "Accessibility.getFullAXTree", params, timeout)
     if entry is None:
         request = _send(session, "Accessibility.getFullAXTree", params, timeout)
         task = asyncio.ensure_future(request)

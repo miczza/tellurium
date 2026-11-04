@@ -11,9 +11,11 @@ from tellurium.browser import snapshot
 
 
 class _Router:
-    """Allocates the command ids, as the real router does on each send."""
+    """Allocates the command ids, as the real router does on each send, and knows
+    its sessions."""
 
-    _next_msg_id = 0
+    def __init__(self):
+        self._next_msg_id, self._sessions = 0, {}
 
 
 class _Session:
@@ -22,18 +24,30 @@ class _Session:
 
     def __init__(self, router: _Router, *, closed: bool = False):
         self.router, self.closed = router, closed
-        self.release = asyncio.Event()
-        self.trees = 0
+        self.release, self.answer = asyncio.Event(), asyncio.Event()
+        self.trees, self._pending = 0, {}
+        router._sessions[len(router._sessions)] = self
 
     async def send(self, method, params=None, timeout=None):
         if self.closed:
             raise ConnectionError("Target detached")
         self.router._next_msg_id += 1
-        if method == "Accessibility.getFullAXTree":
-            self.trees += 1
-            await self.release.wait()
-            return {"nodes": [], "tree": self.trees}
-        return {}
+        msg_id = self._pending[self.router._next_msg_id] = self.router._next_msg_id
+        try:
+            if method == "Accessibility.getFullAXTree":
+                self.trees += 1
+                await self.release.wait()
+                return {"nodes": [], "tree": self.trees}
+            if method == "Runtime.evaluate":  # answered when the test says
+                await self.answer.wait()
+            return {}
+        except asyncio.CancelledError:  # Chrome still owes the answer
+            raise
+        except BaseException:
+            del self._pending[msg_id]
+            raise
+        else:
+            del self._pending[msg_id]
 
 
 async def _flush() -> None:
@@ -63,6 +77,57 @@ async def test_a_failed_send_on_a_closed_session_does_not_hide_a_later_input():
 async def test_snapshots_with_nothing_else_sent_still_share_the_request():
     router = _Router()
     tab = _Session(router)
+    first = asyncio.ensure_future(snapshot._full_tree(tab, None, "doc", 5, {}))
+    await _flush()
+    second = asyncio.ensure_future(snapshot._full_tree(tab, None, "doc", 5, {}))
+    await _flush()
+    tab.release.set()
+    await asyncio.gather(first, second)
+    assert tab.trees == 1
+
+
+async def test_a_request_sent_while_an_input_awaits_its_answer_is_not_shared():
+    """An input still unanswered when a tree is asked for may act on the page after
+    the tree is built (another renderer, through the browser): that tree is no
+    snapshot's but the one who asked for it."""
+    router = _Router()
+    tab, frame = _Session(router), _Session(router)
+    posted = asyncio.ensure_future(frame.send("Runtime.evaluate", {}))
+    await _flush()
+    first = asyncio.ensure_future(snapshot._full_tree(tab, None, "doc", 5, {}))
+    await _flush()
+    frame.answer.set()
+    await posted
+    second = asyncio.ensure_future(snapshot._full_tree(tab, None, "doc", 5, {}))
+    await _flush()
+    tab.release.set()
+    await asyncio.gather(first, second)
+    assert tab.trees == 2
+
+
+async def test_pending_snapshot_commands_do_not_stop_the_sharing():
+    router = _Router()
+    tab, frame = _Session(router), _Session(router)
+    counting = asyncio.ensure_future(snapshot._send(frame, "Runtime.evaluate", {}, 5))
+    await _flush()
+    first = asyncio.ensure_future(snapshot._full_tree(tab, None, "doc", 5, {}))
+    await _flush()
+    second = asyncio.ensure_future(snapshot._full_tree(tab, None, "doc", 5, {}))
+    await _flush()
+    tab.release.set()
+    frame.answer.set()
+    await asyncio.gather(first, second, counting)
+    assert tab.trees == 1
+
+
+async def test_a_cancelled_snapshot_command_still_unanswered_stays_its_own():
+    router = _Router()
+    tab, frame = _Session(router), _Session(router)
+    gone = asyncio.ensure_future(snapshot._send(frame, "Runtime.evaluate", {}, 5))
+    await _flush()
+    gone.cancel()
+    await _flush()
+    assert gone.cancelled() and frame._pending  # Chrome has not answered it yet
     first = asyncio.ensure_future(snapshot._full_tree(tab, None, "doc", 5, {}))
     await _flush()
     second = asyncio.ensure_future(snapshot._full_tree(tab, None, "doc", 5, {}))

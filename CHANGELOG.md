@@ -669,7 +669,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   send one request, and a snapshot abandoned past `snapshot_timeout` leaves its request
   to the next one instead of queueing a second ~120k-node tree behind it. A request is
   shared only while nothing but snapshots was sent to Chrome after it (a click, a key,
-  an eval, a navigation: the next snapshot asks again) and only for the same document.
+  an eval, a navigation: the next snapshot asks again), only if no other command was
+  still awaiting its answer when it went out (an input answered while the tree is built
+  may act on the page after it, e.g. a cross-site iframe posting to its parent), and
+  only for the same document.
   A snapshot command refused by a closed session (a cross-site iframe or a tab gone)
   sent nothing and does not count as sent, so an input after it still makes the next
   snapshot ask again. Concurrent snapshots of one tab no longer fail with "Could not find node with given
