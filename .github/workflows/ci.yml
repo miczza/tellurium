@@ -127,7 +127,7 @@ jobs:
           if-no-files-found: ignore
 
   integration-os:
-    name: integration (${{ matrix.os }})
+    name: integration (${{ matrix.os }}, ${{ matrix.shard }}/4)
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/fetta/C6-')
     runs-on: ${{ matrix.os }}
     continue-on-error: true
@@ -136,6 +136,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-2025, macos-15]
+        # About 780 tests take ~40 min on a hosted runner: four shards of
+        # files keep each job under its 25 min.
+        shard: [1, 2, 3, 4]
     defaults:
       run:
         shell: bash
@@ -155,22 +158,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[geoip,dev]" pytest-timeout
       - name: Show the Chrome the tests use
+        timeout-minutes: 5
         env:
           STOCK_CHROME: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           echo "setup-chrome: $STOCK_CHROME"
-          "$STOCK_CHROME" --version || true
           python -c "import asyncio; from tellurium.browser.launcher import find_chrome; print('find_chrome:', asyncio.run(find_chrome()))"
       - name: Run integration tests
         # No xvfb-run: Windows and macOS have a display. tests/stealth stays on Linux.
         env:
           STOCK_CHROME: ${{ steps.chrome.outputs.chrome-path }}
-        run: pytest tests/integration -v -rfEs --timeout=180 --junitxml=junit-integration.xml
+        run: |
+          files=$(ls tests/integration/test_*.py | sort | awk -v n=${{ matrix.shard }} 'NR % 4 == n % 4')
+          pytest $files -v -rfEs --timeout=120 --junitxml=junit-integration.xml
       - name: Upload JUnit report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: junit-integration-${{ matrix.os }}
+          name: junit-integration-${{ matrix.os }}-${{ matrix.shard }}
           path: junit-integration.xml
           if-no-files-found: ignore
 

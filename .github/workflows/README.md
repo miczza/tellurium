@@ -43,9 +43,14 @@ Status: **active** (no longer a draft). Concurrency group per ref with
   and what `find_chrome()` picks (the runner image also ships its own
   Chrome). No `xvfb-run`: both systems have a display, and
   `tests/conftest.py` skips its private Xvfb when there is no `Xvfb` binary.
-  `tests/stealth` stays on Linux. `pytest-timeout` (120 s per unit test,
-  180 s per integration test) turns a hang into a red test instead of a
-  killed job, and each job uploads its JUnit XML as `junit-<suite>-<os>`.
+  `tests/stealth` stays on Linux. `integration-os` runs in four shards of
+  test files (`NR % 4` over the sorted file list), because the whole suite
+  takes about 40 min on a hosted runner. `pytest-timeout` (120 s per test)
+  turns a hang into a red test instead of a killed job, `-v` names the test
+  that was running if a job is killed anyway, and each job uploads its JUnit
+  XML as `junit-<suite>-<os>[-<shard>]`. The diagnostic step does not run
+  `chrome.exe --version`: on Windows it opens a browser window and never
+  exits.
   - **When**: only on `workflow_dispatch` and on pushes to `fetta/C6-*`
     branches. The repo is private: macOS minutes count x10 and Windows x2
     against the free 2000 min/month, so ordinary pushes stay Linux-only.
