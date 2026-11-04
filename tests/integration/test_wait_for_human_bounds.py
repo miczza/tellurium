@@ -191,6 +191,11 @@ async def test_a_cookie_set_headless_is_there_headed_on_the_same_profile(tmp_pat
     try:
         await b.main_tab.get(f"{local_server}/basic.html")
         await b.main_tab.eval("document.cookie = 'sso=1; max-age=3600; path=/'")
+        # The renderer hands the cookie to the browser's store asynchronously: wait for
+        # it to land before closing, or a loaded machine closes first.
+        async with asyncio.timeout(5):
+            while not await b.get_cookies("127.0.0.1"):
+                await asyncio.sleep(0.05)
     finally:
         await b.close()
     b = await Browser.launch(headless=False, user_data_dir=profile)
