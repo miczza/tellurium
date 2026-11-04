@@ -100,11 +100,10 @@ class AXTree:
         return {"nodes": self.nodes, "frames": subs}
 
 
-# Commands sent by the snapshots, by router (ids are allocated on send: the router's
-# last one less these counts the others); getFullAXTree requests in flight, by
-# session then (frame id, document): (task, other commands when sent); the *known* of
-# the snapshots running, by router; DOM.getDocument drops the node ids given before,
-# so one selector lookup at a time, by session.
+# Commands sent by the snapshots, by router (the router's last id less these counts
+# the others); getFullAXTree in flight, by session then (frame id, document): (task,
+# other commands when sent); the *known* of the snapshots running, by router; one
+# selector lookup at a time (DOM.getDocument drops the node ids given), by session.
 _OWN_COMMANDS: weakref.WeakKeyDictionary[Any, int] = weakref.WeakKeyDictionary()
 _IN_FLIGHT: weakref.WeakKeyDictionary[Any, dict[tuple, tuple]] = weakref.WeakKeyDictionary()
 _RUNNING: weakref.WeakKeyDictionary[Any, list[dict]] = weakref.WeakKeyDictionary()
@@ -112,7 +111,8 @@ _DOM_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = weakref.WeakKeyDictio
 
 
 async def _send(session: Session, method: str, params: dict, timeout: float) -> dict:
-    _OWN_COMMANDS[session.router] = _OWN_COMMANDS.get(session.router, 0) + 1
+    if not session.closed:  # a closed one raises before allocating: no id to count
+        _OWN_COMMANDS[session.router] = _OWN_COMMANDS.get(session.router, 0) + 1
     try:
         return await session.send(method, params, timeout=timeout)
     except TimeoutError:

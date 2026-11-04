@@ -670,7 +670,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   to the next one instead of queueing a second ~120k-node tree behind it. A request is
   shared only while nothing but snapshots was sent to Chrome after it (a click, a key,
   an eval, a navigation: the next snapshot asks again) and only for the same document.
-  Concurrent snapshots of one tab no longer fail with "Could not find node with given
+  A snapshot command refused by a closed session (a cross-site iframe or a tab gone)
+  sent nothing and does not count as sent, so an input after it still makes the next
+  snapshot ask again. Concurrent snapshots of one tab no longer fail with "Could not find node with given
   id": their `DOM.getDocument` and selector lookups take turns.
 - The `max_nodes` budget of a snapshot's cross-site iframes goes in document order: the
   iframes of a document are counted, then admitted one after the other, so with several

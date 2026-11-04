@@ -88,3 +88,40 @@ async def test_a_new_document_starts_a_new_request(browser, local_server, monkey
     text = await take_snapshot(tab._session, RefMap(), snapshot_timeout=60)
     assert '- button "Sign in"' in text
     assert len(sent) == 2
+
+
+async def _closed_session(browser):
+    """The session of a tab opened and closed: its commands raise, allocating no id."""
+    gone = await browser.new_tab()
+    session = gone._session
+    await gone.close()
+    for _ in range(100):
+        if session.closed:
+            return session
+        await asyncio.sleep(0.05)
+    raise AssertionError("the closed tab's session is still open")
+
+
+async def test_snapshots_failing_on_a_closed_session_do_not_hide_an_input(
+    browser, local_server, monkeypatch
+):
+    """A snapshot of a tab already gone sends nothing: inputs sent while the tree is
+    in flight, as many commands as it tried, still make that tree stale."""
+    tab = browser.main_tab
+    gone = await _closed_session(browser)
+    await tab.get(f"{local_server}/snapshot_shadow.html")
+    sent = _count_full_trees(monkeypatch, tab._session)
+    with pytest.raises(SnapshotTooLargeError):
+        await take_snapshot(tab._session, RefMap(), snapshot_timeout=0.3)
+    router, change = tab._session.router, "document.querySelector('h1').textContent = 'Changed'"
+    before = router._next_msg_id
+    inputs = asyncio.gather(tab.eval(change), tab.eval(change))  # answered after the tree
+    while router._next_msg_id - before < 2:
+        await asyncio.sleep(0.01)
+    with pytest.raises(ConnectionError):  # tries DOM.getDocument, then Accessibility.disable
+        await take_snapshot(gone, RefMap(), snapshot_timeout=5)
+    assert not inputs.done()  # the tree asked for before them is still being built
+    text = await take_snapshot(tab._session, RefMap(), selector="h1", snapshot_timeout=60)
+    await inputs
+    assert text.startswith('- heading "Changed"'), text
+    assert len(sent) == 2

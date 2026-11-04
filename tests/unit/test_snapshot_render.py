@@ -324,7 +324,7 @@ class _SnapshotSession:
     def __init__(self, dom_nodes=100):
         self.calls: list[str] = []
         self.dom_nodes = dom_nodes
-        self.router = _Router()
+        self.router, self.closed = _Router(), False
 
     async def send(self, method, params=None, timeout=None):
         self.router._next_msg_id += 1
