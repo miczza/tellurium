@@ -61,6 +61,7 @@ def test_launch_chrome_uses_the_windows_launcher_on_win32(monkeypatch):
     assert calls == [("win", r"C:\chrome.exe", ["--y"])]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="checks the POSIX side of the dispatch")
 def test_windows_launcher_refuses_to_run_on_posix():
     with pytest.raises(RuntimeError, match="Windows-only"):
         launcher.launch_chrome_windows("chrome.exe", [])
@@ -194,6 +195,7 @@ def test_create_transport_picks_the_windows_pipe_on_win32(monkeypatch):
     assert (transport.read_fd, transport.write_fd) == (7, 8)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="checks the POSIX side of the dispatch")
 def test_create_transport_picks_the_posix_pipe_elsewhere():
     from tellurium.cdp.transport import create_transport
     from tellurium.cdp.transport._pipe_posix import PipePosixTransport
