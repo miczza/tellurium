@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  RUFF_VERSION: "0.16.7"
+  RUFF_VERSION: "0.17.3"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
@@ -69,6 +69,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install Chrome (stable)
+        id: chrome
         uses: browser-actions/setup-chrome@v1
         with:
           chrome-version: stable
@@ -86,6 +87,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[geoip,dev]"
+      - name: Point find_chrome() at setup-chrome's Chrome
+        # find_chrome() tries ~/.tellurium/browsers (managed installs) first; the
+        # runner image has its own Chromium and Chrome on PATH. The folder name
+        # keeps "google-chrome" in the path, which is how tellurium tells a
+        # branded Chrome (setup-chrome's stable is one) on Linux.
+        env:
+          STOCK_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          mkdir -p "$HOME/.tellurium/browsers/google-chrome-stable"
+          ln -s "$STOCK_CHROME" "$HOME/.tellurium/browsers/google-chrome-stable/chrome"
+          python -c "import asyncio; from tellurium.browser.launcher import find_chrome; print('find_chrome:', asyncio.run(find_chrome()))"
       - name: Run integration + stealth tests
         # tests/stealth needs a DISPLAY; tests/integration runs headless against
         # local HTTP servers and discovers Chrome via find_chrome().
@@ -157,13 +169,54 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[geoip,dev]" pytest-timeout
+      - name: Second loopback address (macOS)
+        # The other_server fixture listens on 127.0.0.2: Linux and Windows route
+        # all of 127/8 to loopback, macOS only 127.0.0.1 until aliased.
+        if: runner.os == 'macOS'
+        run: sudo ifconfig lo0 alias 127.0.0.2 up
+      - name: Put setup-chrome's Chrome where find_chrome() looks (macOS)
+        # find_chrome() takes /Applications/Google Chrome.app on macOS, the
+        # runner image's own Chrome. setup-chrome's bundle goes in its place
+        # (same path, so tellurium still sees a branded Chrome). On Windows
+        # setup-chrome installs into Program Files, where find_chrome() looks.
+        if: runner.os == 'macOS'
+        env:
+          STOCK_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          app="/Applications/Google Chrome.app"
+          root=$(cd "$(dirname "$STOCK_CHROME")/../.." && pwd)
+          ls -la "$root/Contents/MacOS"
+          if [ ! -e "$root/Contents/MacOS/Google Chrome" ]; then
+            ln -s "$(basename "$STOCK_CHROME")" "$root/Contents/MacOS/Google Chrome"
+          fi
+          if [ -e "$app" ]; then sudo mv "$app" "/Applications/Google Chrome (image).app"; fi
+          sudo ln -s "$root" "$app"
       - name: Show the Chrome the tests use
+        # Warns when find_chrome() would pick another Chrome than setup-chrome's,
+        # then launches it once. Never stops the job: the tests still run.
+        continue-on-error: true
         timeout-minutes: 5
         env:
           STOCK_CHROME: ${{ steps.chrome.outputs.chrome-path }}
         run: |
-          echo "setup-chrome: $STOCK_CHROME"
-          python -c "import asyncio; from tellurium.browser.launcher import find_chrome; print('find_chrome:', asyncio.run(find_chrome()))"
+          python - <<'PY'
+          import asyncio, os
+          from tellurium import Browser
+          from tellurium.browser.launcher import find_chrome
+          found = asyncio.run(find_chrome())
+          stock = os.environ["STOCK_CHROME"]
+          print("setup-chrome:", stock)
+          print("find_chrome: ", found)
+          if os.path.realpath(found) != os.path.realpath(stock):
+              print("::warning::find_chrome() picks another Chrome than setup-chrome's")
+          async def probe():
+              browser = await Browser.launch(headless=True)
+              try:
+                  print("launched:   ", await browser.main_tab.eval("navigator.userAgent"))
+              finally:
+                  await browser.close()
+          asyncio.run(asyncio.wait_for(probe(), 120))
+          PY
       - name: Run integration tests
         # No xvfb-run: Windows and macOS have a display. tests/stealth stays on Linux.
         env:

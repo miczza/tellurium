@@ -5,7 +5,7 @@ Linux-only.
 
 | Workflow | Trigger | Blocking? |
 | --- | --- | --- |
-| `ci.yml` | push to `master` and `fetta/**`, any PR, manual | Linux jobs yes (except `lint`, for now); Windows/macOS no, until C6 is merged |
+| `ci.yml` | push to `master` and `fetta/**`, any PR, manual | Linux jobs yes (`lint` included); Windows/macOS no, until C6 is merged |
 | `release.yml` | push of a `v*` tag, manual | n/a |
 | `nightly-creepjs.yml` | weekly cron (Mon 04:17 UTC), manual | no — informational |
 
@@ -17,11 +17,8 @@ Status: **active** (no longer a draft). Concurrency group per ref with
 `cancel-in-progress: true`, so a new push supersedes the in-flight run.
 
 - **`lint`** — `ruff check` + `ruff format --check` over the whole repo,
-  ruff pinned via the `RUFF_VERSION` env var.
-  **Currently `continue-on-error: true`**: the existing code has a lint
-  backlog (see the TODO comment in the job). Most of it disappears with
-  `ruff check --fix` + `ruff format`; the manual remainder is `BLE001`,
-  `F841`, `E741`, `B904`, `B905`. Flip to `false` once clean.
+  ruff pinned via the `RUFF_VERSION` env var to the version the flow's gate
+  runs (`uvx ruff`, currently 0.17.3). Blocking: a lint error fails the run.
 - **`unit`** — `pytest tests/unit` on Python 3.11 / 3.12 / 3.13.
 - **`integration`** — Python 3.12, Chrome stable via
   `browser-actions/setup-chrome@v1`, then
@@ -30,6 +27,16 @@ Status: **active** (no longer a draft). Concurrency group per ref with
   `tests/integration` runs headless against local HTTP servers and discovers
   the browser through `tellurium/browser/launcher.py::find_chrome()`;
   `tests/stealth` is offline but needs a `DISPLAY`, hence `xvfb-run`.
+- **Which Chrome** — the tests on every system run setup-chrome's Chrome,
+  not the runner image's own. `find_chrome()` reads no environment variable,
+  so each job puts that Chrome where `find_chrome()` looks first: on Linux a
+  managed-install entry, `~/.tellurium/browsers/google-chrome-stable/chrome`
+  (a symlink; the folder name keeps `google-chrome` in the path, which is how
+  tellurium tells a branded Chrome); on macOS setup-chrome's bundle replaces
+  `/Applications/Google Chrome.app` (the image's goes aside); on Windows
+  setup-chrome already installs into `Program Files`. The step *Show the
+  Chrome the tests use* (Windows and macOS) prints both paths, warns when they
+  differ and launches the browser once; it never stops the job.
 - **Chrome's sandbox on Linux** — Ubuntu 24.04 restricts unprivileged
   user namespaces through AppArmor and Chrome from the tool cache has no
   AppArmor profile, so it aborts with `No usable sandbox!`. The Linux `unit`
@@ -38,16 +45,20 @@ Status: **active** (no longer a draft). Concurrency group per ref with
 - **`unit-os`** and **`integration-os`** — the same suites on
   `windows-2025` (x64) and `macos-15` (arm64), Python 3.12, one job per
   system and suite, `fail-fast: false`, 25 min timeout each. Chrome stable
-  comes from `browser-actions/setup-chrome@v1` and its path is exported as
-  `STOCK_CHROME`; the step *Show the Chrome the tests use* prints that path
-  and what `find_chrome()` picks (the runner image also ships its own
-  Chrome). No `xvfb-run`: both systems have a display, and
-  `tests/conftest.py` skips its private Xvfb when there is no `Xvfb` binary.
+  comes from `browser-actions/setup-chrome@v1` (see *Which Chrome*). No
+  `xvfb-run`: both systems have a display, and `tests/conftest.py` skips its
+  private Xvfb when there is no `Xvfb` binary; `tests/platform_marks.py`
+  counts Windows and macOS as having a display. On macOS a step aliases
+  `127.0.0.2` on `lo0`: the `other_server` fixture listens there, and macOS
+  routes only `127.0.0.1` to loopback until told.
   `tests/stealth` stays on Linux. `integration-os` runs in four shards of
   test files (`NR % 4` over the sorted file list), because the whole suite
   takes about 40 min on a hosted runner. `pytest-timeout` (120 s per test)
-  turns a hang into a red test instead of a killed job, `-v` names the test
-  that was running if a job is killed anyway, and each job uploads its JUnit
+  bounds a hang: on macOS (signal method) it fails that test and the run goes
+  on; on Windows only the thread method exists, which dumps the stacks and
+  ends the whole pytest process, so the rest of that shard does not run and
+  there is no JUnit report for it. `-v` names the test that was running in
+  either case, and each job uploads its JUnit
   XML as `junit-<suite>-<os>[-<shard>]`. The diagnostic step does not run
   `chrome.exe --version`: on Windows it opens a browser window and never
   exits.
@@ -59,8 +70,10 @@ Status: **active** (no longer a draft). Concurrency group per ref with
     reds are listed per system in `docs/requests/C6.md`.
   - **Skips**: a test is skipped on a system only when it exercises
     something that does not exist there (POSIX fds, `fork`, `SIGKILL`,
-    `SingletonLock` symlinks, `/proc`), with a `reason=` saying so. A test
-    that fails because of a defect in `tellurium/` is never skipped.
+    `SingletonLock` symlinks, `/proc`), with a `reason=` saying so, on the
+    test itself rather than its module: the shared marks live in
+    `tests/platform_marks.py`. A test that fails because of a defect in
+    `tellurium/` is never skipped.
   - Manual run: `gh workflow run ci.yml --ref <branch>`; read a red with
     `gh run view <id> --log-failed`.
 - **`build`** — `python -m build`, `twine check --strict`, uploads `dist/`
