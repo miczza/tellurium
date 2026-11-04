@@ -17,6 +17,10 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("websockets")
+if sys.platform == "win32":
+    # The module parametrizes on signal.SIGHUP at import time; skipping here
+    # (not only with pytestmark) keeps the collection of the whole run alive.
+    pytest.skip("SIGHUP and /proc do not exist on Windows", allow_module_level=True)
 
 from websockets.asyncio.client import connect  # noqa: E402
 
