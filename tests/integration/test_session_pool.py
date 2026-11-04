@@ -16,10 +16,9 @@ import pytest
 
 from tellurium.session import SessionBusyError, SessionPool
 from tests.integration.session_child import child_env
+from tests.platform_marks import needs_posix_signals, needs_proc
 
 _CHILD = str(Path(__file__).with_name("session_child.py"))
-
-pytestmark = pytest.mark.skipif(not os.path.isdir("/proc"), reason="counts Chrome via /proc")
 
 
 def _running(directory: str) -> set[str]:
@@ -71,6 +70,7 @@ class Census:
             await asyncio.sleep(0.02)
 
 
+@needs_proc
 async def test_six_identities_two_browsers_at_a_time(tmp_path, local_server):
     pool = SessionPool(tmp_path, max_browsers=2, headless=True)
     names = [f"id{i}" for i in range(6)]
@@ -100,6 +100,7 @@ async def test_six_identities_two_browsers_at_a_time(tmp_path, local_server):
     assert await pool.list() == names
 
 
+@needs_posix_signals
 async def test_a_session_open_in_another_process(tmp_path):
     pool = SessionPool(tmp_path, max_browsers=1, headless=True)
     path = pool.path("shared")
@@ -135,6 +136,7 @@ async def test_a_session_open_in_another_process(tmp_path):
     assert await pool.list() == ["other"]
 
 
+@needs_proc
 async def test_cancelled_mid_launch_leaves_no_chrome(tmp_path):
     pool = SessionPool(tmp_path, max_browsers=1, headless=True)
     entered = asyncio.Event()
@@ -157,6 +159,7 @@ async def test_cancelled_mid_launch_leaves_no_chrome(tmp_path):
         assert await asyncio.wait_for(browser.main_tab.eval("1 + 1"), 30) == 2
 
 
+@needs_proc
 async def test_a_failed_validation_closes_chrome_and_frees_the_slot(tmp_path):
     from tellurium.session import SessionInvalidError
 
@@ -175,6 +178,7 @@ async def test_a_failed_validation_closes_chrome_and_frees_the_slot(tmp_path):
         assert await asyncio.wait_for(browser.main_tab.eval("1 + 1"), 30) == 2
 
 
+@needs_proc
 async def test_a_failed_launch_frees_the_slot(tmp_path):
     pool = SessionPool(tmp_path, max_browsers=1, headless=True)
     from tellurium.browser.launcher import LaunchError
@@ -187,6 +191,7 @@ async def test_a_failed_launch_frees_the_slot(tmp_path):
     assert await asyncio.to_thread(_running, str(tmp_path)) == set()
 
 
+@needs_proc
 def test_one_pool_in_two_asyncio_runs(tmp_path):
     """The slots belong to the loop of the open: a second asyncio.run with the
     same pool opens (and queues on its one slot) as the first did."""

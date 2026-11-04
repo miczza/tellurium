@@ -9,7 +9,6 @@ import contextlib
 import json
 import os
 import signal
-import sys
 from urllib.parse import quote
 
 import pytest
@@ -43,10 +42,7 @@ from tests.integration.test_raw_chrome import (  # noqa: E402, F401 - private_te
     _wait_until,
     private_tempdir,
 )
-
-pytestmark = pytest.mark.skipif(
-    not sys.platform.startswith("linux"), reason="uses /proc to observe processes"
-)
+from tests.platform_marks import needs_posix_signals, needs_proc, needs_sh  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -276,6 +272,7 @@ async def test_four_clients_four_chromes_the_fifth_waits_then_503():
             assert mux.status()["queue"] == 0
 
 
+@needs_proc
 async def test_each_connection_gets_a_new_seed_and_the_next_proxy():
     """Patched engine flags on the stock binary: the seed shows on the command line."""
     stock = await find_chrome()
@@ -311,6 +308,7 @@ async def test_each_connection_gets_a_new_seed_and_the_next_proxy():
 # --------------------------------------------------------------------------- #
 
 
+@needs_posix_signals
 async def test_a_killed_chrome_closes_its_client_with_1011_and_the_place_recovers():
     async with serving() as mux:
         async with _client(mux) as ws:
@@ -326,6 +324,7 @@ async def test_a_killed_chrome_closes_its_client_with_1011_and_the_place_recover
         assert status["crashes"] == 1 and status["slots"][0]["restarts"] == 1
 
 
+@needs_proc
 async def test_a_stopped_chrome_is_killed_and_replaced_with_or_without_client(monkeypatch):
     monkeypatch.setattr(health, "INTERVAL", 0.3)
     monkeypatch.setattr(health, "TIMEOUT", 0.7)
@@ -349,6 +348,7 @@ async def test_a_stopped_chrome_is_killed_and_replaced_with_or_without_client(mo
         assert mux.status()["hangs"] == 2
 
 
+@needs_proc
 async def test_browser_close_from_the_client_ends_it_normally():
     async with serving() as mux:
         async with _client(mux) as ws:
@@ -370,6 +370,7 @@ async def test_browser_close_from_the_client_ends_it_normally():
 # --------------------------------------------------------------------------- #
 
 
+@needs_proc
 async def test_cancelling_serve_leaves_no_process_profile_or_task(private_tempdir):  # noqa: F811
     before = asyncio.all_tasks()
     mux = Multiplexer(2, warm=1, geoip=False)
@@ -471,6 +472,7 @@ async def test_a_handshake_that_fails_after_the_place_was_taken_gives_it_back():
 
 
 @pytest.mark.parametrize("password", ["S3cretPW", "S3cret/PW", "S3/c@r:e#t?PW"])
+@needs_sh
 async def test_a_chrome_that_will_not_start_is_retried_and_reported_without_secrets(
     tmp_path, monkeypatch, password
 ):
@@ -690,6 +692,7 @@ async def test_a_burst_of_events_slows_a_slow_client_down_without_closing_it(mon
 
 
 @pytest.mark.parametrize("action", ["restart", "kill", "stall", "cancel"])
+@needs_proc
 async def test_a_client_that_reads_nothing_cannot_hold_a_close_up(monkeypatch, action):
     """Chrome floods a client that stopped reading (tiny receive buffer): restarting
     or losing its Chrome, the stall limit and the server's shutdown all end in
@@ -760,6 +763,7 @@ async def test_a_client_that_reads_nothing_cannot_hold_a_close_up(monkeypatch, a
         await asyncio.wait([task])
 
 
+@needs_posix_signals
 async def test_a_client_pausing_just_short_of_the_stall_does_not_get_chrome_killed(monkeypatch):
     """Production timings scaled down (probe every 1 s, 1 s timeout, two misses,
     stall at 6 s): a page that logs without pause, a client that stops reading for
@@ -898,6 +902,7 @@ async def until_reply(ws, id: int, seen: list[dict]) -> dict:
             return message
 
 
+@needs_posix_signals
 async def test_a_lost_chrome_takes_its_answer_to_the_proxy_with_it():
     async with FakeProxy() as proxy:
         url = f"http://{USER}:{PASSWORD}@127.0.0.1:{proxy.port}"

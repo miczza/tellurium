@@ -17,10 +17,6 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("websockets")
-if sys.platform == "win32":
-    # The module parametrizes on signal.SIGHUP at import time; skipping here
-    # (not only with pytestmark) keeps the collection of the whole run alive.
-    pytest.skip("SIGHUP and /proc do not exist on Windows", allow_module_level=True)
 
 from websockets.asyncio.client import connect  # noqa: E402
 
@@ -42,10 +38,7 @@ from tests.integration.test_raw_chrome import (  # noqa: E402, F401 - autouse fi
     _wait_until,
     private_tempdir,
 )
-
-pytestmark = pytest.mark.skipif(
-    not sys.platform.startswith("linux"), reason="uses /proc to observe processes"
-)
+from tests.platform_marks import needs_proc  # noqa: E402
 
 
 async def _call(
@@ -77,6 +70,7 @@ async def _call(
 # --------------------------------------------------------------------------- #
 
 
+@needs_proc
 async def test_status_lists_places_and_totals_without_any_secret():
     proxies = ["http://127.0.0.1:18091", "http://user:S3cretPW@127.0.0.1:18092"]
     async with serving(2, proxies=proxies, warm=2) as mux:
@@ -113,6 +107,7 @@ async def test_status_with_a_query_and_a_trailing_slash():
 # --------------------------------------------------------------------------- #
 
 
+@needs_proc
 async def test_restart_replaces_the_chrome_and_closes_its_client_with_1012():
     async with serving(2) as mux:
         port = _port(mux)
@@ -138,6 +133,7 @@ async def test_restart_of_a_place_without_chrome_is_409():
         assert mux.status()["slots"][0]["launches"] == 0
 
 
+@needs_proc
 async def test_restart_while_launching_is_409_then_a_warm_chrome_is_replaced(monkeypatch):
     launch, go = RawChrome.launch, asyncio.Event()
 
@@ -348,12 +344,15 @@ async def _run_cli(tmp_path: Path, *args: str, prelude: str = "") -> tuple[int, 
     [
         (signal.SIGINT, False, False),
         (signal.SIGTERM, False, False),
-        (signal.SIGHUP, True, False),  # the terminal (or ssh) went away: its whole group
+        # The terminal (or ssh) went away: its whole group. No SIGHUP on Windows,
+        # where the test is skipped (needs_proc) but the module still collects.
+        (getattr(signal, "SIGHUP", None), True, False),
         (signal.SIGINT, False, True),  # Ctrl-C pressed again and again while it closes
         (signal.SIGINT, True, True),
     ],
     ids=["SIGINT", "SIGTERM", "SIGHUP-group", "SIGINT-again", "SIGINT-group-again"],
 )
+@needs_proc
 async def test_the_command_serves_then_a_signal_closes_everything(
     tmp_path,
     private_tempdir,  # noqa: F811

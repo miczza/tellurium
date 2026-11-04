@@ -6,15 +6,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 
 import pytest
 
 import tellurium
 from tellurium.session import login_command
 from tests.integration.test_wait_for_human import _click_node, _done_button
+from tests.platform_marks import needs_display
 
-pytestmark = pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="needs a display (xvfb-run)")
+pytestmark = needs_display
 
 
 @pytest.fixture

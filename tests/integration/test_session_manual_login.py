@@ -5,7 +5,6 @@ the start goes on once the validators pass, inside the same start and lock."""
 from __future__ import annotations
 
 import asyncio
-import os
 
 import pytest
 
@@ -13,8 +12,9 @@ import tellurium
 from tellurium import Session
 from tellurium.session import SessionBusyError, SessionLoginFailedError
 from tests.integration.test_wait_for_human import _click_node, _done_button
+from tests.platform_marks import needs_display
 
-pytestmark = pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="needs a display (xvfb-run)")
+pytestmark = needs_display
 
 
 #: A Done that is lost fails the test in a minute, not in ten.

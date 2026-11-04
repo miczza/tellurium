@@ -12,7 +12,6 @@ import asyncio
 import glob
 import os
 import shutil
-import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -21,10 +20,7 @@ import pytest
 
 from tellurium import Browser
 from tellurium.browser.launcher import LaunchError
-
-pytestmark = pytest.mark.skipif(
-    not sys.platform.startswith("linux"), reason="uses /proc to observe processes and fds"
-)
+from tests.platform_marks import needs_proc
 
 VERBOSE = ["--enable-logging=stderr", "--v=1"]
 
@@ -113,6 +109,7 @@ async def test_chrome_log_goes_to_the_requested_file(local_server, tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@needs_proc
 async def test_failed_launch_reports_chrome_error_and_cleans_up(tmp_path):
     executable = _fake_chrome(tmp_path, "boom: libfoo.so missing", 3)
     children, profiles = _children(), _temp_profiles()
@@ -127,6 +124,7 @@ async def test_failed_launch_reports_chrome_error_and_cleans_up(tmp_path):
     assert _temp_profiles() <= profiles, "the temporary profile was left behind"
 
 
+@needs_proc
 async def test_a_mute_chrome_times_out_naming_the_command(tmp_path, monkeypatch):
     """Chrome alive but never answering: launch() fails by itself, no wait_for needed."""
     from tellurium.cdp.transport._session import SessionRouter
@@ -157,6 +155,7 @@ async def test_profile_already_in_use_says_so(tmp_path):
         await first.close()
 
 
+@needs_proc
 async def test_cancelled_launch_leaves_nothing_behind(monkeypatch):
     from tellurium.browser import proxy as proxy_mod
 
@@ -184,6 +183,7 @@ async def test_cancelled_launch_leaves_nothing_behind(monkeypatch):
 
 
 @pytest.mark.parametrize("second_cancel_after", [0.0, 0.02, 0.08])
+@needs_proc
 def test_cancelling_the_rollback_again_still_releases_everything(monkeypatch, second_cancel_after):
     """A second cancel lands while the first one is being rolled back, and
     the event loop ends right after (``asyncio.run`` cancels what is left):
@@ -243,12 +243,14 @@ async def _assert_cycles_leak_nothing(tempdir: Path, cycles: int) -> None:
     assert not list(tempdir.iterdir()), f"left in TMPDIR: {sorted(tempdir.iterdir())[:5]}"
 
 
+@needs_proc
 async def test_launch_close_cycles_leak_nothing(private_tempdir):
     """fds, processes, output threads, profiles and Chrome's own temp files."""
     await _assert_cycles_leak_nothing(private_tempdir, cycles=20)
 
 
 @pytest.mark.slow
+@needs_proc
 async def test_soak_500_launch_close_cycles(private_tempdir):
     """Spec R1, outcome 2. Out of the gate: ``TELLURIUM_SLOW=1 pytest -m slow``."""
     await _assert_cycles_leak_nothing(private_tempdir, cycles=500)

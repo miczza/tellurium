@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
-import sys
 
 import pytest
 
@@ -40,10 +39,7 @@ from tests.integration.test_raw_chrome import (  # noqa: E402, F401 - autouse fi
     _wait_until,
     private_tempdir,
 )
-
-pytestmark = pytest.mark.skipif(
-    not sys.platform.startswith("linux"), reason="uses /proc to observe processes"
-)
+from tests.platform_marks import needs_proc  # noqa: E402
 
 
 @pytest.fixture
@@ -115,6 +111,7 @@ def _url(proxy: FakeProxy) -> str:
     ],
     ids=["attach", "fetch-enable"],
 )
+@needs_proc
 async def test_a_chrome_that_cannot_answer_the_proxy_is_a_failed_launch(
     monkeypatch,
     launched,
@@ -141,6 +138,7 @@ async def test_a_chrome_that_cannot_answer_the_proxy_is_a_failed_launch(
 
 
 @pytest.mark.parametrize("method", ["Target.attachToBrowserTarget", "Fetch.enable"])
+@needs_proc
 async def test_a_shutdown_while_a_chrome_opens_leaves_nothing_behind(
     monkeypatch,
     launched,
@@ -157,6 +155,7 @@ async def test_a_shutdown_while_a_chrome_opens_leaves_nothing_behind(
     assert _profiles(private_tempdir) == []
 
 
+@needs_proc
 async def test_an_admin_restart_gives_the_new_chrome_its_own_answer(
     launched,
     private_tempdir,  # noqa: F811
@@ -179,6 +178,7 @@ async def test_an_admin_restart_gives_the_new_chrome_its_own_answer(
     assert not _proxy_auth_tasks()
 
 
+@needs_proc
 async def test_a_hung_chrome_is_replaced_by_one_that_answers_again(
     monkeypatch,
     launched,

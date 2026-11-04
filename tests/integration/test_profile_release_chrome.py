@@ -5,22 +5,19 @@ its profile while it lives, and let go once it has closed."""
 from __future__ import annotations
 
 import os
-import sys
 
 import pytest
 
 from tellurium import Browser
 from tellurium.session import profile_release
-
-pytestmark = pytest.mark.skipif(
-    sys.platform == "win32" or not os.path.isdir("/proc"), reason="SingletonLock and /proc"
-)
+from tests.platform_marks import needs_proc, needs_singleton_symlink
 
 
 def _lock_pid(chrome_dir) -> int:
     return int(os.readlink(os.path.join(chrome_dir, "SingletonLock")).rpartition("-")[2])
 
 
+@needs_singleton_symlink
 async def test_a_live_chrome_holds_its_profile_until_it_closes(tmp_path):
     real = tmp_path / "with space"
     real.mkdir()
@@ -44,6 +41,7 @@ async def test_a_live_chrome_holds_its_profile_until_it_closes(tmp_path):
     assert await profile_release.wait(str(chrome_dir), 10.0) is None
 
 
+@needs_proc
 async def test_a_headed_chrome_with_a_url_and_a_dash_dash_path_holds_its_profile(tmp_path):
     """Headed, with a URL after the switches and `` --`` in the profile path:
     the rewritten title is still read right (a kill -9 of the holder must

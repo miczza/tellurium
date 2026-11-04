@@ -3,10 +3,11 @@ leaves the page as it was (P1)."""
 
 import base64
 import json
-import os
 import struct
 
 import pytest
+
+from tests.platform_marks import needs_display
 
 pytestmark = pytest.mark.asyncio
 
@@ -78,7 +79,7 @@ async def test_full_page_without_emulation_restores_the_scrollbar(any_browser, l
     await _check_full_page(tab)
 
 
-@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="needs a display (xvfb-run)")
+@needs_display
 async def test_headed_fractional_device_pixel_ratio_keeps_the_css_size(local_server):
     """Headed, an emulated ratio of 2 reads 2.0000000298 and CDP floors the content
     size (984 for 985): the image still has the page's CSS width."""

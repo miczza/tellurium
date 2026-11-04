@@ -5,13 +5,13 @@ left in the DOM."""
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 
 import pytest
 
-HEADED = bool(os.environ.get("DISPLAY"))
-needs_display = pytest.mark.skipif(not HEADED, reason="needs a display (xvfb-run)")
+from tests.platform_marks import HAS_DISPLAY, needs_display
+
+HEADED = HAS_DISPLAY
 
 
 @pytest.fixture

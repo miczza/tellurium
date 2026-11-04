@@ -5,8 +5,6 @@ with Wayland's log), and a validator that hangs hands over to the person."""
 from __future__ import annotations
 
 import asyncio
-import os
-import sys
 
 import pytest
 
@@ -14,8 +12,7 @@ import tellurium
 from tellurium import Session
 from tellurium.session import SessionLoginFailedError, manual_login
 from tests.integration.test_wait_for_human import _click_node, _done_button
-
-pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="DISPLAY is how Linux finds one")
+from tests.platform_marks import LINUX, needs_display
 
 
 @pytest.fixture
@@ -43,6 +40,7 @@ async def _signed_in(tab):
     return "auth=1" in await tab.eval("document.cookie")
 
 
+@pytest.mark.skipif(not LINUX, reason="DISPLAY is how Linux finds one")
 async def test_without_a_display_the_error_names_it_at_once(tmp_path, launched, monkeypatch):
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
@@ -57,11 +55,10 @@ async def test_without_a_display_the_error_names_it_at_once(tmp_path, launched, 
     assert all(b._proc.process.poll() is not None for _, b in launched)
 
 
+@needs_display
 async def test_a_hung_validator_hands_over_to_a_person(
     tmp_path, local_server, launched, monkeypatch
 ):
-    if not os.environ.get("DISPLAY"):
-        pytest.skip("needs a display (xvfb-run)")
     monkeypatch.setattr(manual_login, "VALIDATOR_TIMEOUT", 1.0)
     calls = []
 

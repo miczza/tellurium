@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 
 import pytest
+
+from tests.platform_marks import HAS_DISPLAY, needs_display
 
 PAGE = (
     "data:text/html,<html><body style='margin:0'>"
@@ -24,7 +25,7 @@ PAGE = (
     "</script></body></html>"
 )
 
-HEADED = bool(os.environ.get("DISPLAY"))
+HEADED = HAS_DISPLAY
 
 
 async def _click_and_read(tab, x=123, y=234) -> dict:
@@ -75,7 +76,7 @@ async def test_screen_coords_are_offset_from_client_coords(stealth):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not HEADED, reason="needs a real X display (DISPLAY=:0)")
+@needs_display
 async def test_headed_screen_offset_is_strictly_positive():
     """Headed stock Chrome: a real user's window is never at screen (0,0)
     with no frame, so both components must be > 0."""

@@ -11,7 +11,6 @@ import glob
 import json
 import os
 import shutil
-import sys
 import tempfile
 from pathlib import Path
 
@@ -21,10 +20,7 @@ from tellurium.browser.launcher import LaunchError
 from tellurium.browser.process import BrowserProcess
 from tellurium.browser.raw_chrome import RawChrome
 from tests.integration.test_authenticated_proxy import GOOD_AUTH, PASSWORD, USER, FakeProxy
-
-pytestmark = pytest.mark.skipif(
-    not sys.platform.startswith("linux"), reason="uses /proc to observe processes"
-)
+from tests.platform_marks import needs_proc, needs_sh
 
 
 @pytest.fixture(autouse=True)
@@ -108,6 +104,7 @@ async def _call(
     return await asyncio.wait_for(reply(), 15)
 
 
+@needs_proc
 async def test_cdp_answers_on_the_pipe_and_no_port_is_open(private_tempdir):
     async with RawChrome.launch(headless=True) as raw:
         answer = await _call(raw, "Browser.getVersion")
@@ -126,6 +123,7 @@ async def test_cdp_answers_on_the_pipe_and_no_port_is_open(private_tempdir):
         assert not [a for a in lines[raw.pid] if a.startswith("--load-extension")]
 
 
+@needs_proc
 async def test_close_leaves_no_process_and_no_profile(private_tempdir):
     raw = await RawChrome.launch(headless=True, viewport=(800, 600), languages=["it-IT", "it"])
     await _call(raw, "Target.createTarget", {"url": "about:blank"})
@@ -162,6 +160,7 @@ async def test_close_asks_chrome_first(private_tempdir):
     assert process.returncode == 0
 
 
+@needs_proc
 async def test_close_of_a_chrome_that_ignores_browser_close_escalates(private_tempdir, monkeypatch):
     import signal
 
@@ -179,6 +178,7 @@ async def test_close_of_a_chrome_that_ignores_browser_close_escalates(private_te
     assert await _wait_until(lambda: not [p for p in processes if _alive(p)]), "orphans"
 
 
+@needs_proc
 async def test_close_releases_everything_when_asking_fails_unexpectedly(
     private_tempdir, monkeypatch
 ):
@@ -205,6 +205,7 @@ async def test_alive_turns_false_when_chrome_dies(private_tempdir):
     assert not _profiles(private_tempdir)
 
 
+@needs_proc
 async def test_cancelled_launch_leaves_nothing_behind(private_tempdir, monkeypatch):
     """Cancelled with Chrome already running and the forwarder up."""
     from tellurium.browser import proxy as proxy_mod
@@ -242,6 +243,7 @@ async def test_cancelled_launch_leaves_nothing_behind(private_tempdir, monkeypat
     assert stopped, "the proxy forwarder was left running"
 
 
+@needs_proc
 async def test_a_mute_chrome_times_out_and_is_reaped(private_tempdir, tmp_path, monkeypatch):
     from tellurium.browser import raw_chrome
 
@@ -258,6 +260,7 @@ async def test_a_mute_chrome_times_out_and_is_reaped(private_tempdir, tmp_path, 
     assert not _profiles(private_tempdir)
 
 
+@needs_sh
 async def test_chrome_exiting_at_launch_is_explained(private_tempdir, tmp_path):
     script = tmp_path / "fake-chrome"
     script.write_text("#!/bin/sh\necho 'boom: libfoo.so missing' >&2\nexit 3\n")
@@ -322,6 +325,7 @@ class _PipeSession:
         await asyncio.wait([self._reader])
 
 
+@needs_proc
 async def test_credentials_stay_in_the_forwarder(private_tempdir):
     async with FakeProxy() as proxy:
         url = f"http://{USER}:{PASSWORD}@127.0.0.1:{proxy.port}"
@@ -411,6 +415,7 @@ async def test_stock_chrome_takes_the_manual_time_zone(private_tempdir):
         assert await _page_time_zone(raw) == "Pacific/Chatham"
 
 
+@needs_proc
 async def test_stock_chrome_takes_the_time_zone_of_the_exit_ip(private_tempdir, monkeypatch):
     from tellurium.stealth import geoip
     from tellurium.stealth.geoip import GeoResult
@@ -447,6 +452,7 @@ async def _cancel(task: asyncio.Future) -> float:
     return loop.time() - started
 
 
+@needs_proc
 async def test_launch_cancelled_while_the_forwarder_starts(
     private_tempdir, monkeypatch, stopped_forwarders
 ):
@@ -474,6 +480,7 @@ async def test_launch_cancelled_while_the_forwarder_starts(
     assert not _profiles(private_tempdir)
 
 
+@needs_proc
 async def test_launch_cancelled_during_geoip(private_tempdir, stopped_forwarders):
     from tests.unit.test_launch_plan import SilentProxy
 
@@ -489,6 +496,7 @@ async def test_launch_cancelled_during_geoip(private_tempdir, stopped_forwarders
     assert not _profiles(private_tempdir)
 
 
+@needs_proc
 async def test_launch_cancelled_while_waiting_for_chrome_to_answer(private_tempdir, tmp_path):
     script = tmp_path / "mute-chrome"
     script.write_text("#!/bin/sh\nexec sleep 60\n")

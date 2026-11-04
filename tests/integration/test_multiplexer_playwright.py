@@ -5,7 +5,6 @@ Only the Python package is needed (its Node driver), not Playwright's browsers."
 from __future__ import annotations
 
 import asyncio
-import sys
 
 import pytest
 
@@ -26,10 +25,7 @@ from tests.integration.test_raw_chrome import (  # noqa: E402, F401 - autouse fi
     _wait_until,
     private_tempdir,
 )
-
-pytestmark = pytest.mark.skipif(
-    not sys.platform.startswith("linux"), reason="uses /proc to observe processes"
-)
+from tests.platform_marks import needs_proc  # noqa: E402
 
 #: Milliseconds Playwright may take for the connection (the place launches Chrome).
 CONNECT_TIMEOUT = 90_000
@@ -39,6 +35,7 @@ def _busy(mux) -> list[dict]:
     return [s for s in mux.status()["slots"] if s["state"] == "busy"]
 
 
+@needs_proc
 async def test_connect_over_cdp_opens_a_page_and_gives_the_chrome_back(
     local_server,
     private_tempdir,  # noqa: F811
@@ -62,6 +59,7 @@ async def test_connect_over_cdp_opens_a_page_and_gives_the_chrome_back(
     assert _profiles(private_tempdir) == []
 
 
+@needs_proc
 async def test_two_playwright_clients_get_two_chromes(
     local_server,
     private_tempdir,  # noqa: F811
@@ -102,6 +100,7 @@ async def test_connect_over_cdp_without_the_token_is_refused():
         assert all(s["launches"] == 0 for s in mux.status()["slots"])
 
 
+@needs_proc
 async def test_playwright_behind_an_authenticated_proxy_with_route_and_a_new_context(
     private_tempdir,  # noqa: F811
 ):
