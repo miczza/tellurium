@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+import sys
 
 from tests import shard
 
@@ -37,3 +39,17 @@ def test_the_command_reads_the_durations_file(tmp_path, capsys):
         shard.main([str(n), "2", str(tmp_path)])
         printed += capsys.readouterr().out.split()
     assert sorted(printed) == sorted((tmp_path / f).as_posix() for f in ("test_x.py", "test_y.py"))
+
+
+def test_the_command_prints_no_carriage_returns(tmp_path, monkeypatch):
+    # On Windows a text stdout writes "\r\n", and bash's $(...) keeps the "\r"
+    # in every file name: pytest then finds none of them.
+    (tmp_path / "test_x.py").write_text("")
+    (tmp_path / "test_y.py").write_text("")
+    raw = io.BytesIO()
+    out = io.TextIOWrapper(raw, encoding="utf-8", newline="\r\n")
+    monkeypatch.setattr(sys, "stdout", out)
+    shard.main(["1", "1", str(tmp_path)])
+    out.flush()
+    assert b"\r" not in raw.getvalue()
+    assert raw.getvalue().split() == [(tmp_path / f).as_posix().encode() for f in ("test_x.py", "test_y.py")]

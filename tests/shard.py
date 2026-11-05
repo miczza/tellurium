@@ -42,7 +42,11 @@ def main(argv: list[str]) -> None:
     durations_file = folder / "durations.json"
     durations = json.loads(durations_file.read_text()) if durations_file.exists() else {}
     files = [p.as_posix() for p in sorted(folder.glob("test_*.py"))]
-    print("\n".join(files_of(n, count, files, durations)))
+    # Bytes, not text: a text stdout on Windows ends lines with "\r\n", and
+    # bash's $(...) keeps the "\r" in the file names.
+    sys.stdout.flush()
+    sys.stdout.buffer.write(("\n".join(files_of(n, count, files, durations)) + "\n").encode())
+    sys.stdout.buffer.flush()
 
 
 if __name__ == "__main__":
