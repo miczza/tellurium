@@ -656,6 +656,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Windows: switching the patched cache's `current` version no longer fails with
+  `PermissionError` once a version is current (Windows cannot rename over a directory link:
+  the old link moves aside first and comes back if the switch fails).
+- Windows: the patched binary's remembered SHA256 is hashed again when the file is rewritten
+  in place with its mtime put back (the record used `st_ctime`, which on Windows is the
+  creation time; it now uses the file's change time).
 - `trap_link`: a `mask-image` gradient that fades into an `oklch()`, `lab()` or `color()`
   color is no longer taken for a transparent mask (a link was flagged `transparent`),
   and one whose colors all have alpha 0 in those forms is; a color whose alpha cannot be

@@ -102,9 +102,10 @@ def binary_sha256(binary: Path, *, trust_record: bool = True) -> str:
     """SHA256 of *binary*, remembered beside it until the file changes.
 
     Hashing the ~300 MB binary on every launch costs seconds. The record
-    (``.<name>.sha256``) is keyed on size, inode, mtime and ctime: rewriting
-    the file, or putting its mtime back afterwards, updates the ctime and
-    forces a new hash. An unreadable or unwritable record just means hashing.
+    (``.<name>.sha256``) is keyed on size, inode, mtime and change time:
+    rewriting the file, or putting its mtime back afterwards, updates the
+    change time and forces a new hash. An unreadable or unwritable record,
+    or a change time that cannot be read, just means hashing.
 
     Trust boundary: the record lives in the version directory, next to the
     binary and its MANIFEST.json. Whoever can replace the binary can also
@@ -116,11 +117,14 @@ def binary_sha256(binary: Path, *, trust_record: bool = True) -> str:
     from tellurium.browser import _manifest
 
     st = binary.stat()
-    key = [st.st_size, st.st_ino, st.st_mtime_ns, st.st_ctime_ns]
+    try:
+        key: list[int] | None = [st.st_size, st.st_ino, st.st_mtime_ns, _change_time_ns(binary, st)]
+    except OSError:
+        key = None  # no change time: never trust the record
     record = binary.with_name(f".{binary.name}.sha256")
     try:
         cached = json.loads(record.read_text())
-        if trust_record and cached["stat"] == key:
+        if trust_record and key is not None and cached["stat"] == key:
             return str(cached["sha256"])
     except (OSError, ValueError, KeyError, TypeError):
         pass
@@ -130,6 +134,42 @@ def binary_sha256(binary: Path, *, trust_record: bool = True) -> str:
     except OSError:
         pass
     return digest
+
+
+def _change_time_ns(path: Path, st: os.stat_result) -> int:
+    """When the data or metadata of *path* last changed, in ns.
+
+    ``st_ctime`` on POSIX. On Windows ``st_ctime`` is the creation time, which
+    a rewrite in place leaves alone: there it is ``ChangeTime`` of the file's
+    ``FILE_BASIC_INFO``. OSError when it cannot be read.
+    """
+    if sys.platform != "win32":
+        return st.st_ctime_ns
+    import ctypes
+    from ctypes import wintypes
+
+    class BasicInfo(ctypes.Structure):
+        _fields_ = [(n, ctypes.c_int64) for n in ("created", "accessed", "written", "changed")]
+        _fields_ += [("attributes", wintypes.DWORD)]
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateFileW.restype = wintypes.HANDLE
+    k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID]
+    k32.CreateFileW.argtypes += [wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    k32.GetFileInformationByHandleEx.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID]
+    k32.GetFileInformationByHandleEx.argtypes += [wintypes.DWORD]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    # FILE_READ_ATTRIBUTES, shared for read, write and delete, OPEN_EXISTING
+    handle = k32.CreateFileW(str(path), 0x80, 0x7, None, 3, 0, None)
+    if handle is None or handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        info = BasicInfo()
+        if not k32.GetFileInformationByHandleEx(handle, 0, ctypes.byref(info), ctypes.sizeof(info)):
+            raise ctypes.WinError(ctypes.get_last_error())  # 0 is FileBasicInfo
+        return int(info.changed) * 100
+    finally:
+        k32.CloseHandle(handle)
 
 
 @dataclass(frozen=True)
@@ -378,11 +418,37 @@ def point_current(version: str, root: Path) -> Path:
     tmp = root / f".{CURRENT_LINK}.{uuid.uuid4().hex}.tmp"
     tmp.symlink_to(target.name, target_is_directory=True)
     try:
-        os.replace(tmp, link)
+        _move_link_in(tmp, link)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
     return link
+
+
+def _move_link_in(new: Path, link: Path) -> None:
+    """Rename the link *new* to *link*, replacing it.
+
+    One rename where the system allows it. Windows refuses to rename over a
+    directory, and a directory link is one (``ERROR_ACCESS_DENIED``): the old
+    link moves aside first and goes after; if the new one cannot move in, the
+    old one comes back. Engines read the link under :func:`reading_lock`,
+    which waits for the install lock this caller holds.
+    """
+    try:
+        os.replace(new, link)
+        return
+    except PermissionError:
+        if not link.is_symlink():
+            raise
+    aside = link.with_name(f".{link.name}.{uuid.uuid4().hex}.old")
+    os.replace(link, aside)
+    try:
+        os.replace(new, link)
+    except BaseException:
+        os.replace(aside, link)
+        raise
+    with contextlib.suppress(OSError):
+        aside.unlink()
 
 
 def installed_browsers(root: Path | None = None) -> list[InstalledBrowser]:

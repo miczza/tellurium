@@ -47,6 +47,32 @@ def test_a_changed_binary_is_hashed_again(tmp_path, monkeypatch):
     assert len(calls) == 2
 
 
+def test_the_record_follows_the_change_time_of_the_file(tmp_path, monkeypatch):
+    """Not st_ctime as such: on Windows it is the creation time, which a
+    rewrite in place leaves alone."""
+    binary = tmp_path / "chrome"
+    binary.write_bytes(b"binary")
+    calls = _counting(monkeypatch)
+    _cache.binary_sha256(binary)
+    monkeypatch.setattr(_cache, "_change_time_ns", lambda path, st: st.st_ctime_ns + 1)
+    _cache.binary_sha256(binary)
+    assert len(calls) == 2
+
+
+def test_a_change_time_that_cannot_be_read_means_hashing(tmp_path, monkeypatch):
+    binary = tmp_path / "chrome"
+    binary.write_bytes(b"binary")
+    calls = _counting(monkeypatch)
+
+    def unreadable(path, st):
+        raise OSError(5, "Access is denied")
+
+    monkeypatch.setattr(_cache, "_change_time_ns", unreadable)
+    assert _cache.binary_sha256(binary) == hashlib.sha256(b"binary").hexdigest()
+    assert _cache.binary_sha256(binary) == hashlib.sha256(b"binary").hexdigest()
+    assert len(calls) == 2
+
+
 def test_a_corrupt_or_unwritable_record_falls_back_to_hashing(tmp_path, monkeypatch):
     binary = tmp_path / "chrome"
     binary.write_bytes(b"binary")
