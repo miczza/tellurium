@@ -1560,7 +1560,7 @@ binary is installed (in the cache or via `TELLURIUM_PATCHED_EXECUTABLE`).
 CI lives in `.github/workflows/` (`ci.yml`, `release.yml`,
 `nightly-creepjs.yml`); see `.github/workflows/README.md` for what each job
 does. The publishing procedure for both tellurium and `chromium-telluride` is
-in [`docs/RELEASE.md`](docs/RELEASE.md).
+in [`RELEASING.md`](RELEASING.md).
 
 ---
 

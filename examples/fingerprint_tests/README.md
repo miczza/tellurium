@@ -76,7 +76,7 @@ STOCK_CHROME=/usr/bin/google-chrome-stable .venv/bin/pytest \
 
 Deliberately excluded from `ci.yml` (it hits third-party sites); it runs
 weekly in `.github/workflows/nightly-creepjs.yml` and must be green before a
-release — see `docs/RELEASE.md`.
+release — see `RELEASING.md`.
 
 ### `test_canvas_geometry.py` — patched binary, canvas seed determinism
 
