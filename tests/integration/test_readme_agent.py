@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -43,7 +44,8 @@ async def test_readme_agent_example_runs(local_server, capsys):
     await namespace["main"](local_server + "/download.html")
     out = capsys.readouterr().out
     assert re.search(r'- link "Report" \[ref=e\d+\]', out)
-    assert re.search(r"^report\.csv /\S+$", out, re.M)
+    saved = re.search(r"^report\.csv (\S+)$", out, re.M)
+    assert saved and os.path.isabs(saved.group(1))
 
 
 async def test_readme_snapshot_sample_matches_the_fixture(browser, local_server):
