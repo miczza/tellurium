@@ -91,7 +91,8 @@ async def test_tab_is_usable_after_a_navigation_timeout(browser, server):
 async def test_timeout_while_waiting_for_load_names_the_phase(browser, local_server):
     tab = browser.main_tab
     with pytest.raises(NavigationTimeoutError) as info:
-        await _guard(tab.get(f"{local_server}/slow_load.html", wait_until="load", timeout=1))
+        # 5 s: the commit fits even on a slow runner, the 12 s image does not
+        await _guard(tab.get(f"{local_server}/slower_load.html", wait_until="load", timeout=5))
     assert info.value.phase == "load"
     assert "load" in str(info.value)
 
