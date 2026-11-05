@@ -84,8 +84,9 @@ run, and a manual run does not cancel it. Every job installs the `geoip`,
     **`os-results`** (after them, `if: always()`) downloads their JUnit
     reports, writes one table of tests, failures, errors and skips per job
     and the failed tests to the run's summary (`python -m tests.ci_results`),
-    and fails the run when a job left no report: it was cancelled, timed out,
-    or its pytest was killed, so part of its tests never ran.
+    and fails the run when a job left no report (it was cancelled, timed out,
+    or its pytest was killed, so part of its tests never ran) or a report
+    without a single test (pytest collected nothing).
   - **Skips**: a test is skipped on a system only when it exercises
     something that does not exist there (POSIX fds, `fork`, `SIGKILL`,
     `SingletonLock` symlinks, `/proc`), with a `reason=` saying so, on the
