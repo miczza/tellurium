@@ -13,8 +13,12 @@ from tellurium.browser import _cache
 from tellurium.browser import _patched_download as dl
 from tellurium.browser._cache import BINARY_NAME
 from tellurium.browser._manifest import current_platform
+from tests.platform_marks import WINDOWS
 
 VERSION = "146.0.7680.188"
+# The installer writes no ``current`` link on Windows (a symlink there needs a
+# privilege the user may not have): the default version is the newest one.
+INSTALLED_CURRENT = None if WINDOWS else VERSION
 BINARY = b"\x7fELF fake chromium-telluride binary"
 
 
@@ -68,8 +72,9 @@ def test_install_from_tarball_layout(tmp_path):
     assert (root / VERSION / "MANIFEST.json").is_file()
     assert (root / VERSION / "locales" / "en-US.pak").is_file()
     assert entry.binary.stat().st_mode & 0o111
-    assert _cache.current_version(root) == VERSION
-    assert entry.is_current
+    assert _cache.current_version(root) == INSTALLED_CURRENT
+    assert entry.is_current is (INSTALLED_CURRENT is not None)
+    assert _cache.installed_version(root) == VERSION
     # No staging leftovers
     leftovers = [p.name for p in root.iterdir() if p.name.startswith(".")]
     assert set(leftovers) <= {_cache.LOCK_NAME, _cache.GATE_NAME}
@@ -245,6 +250,7 @@ def test_latest_version_parses_tag(tmp_path):
         assert dl.latest_version() == VERSION
 
 
+@pytest.mark.skipif(WINDOWS, reason="the installer writes no current link on Windows")
 def test_reinstall_keeps_current_flag(tmp_path):
     tar = _make_tarball(tmp_path / "rel.tar.gz")
     root = tmp_path / "cache"
@@ -409,7 +415,7 @@ def test_concurrent_installs_of_one_release_all_succeed(tmp_path):
     errors = _hammer(3, 8, lambda: dl.install_from_tarball(tar, cache_root=root))
     assert errors == []
     assert (root / VERSION / BINARY_NAME).read_bytes() == BINARY
-    assert _cache.current_version(root) == VERSION
+    assert _cache.current_version(root) == INSTALLED_CURRENT
     assert [p.name for p in root.iterdir() if p.is_dir() and p.name != "current"] == [VERSION]
 
 
@@ -454,7 +460,7 @@ def test_a_failed_reinstall_keeps_the_installed_version(tmp_path):
         with pytest.raises(dl.DownloadError, match="SHA256SUMS"):
             dl.reinstall(VERSION, cache_root=root)
         assert (root / VERSION / BINARY_NAME).read_bytes() == BINARY  # still usable
-        assert _cache.current_version(root) == VERSION
+        assert _cache.installed_version(root) == VERSION
         (root / VERSION / BINARY_NAME).write_bytes(b"corrupted")
         entry = dl.reinstall(VERSION, cache_root=root, allow_unverified=True)
     assert entry.binary.read_bytes() == BINARY
