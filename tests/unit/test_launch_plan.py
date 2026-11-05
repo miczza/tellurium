@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import socket
 import sys
 import time
 
@@ -53,6 +54,7 @@ class SilentProxy:
     def __init__(self) -> None:
         self.accepted = 0
         self._writers: list = []
+        self._closing = False
 
     async def __aenter__(self) -> SilentProxy:
         self._server = await asyncio.start_server(self._hold, "127.0.0.1", 0)
@@ -60,14 +62,36 @@ class SilentProxy:
         return self
 
     async def __aexit__(self, *exc) -> None:
+        self._closing = True
         self._server.close()
         for writer in self._writers:
             writer.close()
-        await self._server.wait_closed()
+        # A connection accepted just before close() reaches _hold later and is
+        # closed there; until then wait_closed() waits for it.
+        await asyncio.wait_for(self._server.wait_closed(), 10)
 
     async def _hold(self, reader, writer) -> None:
         self.accepted += 1
-        self._writers.append(writer)
+        if self._closing:
+            writer.close()
+        else:
+            self._writers.append(writer)
+
+
+@pytest.mark.parametrize("spins", range(6))
+async def test_the_silent_proxy_closes_connections_it_has_not_held_yet(spins):
+    """A connection accepted just before the exit, whose handler has not run yet,
+    must not keep ``wait_closed()`` waiting for ever (it hung on Windows CI)."""
+
+    async def connect_and_leave() -> socket.socket:
+        async with SilentProxy() as proxy:
+            client = socket.create_connection(("127.0.0.1", proxy.port))
+            for _ in range(spins):
+                await asyncio.sleep(0)
+        return client
+
+    client = await asyncio.wait_for(connect_and_leave(), 5)
+    client.close()
 
 
 async def _flags(**kwargs) -> list[str]:
