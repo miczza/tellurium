@@ -20,9 +20,9 @@ from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, TypeVar
 
+from tellurium.browser.chrome_version import detect_chrome_version
 from tellurium.browser.engine import BrowserEngine, StockEngine, select_engine
 from tellurium.browser.launcher import (
-    _detect_chrome_version,
     build_chrome_flags,
     build_load_extension_flag,
     check_chrome_version_for_extensions,
@@ -188,7 +188,7 @@ class LaunchPlan:
 
     async def _check_extensions(self) -> None:
         """Branded Chrome 137+ ignores ``--load-extension``: refuse it, and warn once."""
-        version = await asyncio.to_thread(_detect_chrome_version, self.chrome_path)
+        version = await asyncio.to_thread(detect_chrome_version, self.chrome_path)
         p = self.chrome_path.lower()
         is_branded_chrome = (
             "google-chrome" in p  # linux binary name
@@ -249,7 +249,7 @@ class LaunchPlan:
             profile = dataclasses.replace(profile, **manual)
         # The UA goes on the command line too: it needs the binary's version
         # now, before Browser.getVersion can tell.
-        if found := await asyncio.to_thread(_detect_chrome_version, self.chrome_path):
+        if found := await asyncio.to_thread(detect_chrome_version, self.chrome_path):
             profile = profile.with_browser_version(".".join(map(str, found)))
 
         self.stealth_profile = profile

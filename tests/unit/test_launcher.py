@@ -1,28 +1,9 @@
 from unittest.mock import patch
 
 from tellurium.browser.launcher import (
-    _detect_chrome_version,
     _determine_platform,
     build_chrome_flags,
 )
-
-
-def test_detect_version_parses_output():
-    with patch("subprocess.check_output", return_value=b"Google Chrome 146.0.7680.188\n"):
-        version = _detect_chrome_version("/usr/bin/chrome")
-    assert version == (146, 0, 7680, 188)
-
-
-def test_detect_version_chromium():
-    with patch("subprocess.check_output", return_value=b"Chromium 145.0.7600.100\n"):
-        version = _detect_chrome_version("/usr/bin/chromium")
-    assert version == (145, 0, 7600, 100)
-
-
-def test_detect_version_failure():
-    with patch("subprocess.check_output", side_effect=Exception("not found")):
-        version = _detect_chrome_version("/bad/path")
-    assert version is None
 
 
 def test_determine_platform_linux():

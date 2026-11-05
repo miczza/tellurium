@@ -6,7 +6,6 @@ import asyncio
 import logging
 import os
 import platform
-import re
 import shutil
 import stat
 import subprocess
@@ -16,6 +15,7 @@ import zipfile
 from pathlib import Path
 
 from tellurium.browser._cache import _version_key
+from tellurium.browser.chrome_version import detect_chrome_version
 
 logger = logging.getLogger(__name__)
 
@@ -36,36 +36,6 @@ BASE_FLAGS = [
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-_VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)\.(\d+)")
-
-
-def _detect_chrome_version(executable: str) -> tuple[int, ...] | None:
-    """Run *executable* --version and return a 4-tuple of ints, or None on failure.
-
-    On Windows ``chrome.exe --version`` opens a window and prints nothing: the
-    version is the name of the directory next to the executable.
-    """
-    if sys.platform == "win32":
-        versions = [
-            tuple(int(x) for x in m.groups())
-            for entry in Path(executable).parent.glob("*")
-            if entry.is_dir() and (m := _VERSION_RE.fullmatch(entry.name))
-        ]
-        return max(versions, default=None)
-    try:
-        output = subprocess.check_output(
-            [executable, "--version"],
-            stderr=subprocess.STDOUT,
-            timeout=5,
-        )
-        text = output.decode(errors="replace")
-        m = _VERSION_RE.search(text)
-        if m:
-            return tuple(int(x) for x in m.groups())
-    except Exception:  # noqa: BLE001 - version probe is best-effort
-        pass
-    return None
 
 
 def _determine_platform() -> str:
@@ -279,7 +249,7 @@ async def find_chrome(stealth: bool = False) -> str:
     for path, kind in _find_chrome_candidates():
         logger.debug("Checking Chrome candidate: %s (%s)", path, kind)
         if stealth and kind == "chrome":
-            version = _detect_chrome_version(path)
+            version = await asyncio.to_thread(detect_chrome_version, path)
             if version and version[0] >= 137:
                 logger.warning(
                     "Branded Chrome %d.%d.%d.%d (>= 137) detected at %s. "

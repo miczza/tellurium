@@ -8,21 +8,19 @@ from ``Browser.launch`` as it was before the extraction (master f8ffe71).
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import json
 import re
-import sys
 import tempfile
 
 import pytest
 
 from tellurium.browser import engine as engine_mod
+from tellurium.browser import launch_plan
 from tellurium.browser.browser import Browser
 from tellurium.browser.process import BrowserProcess
 from tellurium.stealth import geoip
+from tellurium.stealth import profile as profile_mod
 from tellurium.stealth.geoip import GeoResult
-
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX temporary paths")
 
 ROME = GeoResult(country="IT", timezone="Europe/Rome", languages=["it-IT", "en"])
 
@@ -159,11 +157,9 @@ async def captured_flags(mp: pytest.MonkeyPatch, kwargs: dict) -> list[str]:
     mp.setattr(geoip, "resolve_exit_ip", exit_ip)
     mp.setattr(geoip, "resolve_geoip", lambda *_a, **_kw: ROME)
     mp.setattr(geoip, "exit_geo", lambda *_a, **_kw: ROME, raising=False)
-    for module in ("tellurium.browser.browser", "tellurium.browser.launch_plan"):
-        if importlib.util.find_spec(module) is not None:  # launch_plan: not before it existed
-            mp.setattr(
-                f"{module}._detect_chrome_version", lambda _p: (150, 0, 7000, 1), raising=False
-            )
+    mp.setattr(launch_plan, "detect_chrome_version", lambda _p: (150, 0, 7000, 1))
+    # The stealth profile's User-Agent follows the host system: the expected lists are Linux's.
+    mp.setattr(profile_mod, "_detect_real_os", lambda: "linux")
     kwargs = dict(kwargs)
     with tempfile.TemporaryDirectory(prefix="tlrflags") as user_data_dir:
         if kwargs.get("user_data_dir"):
@@ -178,7 +174,7 @@ def _normalized(flags: list[str], user_data_dir: str) -> list[str]:
     out = []
     for flag in flags:
         flag = flag.replace(user_data_dir, "<user_data_dir>")
-        flag = re.sub(tmp + r"/tellurium_[^,=\s]+", "<tmp>", flag)
+        flag = re.sub(tmp + r"[\\/]tellurium_[^,=\s]+", "<tmp>", flag)
         flag = re.sub(
             r"--proxy-server=http://127\.0\.0\.1:(?!9$)\d+", "--proxy-server=<forwarder>", flag
         )

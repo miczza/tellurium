@@ -656,6 +656,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Chrome's version is read without `chrome --version` where that cannot work: on Windows
+  from the install layout, then the executable's `VERSIONINFO` (never by running
+  `chrome.exe`, which opens a window and does not exit); on macOS from the bundle's
+  `Info.plist` when `--version` prints nothing. `find_chrome()` reads it off the event loop.
+  The detection moved to `tellurium.browser.chrome_version.detect_chrome_version`.
 - `trap_link`: a `mask-image` gradient that fades into an `oklch()`, `lab()` or `color()`
   color is no longer taken for a transparent mask (a link was flagged `transparent`),
   and one whose colors all have alpha 0 in those forms is; a color whose alpha cannot be
