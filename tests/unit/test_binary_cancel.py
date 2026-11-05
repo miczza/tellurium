@@ -15,6 +15,7 @@ import pytest
 
 from tellurium.browser import _cache
 from tellurium.browser import _patched_download as dl
+from tellurium.browser._cache import BINARY_NAME
 from tellurium.browser.engine import STOP_TIMEOUT, PatchedEngine
 from tests.unit.test_patched_download import _fake_github, _make_tarball
 
@@ -25,7 +26,7 @@ NEW = "146.0.7680.188"
 def _install(root, version):
     version_dir = root / version
     version_dir.mkdir(parents=True)
-    (version_dir / "chrome").write_bytes(b"binary " + version.encode())
+    (version_dir / BINARY_NAME).write_bytes(b"binary " + version.encode())
     return version_dir
 
 

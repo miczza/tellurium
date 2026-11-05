@@ -2,6 +2,7 @@ import hashlib
 
 import pytest
 
+from tellurium.browser._cache import BINARY_NAME
 from tellurium.browser.engine import PatchedEngine
 
 
@@ -11,14 +12,14 @@ def test_pinned_version_uses_specific_dir(tmp_path):
     cache_root = tmp_path / ".tellurium" / "chromium"
     pinned = cache_root / "146.0.7680.188"
     pinned.mkdir(parents=True)
-    (pinned / "chrome").write_text("binary")
+    (pinned / BINARY_NAME).write_text("binary")
 
     eng = PatchedEngine(
         cache_root=cache_root,
         chromium_version="146.0.7680.188",
     )
     resolved = eng.resolve_binary_path()
-    assert resolved == pinned / "chrome"
+    assert resolved == pinned / BINARY_NAME
 
 
 def test_pinned_version_bypasses_update_check(tmp_path, monkeypatch):
@@ -32,7 +33,7 @@ def test_pinned_version_bypasses_update_check(tmp_path, monkeypatch):
     cache_root = tmp_path / ".tellurium" / "chromium"
     pinned = cache_root / "146.0.7680.188"
     pinned.mkdir(parents=True)
-    (pinned / "chrome").write_text("binary")
+    (pinned / BINARY_NAME).write_text("binary")
 
     eng = PatchedEngine(
         cache_root=cache_root,
@@ -47,7 +48,7 @@ def test_pinned_sha256_verified(tmp_path):
     cache_root = tmp_path / ".tellurium" / "chromium"
     pinned = cache_root / "146.0.7680.188"
     pinned.mkdir(parents=True)
-    binary = pinned / "chrome"
+    binary = pinned / BINARY_NAME
     binary.write_bytes(b"binary-content")
     expected_sha = hashlib.sha256(b"binary-content").hexdigest()
 
@@ -77,7 +78,7 @@ def test_auto_security_update_installs_security_release(tmp_path, monkeypatch):
     cache_root = tmp_path / ".tellurium" / "chromium"
     cur = cache_root / "146.0.7680.180"
     cur.mkdir(parents=True)
-    (cur / "chrome").write_text("binary")
+    (cur / BINARY_NAME).write_text("binary")
     from tellurium.browser import _cache
 
     _cache.set_current("146.0.7680.180", cache_root)
@@ -111,7 +112,7 @@ def test_auto_security_update_network_error_falls_back_to_installed(tmp_path, mo
     cache_root = tmp_path / ".tellurium" / "chromium"
     cur = cache_root / "146.0.7680.180"
     cur.mkdir(parents=True)
-    (cur / "chrome").write_text("binary")
+    (cur / BINARY_NAME).write_text("binary")
     _cache.set_current("146.0.7680.180", cache_root)
     info = UpdateInfo(
         installed="146.0.7680.180",
@@ -125,7 +126,7 @@ def test_auto_security_update_network_error_falls_back_to_installed(tmp_path, mo
 
     monkeypatch.setattr("tellurium.browser._patched_download.download_patched", broken)
     eng = PatchedEngine(cache_root=cache_root, auto_security_update=True)
-    assert eng.resolve_binary_path() == cur / "chrome"
+    assert eng.resolve_binary_path() == cur / BINARY_NAME
 
 
 def test_legacy_binary_name_still_resolves(tmp_path):
@@ -144,6 +145,6 @@ def test_unpinned_without_current_symlink_uses_newest(tmp_path, monkeypatch):
     for v in ("146.0.7680.188", "147.0.7700.1"):
         d = cache_root / v
         d.mkdir(parents=True)
-        (d / "chrome").write_text("binary")
+        (d / BINARY_NAME).write_text("binary")
     eng = PatchedEngine(cache_root=cache_root)
-    assert eng.resolve_binary_path() == cache_root / "147.0.7700.1" / "chrome"
+    assert eng.resolve_binary_path() == cache_root / "147.0.7700.1" / BINARY_NAME

@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tellurium.browser._cache import BINARY_NAME
 from tellurium.browser._manifest import current_platform
 from tellurium.browser.engine import PatchedEngine, StockEngine
 
@@ -111,7 +112,7 @@ def _install(tmp_path, supported_flags):
     root = tmp_path / "chromium"
     version_dir = root / VERSION
     version_dir.mkdir(parents=True)
-    binary = version_dir / "chrome"
+    binary = version_dir / BINARY_NAME
     binary.write_bytes(b"binary")
     manifest = {
         "version": "0.2.0",
@@ -152,7 +153,7 @@ def test_no_native_timezone_when_manifest_omits_the_flag(tmp_path):
 def test_no_native_timezone_without_manifest(tmp_path):
     root = tmp_path / "chromium"
     (root / VERSION).mkdir(parents=True)
-    (root / VERSION / "chrome").write_bytes(b"binary")
+    (root / VERSION / BINARY_NAME).write_bytes(b"binary")
     engine = PatchedEngine(cache_root=root, chromium_version=VERSION)
     engine.resolve_binary_path()
     assert "native_timezone" not in engine.capabilities()
