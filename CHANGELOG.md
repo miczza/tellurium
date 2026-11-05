@@ -656,6 +656,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Download.cancel()` (and closing a context or the browser with a download running) no
+  longer returns while the partial `<guid>.crdownload` file is still in the folder: Chrome
+  reports the cancel before its file thread deletes it, so the call now waits for the file
+  to go, and removes it itself if it is still there when the timeout ends.
 - macOS: `Tab.keyboard_press("Control+A")` (and `+C`, `+V`, `+X`, `+Z`) selects all, copies,
   pastes, cuts and undoes as on Linux and Windows: the key down carries Chrome's editing
   command (`selectAll`, `copy`, `paste`, `cut`, `undo`) on every system, since macOS binds

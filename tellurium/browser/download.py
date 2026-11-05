@@ -120,14 +120,24 @@ class Download:
 
     async def cancel(self, timeout: float = 10.0) -> None:
         """Cancel the download (no-op once it finished) and wait until Chrome
-        reports it canceled; Chrome deletes the partial file."""
+        reports it canceled and its partial file is gone. Chrome reports it
+        before its file thread deletes ``<guid>.crdownload``; a partial file
+        still there after *timeout* is removed here."""
         if self._done.is_set():
             return
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
         params: dict[str, Any] = {"guid": self.guid}
         if self._context_id is not None:
             params["browserContextId"] = self._context_id
         await self._downloads._session.send("Browser.cancelDownload", params, timeout=timeout)
         await self._wait(timeout)
+        partial = self._folder / f"{self.guid}.crdownload"
+        while await asyncio.to_thread(partial.exists):
+            if loop.time() >= deadline:
+                await asyncio.to_thread(_remove_partial, partial)
+                return
+            await asyncio.sleep(0.05)
 
     async def _stop(self, error: DownloadError) -> None:
         """Cancel on behalf of a closing browser or context: Chrome deletes the
@@ -139,6 +149,13 @@ class Download:
             pass
         finally:
             self._finish("canceled", error)
+
+
+def _remove_partial(path: Path) -> None:
+    try:
+        path.unlink()
+    except OSError:  # gone meanwhile, or still open in Chrome (Windows)
+        pass
 
 
 def _copy(source: Path, target: Path) -> None:
