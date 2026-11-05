@@ -145,8 +145,9 @@ def launch_chrome_windows(
     _winapi.CloseHandle(chrome_read_h)
     _winapi.CloseHandle(chrome_write_h)
     # The fds own the parent's handles from here on.
-    parent_write_fd = msvcrt.open_osfhandle(parent_write_h, 0)
-    parent_read_fd = msvcrt.open_osfhandle(parent_read_h, os.O_RDONLY)
+    # Binary: a text-mode fd would turn \n into \r\n and stop reading at a 0x1A.
+    parent_write_fd = msvcrt.open_osfhandle(parent_write_h, os.O_BINARY)
+    parent_read_fd = msvcrt.open_osfhandle(parent_read_h, os.O_RDONLY | os.O_BINARY)
     return WindowsProcess(*handle_pid), parent_write_fd, parent_read_fd
 
 
