@@ -685,6 +685,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `chrome.exe`, which opens a window and does not exit); on macOS from the bundle's
   `Info.plist` when `--version` prints nothing. `find_chrome()` reads it off the event loop.
   The detection moved to `tellurium.browser.chrome_version.detect_chrome_version`.
+- A launch that fails because Chrome exits with code 21 (`RESULT_CODE_PROFILE_IN_USE`,
+  what Windows gives for a profile another Chrome holds) says that the profile is in use.
 - `trap_link`: a `mask-image` gradient that fades into an `oklch()`, `lab()` or `color()`
   color is no longer taken for a transparent mask (a link was flagged `transparent`),
   and one whose colors all have alpha 0 in those forms is; a color whose alpha cannot be

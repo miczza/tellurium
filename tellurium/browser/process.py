@@ -126,6 +126,10 @@ def launch_chrome(
     return launch_chrome_posix(chrome_path, args, output, env)
 
 
+#: Chrome's ``RESULT_CODE_PROFILE_IN_USE``: another Chrome holds the profile.
+_PROFILE_IN_USE = 21
+
+
 class OutputTail:
     """Drains Chrome's output on a thread, keeping only the last bytes.
 
@@ -339,6 +343,8 @@ class BrowserProcess:
             return None
         output = await self._output_tail()
         message = f"Chrome exited during launch (exit code {code})"
+        if code == _PROFILE_IN_USE:
+            message += ": its profile is in use by another Chrome"
         if output.strip():
             message += f". Its last output:\n{output.strip()}"
         return LaunchError(message)
