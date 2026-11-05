@@ -98,27 +98,9 @@ async def test_verbose_chrome_logging_does_not_freeze_the_browser(local_server):
         await browser.close()
 
 
-@pytest.mark.parametrize("args", [VERBOSE, None], ids=["verbose", "default"])
-async def test_chrome_log_goes_to_the_requested_file(local_server, tmp_path, args):
-    """Also on Windows, where a release chrome.exe writes nothing to its standard
-    error unless told to: with chrome_log it is (E2). Chrome's temporary
-    directory is ours and goes with the browser."""
-    log = tmp_path / "chrome.log"
-    browser = await Browser.launch(headless=True, args=args, chrome_log=log)
-    chrome_tmp = Path(browser._proc.chrome_tmp)
-    try:
-        assert chrome_tmp.is_dir()
-        await asyncio.wait_for(browser.main_tab.get(f"{local_server}/basic.html"), timeout=30)
-    finally:
-        await browser.close()
-    assert log.is_file()
-    if args or sys.platform == "win32":  # elsewhere Chrome's default output may be empty
-        assert log.stat().st_size > 0
-    assert not chrome_tmp.exists()
-
-
 class TestWhatTheLaunchHandsToChrome:
-    """The environment and the temporary directory of a launch, on every system."""
+    """What a launch hands to Chrome (environment, log, temporary directory,
+    profile), on every system."""
 
     @pytest.fixture(autouse=True)
     def private_tempdir(self, tmp_path):
@@ -141,6 +123,37 @@ class TestWhatTheLaunchHandsToChrome:
         finally:
             await proc.close()
         assert not chrome_tmp.exists()
+
+    @pytest.mark.parametrize("args", [VERBOSE, None], ids=["verbose", "default"])
+    async def test_chrome_log_goes_to_the_requested_file(self, local_server, tmp_path, args):
+        """Also on Windows, where a release chrome.exe writes nothing to its standard
+        error unless told to: with chrome_log it is (E2). Chrome's temporary
+        directory is ours and goes with the browser."""
+        log = tmp_path / "chrome.log"
+        browser = await Browser.launch(headless=True, args=args, chrome_log=log)
+        chrome_tmp = Path(browser._proc.chrome_tmp)
+        try:
+            assert chrome_tmp.is_dir()
+            await asyncio.wait_for(browser.main_tab.get(f"{local_server}/basic.html"), timeout=30)
+        finally:
+            await browser.close()
+        assert log.is_file()
+        if args or sys.platform == "win32":  # elsewhere Chrome's default output may be empty
+            assert log.stat().st_size > 0
+        assert not chrome_tmp.exists()
+
+    async def test_profile_already_in_use_says_so(self, tmp_path):
+        """Exit code 21 on Windows, where Chrome prints nothing."""
+        profile = str(tmp_path / "profile")
+        first = await Browser.launch(headless=True, user_data_dir=profile)
+        try:
+            with pytest.raises(LaunchError) as info:
+                await asyncio.wait_for(Browser.launch(headless=True, user_data_dir=profile), 30)
+            assert "profile" in str(info.value).lower()
+            # The first browser is untouched by the failed second launch.
+            assert await asyncio.wait_for(first.main_tab.eval("1 + 1"), 10) == 2
+        finally:
+            await first.close()
 
 
 # ---------------------------------------------------------------------------
@@ -180,19 +193,6 @@ async def test_a_mute_chrome_times_out_naming_the_command(tmp_path, monkeypatch)
 
     assert _children() <= children, "the mute process was not reaped"
     assert _temp_profiles() <= profiles
-
-
-async def test_profile_already_in_use_says_so(tmp_path):
-    profile = str(tmp_path / "profile")
-    first = await Browser.launch(headless=True, user_data_dir=profile)
-    try:
-        with pytest.raises(LaunchError) as info:
-            await asyncio.wait_for(Browser.launch(headless=True, user_data_dir=profile), 30)
-        assert "profile" in str(info.value).lower()
-        # The first browser is untouched by the failed second launch.
-        assert await asyncio.wait_for(first.main_tab.eval("1 + 1"), 10) == 2
-    finally:
-        await first.close()
 
 
 @needs_proc
