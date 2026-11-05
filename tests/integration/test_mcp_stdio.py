@@ -30,8 +30,9 @@ from mcp import Client, StdioServerParameters  # noqa: E402
 
 from tests.integration.conftest import DOWNLOAD_BODY  # noqa: E402
 from tests.private_temp import child_temp_env, short_mkdtemp  # noqa: E402
+from tests.tellurium_cli import TELLURIUM_CLI  # noqa: E402
 
-_TELLURIUM = Path(sys.executable).with_name("tellurium")
+_TELLURIUM = TELLURIUM_CLI
 
 
 def _server(home: Path, *options: str) -> Client:
