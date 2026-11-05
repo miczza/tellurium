@@ -52,4 +52,6 @@ def test_the_command_prints_no_carriage_returns(tmp_path, monkeypatch):
     shard.main(["1", "1", str(tmp_path)])
     out.flush()
     assert b"\r" not in raw.getvalue()
-    assert raw.getvalue().split() == [(tmp_path / f).as_posix().encode() for f in ("test_x.py", "test_y.py")]
+    assert raw.getvalue().split() == [
+        (tmp_path / f).as_posix().encode() for f in ("test_x.py", "test_y.py")
+    ]
