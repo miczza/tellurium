@@ -128,14 +128,14 @@ jobs:
           TESTS: ${{ inputs.tests }}
         run: xvfb-run -a pytest ${TESTS:-tests/integration tests/stealth} -q -rfE --durations=15
 
-  # Windows and macOS: manual runs and pushes to fetta/C6-* only (macOS minutes
-  # count x10, Windows x2 on a private repo). Red tests do not block until C6 is
-  # merged; a job without its JUnit report does (see os-results).
+  # Windows and macOS: the same events as Linux (the repo is public, minutes are
+  # free). Red tests do not block until C6 is merged; a job without its JUnit
+  # report does (see os-results).
   unit-os:
     name: unit (${{ matrix.os }})
     if: >-
-      (github.event_name == 'workflow_dispatch' && !inputs.tests && inputs.os != 'ubuntu-latest') ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/fetta/C6-'))
+      github.event_name != 'workflow_dispatch' ||
+      (!inputs.tests && inputs.os != 'ubuntu-latest')
     runs-on: ${{ matrix.os }}
     continue-on-error: true
     timeout-minutes: 25
@@ -169,8 +169,7 @@ jobs:
   integration-os:
     name: integration (${{ matrix.os }}, ${{ matrix.shard }}/${{ inputs.tests && 1 || 4 }})
     if: >-
-      (github.event_name == 'workflow_dispatch' && inputs.os != 'ubuntu-latest') ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/fetta/C6-'))
+      github.event_name != 'workflow_dispatch' || inputs.os != 'ubuntu-latest'
     runs-on: ${{ matrix.os }}
     continue-on-error: true
     timeout-minutes: 35
@@ -265,9 +264,8 @@ jobs:
     name: results (windows, macos)
     needs: [unit-os, integration-os]
     if: >-
-      always() && (
-      (github.event_name == 'workflow_dispatch' && inputs.os != 'ubuntu-latest') ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/fetta/C6-')))
+      always() &&
+      (github.event_name != 'workflow_dispatch' || inputs.os != 'ubuntu-latest')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

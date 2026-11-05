@@ -5,7 +5,7 @@ Linux-only.
 
 | Workflow | Trigger | Blocking? |
 | --- | --- | --- |
-| `ci.yml` | push to `master` and `fetta/**`, any PR, manual | Linux jobs yes (`lint` included); Windows/macOS no, until C6 is merged |
+| `ci.yml` | push to `master` and `fetta/**`, any PR, manual | Linux jobs yes (`lint` included); Windows/macOS: a missing report yes, red tests not until C6 is merged |
 | `release.yml` | push of a `v*` tag, manual | n/a |
 | `nightly-creepjs.yml` | weekly cron (Mon 04:17 UTC), manual | no — informational |
 
@@ -73,10 +73,12 @@ run, and a manual run does not cancel it. Every job installs the `geoip`,
   XML as `junit-<suite>-<os>[-<shard>]`. The diagnostic step does not run
   `chrome.exe --version`: on Windows it opens a browser window and never
   exits.
-  - **When**: only on `workflow_dispatch` and on pushes to `fetta/C6-*`
-    branches. The repo is private: macOS minutes count x10 and Windows x2
-    against the free 2000 min/month, so ordinary pushes stay Linux-only.
-    After C6 is merged they also run on `master`.
+  - **When**: on the same events as the Linux jobs (every push to `master`
+    and `fetta/**`, every PR, manual runs). The repo is public, so hosted
+    runners cost no minutes; what limits a run is the queue (an account runs
+    few macOS jobs at a time, and one run asks for five), so a push that
+    supersedes another cancels its run (`cancel-in-progress`), and a targeted
+    manual run (below) is the quick way to retry one test on one system.
   - **Blocking**: `continue-on-error: true` until C6 is merged; the known
     reds are listed per system in `docs/requests/C6.md`. But the job
     **`os-results`** (after them, `if: always()`) downloads their JUnit
@@ -129,7 +131,7 @@ Triggered by pushing a `v*` tag (or manually, passing an existing tag):
 
 ### One-time setup
 
-1. **Repo**: done — `origin` is the private `miczza/tellurium`.
+1. **Repo**: done — `origin` is the public `miczza/tellurium`.
 2. **Register the trusted publisher on PyPI**: log in to PyPI →
    *Your projects* → `tellurium` → *Publishing* (for a brand-new project, use
    *Publishing* → *Add a pending publisher* before the first upload) and add a
