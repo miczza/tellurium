@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
+import threading
 
 import pytest
 
@@ -68,14 +69,29 @@ class TunnelProxy:
             writer.close()
 
 
-@pytest.fixture
-def connections(monkeypatch):
-    """Every outgoing connection; a non-loopback one is refused and fails the test."""
+def _spy(monkeypatch) -> list[tuple]:
+    """Record every outgoing connection; refuse a non-loopback one.
+
+    A ``socket.socketpair()`` is not one: on Windows Python builds it from a
+    loopback connection, and asyncio makes one for each event loop (its
+    self-pipe), so it would show up as a connection to an unknown port.
+    """
     seen: list[tuple] = []
     real_connect = socket.socket.connect
     real_connect_ex = socket.socket.connect_ex
+    real_socketpair = socket.socketpair
+    pairing = threading.local()
+
+    def socketpair(*args, **kwargs):
+        pairing.on = True
+        try:
+            return real_socketpair(*args, **kwargs)
+        finally:
+            pairing.on = False
 
     def check(address) -> None:
+        if getattr(pairing, "on", False):
+            return
         seen.append(address)
         if isinstance(address, tuple) and not ipaddress.ip_address(address[0]).is_loopback:
             raise OSError(f"direct connection to {address} refused by the test")
@@ -90,6 +106,31 @@ def connections(monkeypatch):
 
     monkeypatch.setattr(socket.socket, "connect", connect)
     monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)
+    monkeypatch.setattr(socket, "socketpair", socketpair)
+    return seen
+
+
+def test_a_socketpair_made_of_a_loopback_connection_is_not_counted(monkeypatch):
+    def windows_socketpair():  # what Python does on Windows
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            client = socket.socket()
+            client.connect(listener.getsockname())
+            server, _ = listener.accept()
+            return server, client
+
+    monkeypatch.setattr(socket, "socketpair", windows_socketpair)
+    seen = _spy(monkeypatch)
+    for end in socket.socketpair():
+        end.close()
+    assert seen == []
+
+
+@pytest.fixture
+def connections(monkeypatch):
+    """Every outgoing connection; a non-loopback one is refused and fails the test."""
+    seen = _spy(monkeypatch)
     yield seen
     direct = [
         a for a in seen if isinstance(a, tuple) and not ipaddress.ip_address(a[0]).is_loopback
