@@ -1828,10 +1828,29 @@ tellurium still matches the nodriver baseline 8/8 on the comparative suite.
 
 ### Platform support
 
-Linux x64 is the only tested platform. A Windows CDP pipe transport exists
-(`tellurium/cdp/transport/_pipe_win.py`) but is **untested**, and there is no
-Windows or macOS job in CI — a multi-OS matrix is planned, not shipped. The
-patched binary is Linux-only.
+CI runs the unit and integration tests with Chrome stable on Linux x64,
+Windows x64 and macOS arm64. The patched binary is Linux-only.
+
+On Windows Chrome is started through `CreateProcessW`: its CDP pipe on CRT
+file descriptors 3 and 4, an environment block of its own (the launch's
+environment, with `TMP` and `TEMP` on a temporary folder of tellurium's that is
+removed at close) and its output going to `chrome_log` or to a drained pipe.
+With `chrome_log` tellurium adds `--enable-logging=stderr` unless the arguments
+already choose a logging mode: a release `chrome.exe` writes nothing otherwise.
+The child inherits only those handles.
+
+Chrome's version is read without starting a browser where that cannot work:
+`chrome.exe --version` opens a window and never exits, so on Windows it comes
+from the install layout (the `<version>` folder next to `chrome.exe`) or the
+executable's `VERSIONINFO`; on macOS from the bundle's `Info.plist` when
+`--version` prints nothing. When no source tells it and stealth on stock
+Chrome needs `--user-agent`, Chrome is started, asked for its version
+(`Browser.getVersion`), closed and started once more with the flag, so service
+and shared workers and what the browser fetches itself never show
+`HeadlessChrome`.
+
+Where Python has no time zone database (Windows without the `tzdata`
+package) `timezone` is checked against Windows' own ICU (`icu.dll`).
 
 ### WebGPU
 
