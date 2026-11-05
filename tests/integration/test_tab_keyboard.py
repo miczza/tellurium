@@ -1,5 +1,8 @@
 """Tab.keyboard_press: keys the page acts on (P1). Enter submits, Tab moves the
-focus, arrows move a <select>, Control+a selects all; an unknown key sends nothing."""
+focus, arrows move a <select>, Control+a/c/v/x/z edit as on Linux on every system;
+an unknown key sends nothing."""
+
+import sys
 
 import pytest
 
@@ -25,6 +28,11 @@ async def test_tab_moves_the_focus(page):
     assert await page.eval("document.activeElement.id") == "first"
 
 
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="on macOS ArrowDown opens a <select>'s popup menu (Chrome's Mac theme "
+    "pops the menu on arrow keys), it does not change the value",
+)
 async def test_arrow_down_changes_the_select(page):
     await page.eval("document.getElementById('role').focus()")
     await page.keyboard_press("ArrowDown")
@@ -35,6 +43,27 @@ async def test_control_a_then_backspace_empties_the_field(page):
     await page.keyboard_press("Control+a")
     await page.keyboard_press("Backspace")
     assert await page.eval("document.getElementById('first').value") == ""
+
+
+async def test_control_x_v_and_z_cut_paste_and_undo(page):
+    await page.bring_to_front()  # Chrome cuts and copies only in a focused page
+    value = "document.getElementById('first').value"
+    await page.keyboard_press("Control+a")
+    await page.keyboard_press("Control+x")
+    assert await page.eval(value) == ""
+    await page.keyboard_press("Control+v")
+    assert await page.eval(value) == "hello world"
+    await page.keyboard_press("Control+z")
+    assert await page.eval(value) == ""
+
+
+async def test_control_c_copies_the_selection(page):
+    await page.bring_to_front()
+    await page.keyboard_press("Control+a")
+    await page.keyboard_press("Control+c")
+    await page.eval("document.getElementById('second').focus()")
+    await page.keyboard_press("Control+v")
+    assert await page.eval("document.getElementById('second').value") == "hello world"
 
 
 async def test_a_printable_key_types_its_text(page):

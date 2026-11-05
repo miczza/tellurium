@@ -16,9 +16,7 @@ import re
 import sys
 import urllib.request
 
-_STABLE = (
-    "https://versionhistory.googleapis.com/v1/chrome/platforms/linux/channels/stable/versions"
-)
+_STABLE = "https://versionhistory.googleapis.com/v1/chrome/platforms/linux/channels/stable/versions"
 
 
 def stable_major() -> int:

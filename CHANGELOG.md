@@ -656,6 +656,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- macOS: `Tab.keyboard_press("Control+A")` (and `+C`, `+V`, `+X`, `+Z`) selects all, copies,
+  pastes, cuts and undoes as on Linux and Windows: the key down carries Chrome's editing
+  command (`selectAll`, `copy`, `paste`, `cut`, `undo`) on every system, since macOS binds
+  them to Command.
 - Windows: switching the patched cache's `current` version no longer fails with
   `PermissionError` once a version is current (Windows cannot rename over a directory link:
   the old link moves aside first and comes back if the switch fails).
