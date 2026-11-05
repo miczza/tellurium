@@ -281,9 +281,22 @@ def test_without_a_database_the_system_icu_decides(monkeypatch, icu, refused):
     assert asked == ["Mars/Olympus_Mons"]
 
 
+def _tz_database(monkeypatch, *known: str):
+    """Python with a time zone database that knows *known* (Windows CI has none)."""
+    import zoneinfo
+
+    def lookup(key):
+        if key not in known:
+            raise zoneinfo.ZoneInfoNotFoundError(f"No time zone found with key {key}")
+        return key
+
+    monkeypatch.setattr(zoneinfo, "ZoneInfo", lookup)
+
+
 def test_with_a_database_icu_is_not_asked(monkeypatch):
     from tellurium.browser import launch_plan
 
+    _tz_database(monkeypatch, "UTC", "Europe/Rome")
     monkeypatch.setattr(launch_plan, "_icu_knows_timezone", lambda tz: pytest.fail("asked ICU"))
     launch_plan.check_timezone("Europe/Rome")
     with pytest.raises(ValueError):
