@@ -251,11 +251,13 @@ async def test_local_and_browser_urls_are_refused_by_default(local_server, tmp_p
             assert hostname not in await _text(client, tid)
         assert result.is_error and "ERR_UNSAFE_REDIRECT" in result.content[0].text
 
+    local = tmp_path / "pages" / "local.txt"  # /etc/hostname is not on every system
+    local.parent.mkdir()
+    local.write_text("a local file")
     async with _server(tmp_path, "--allow-local-urls") as client:
         tid = (await _call(client, "session-open")).structured_content["targetId"]
-        await _call(client, "navigate", targetId=tid, url="file:///etc/hostname")
-        if hostname:
-            assert hostname in await _text(client, tid)
+        await _call(client, "navigate", targetId=tid, url=local.as_uri())
+        assert "a local file" in await _text(client, tid)
 
 
 def _png_size(data: str) -> tuple[int, int]:
@@ -329,8 +331,9 @@ def _rpc(proc: subprocess.Popen, message: dict) -> dict | None:
 
 
 def _chrome_using(path: Path) -> int:
-    found = subprocess.run(["pgrep", "-fc", str(path)], capture_output=True, text=True)
-    return int(found.stdout.strip() or 0)
+    # One PID per line: macOS's pgrep has no -c.
+    found = subprocess.run(["pgrep", "-f", str(path)], capture_output=True, text=True)
+    return len(found.stdout.split())
 
 
 @pytest.fixture
