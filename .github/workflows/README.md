@@ -13,8 +13,10 @@ Linux-only.
 
 ## `ci.yml`
 
-Status: **active** (no longer a draft). Concurrency group per ref with
-`cancel-in-progress: true`, so a new push supersedes the in-flight run.
+Status: **active** (no longer a draft). Concurrency group per ref and event
+with `cancel-in-progress: true`, so a new push supersedes the in-flight push
+run, and a manual run does not cancel it. Every job installs the `geoip`,
+`dev` and `mcp` extras, so the MCP tests run too.
 
 - **`lint`** — `ruff check` + `ruff format --check` over the whole repo,
   ruff pinned via the `RUFF_VERSION` env var to the version the flow's gate
@@ -33,10 +35,15 @@ Status: **active** (no longer a draft). Concurrency group per ref with
   managed-install entry, `~/.tellurium/browsers/google-chrome-stable/chrome`
   (a symlink; the folder name keeps `google-chrome` in the path, which is how
   tellurium tells a branded Chrome); on macOS setup-chrome's bundle replaces
-  `/Applications/Google Chrome.app` (the image's goes aside); on Windows
-  setup-chrome already installs into `Program Files`. The step *Show the
-  Chrome the tests use* (Windows and macOS) prints both paths, warns when they
-  differ and launches the browser once; it never stops the job.
+  `/Applications/Google Chrome.app` (the image's goes aside). On Windows
+  setup-chrome does not install: it takes the Chrome already in
+  `Program Files` as "stable" ("Found in cache"), and the image's is often a
+  version behind; so a step first updates it in place with Google's
+  enterprise MSI. The step *Check the Chrome the tests use*
+  (`python -m tests.ci_chrome`, in `integration` and `integration-os`)
+  fails the job unless `find_chrome()` picks setup-chrome's Chrome, it
+  launches, and its major version is the current stable one from Google's
+  version history: the three systems run the same major.
 - **Chrome's sandbox on Linux** — Ubuntu 24.04 restricts unprivileged
   user namespaces through AppArmor and Chrome from the tool cache has no
   AppArmor profile, so it aborts with `No usable sandbox!`. The Linux `unit`
@@ -44,7 +51,8 @@ Status: **active** (no longer a draft). Concurrency group per ref with
   `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` first.
 - **`unit-os`** and **`integration-os`** — the same suites on
   `windows-2025` (x64) and `macos-15` (arm64), Python 3.12, one job per
-  system and suite, `fail-fast: false`, 25 min timeout each. Chrome stable
+  system and suite, `fail-fast: false`, 25 min (unit) and 35 min
+  (integration) timeout. Chrome stable
   comes from `browser-actions/setup-chrome@v1` (see *Which Chrome*). No
   `xvfb-run`: both systems have a display, and `tests/conftest.py` skips its
   private Xvfb when there is no `Xvfb` binary; `tests/platform_marks.py`
@@ -52,8 +60,11 @@ Status: **active** (no longer a draft). Concurrency group per ref with
   `127.0.0.2` on `lo0`: the `other_server` fixture listens there, and macOS
   routes only `127.0.0.1` to loopback until told.
   `tests/stealth` stays on Linux. `integration-os` runs in four shards of
-  test files (`NR % 4` over the sorted file list), because the whole suite
-  takes about 40 min on a hosted runner. `pytest-timeout` (120 s per test)
+  test files balanced on their durations (`python -m tests.shard <n> 4`,
+  weights in `tests/integration/durations.json`, the slowest system of a run;
+  refresh it from the JUnit reports when the suite changes), because the
+  whole suite takes about 55 min on a hosted runner; each shard ends near
+  14 min. `pytest-timeout` (120 s per test)
   bounds a hang: on macOS (signal method) it fails that test and the run goes
   on; on Windows only the thread method exists, which dumps the stacks and
   ends the whole pytest process, so the rest of that shard does not run and
@@ -67,7 +78,12 @@ Status: **active** (no longer a draft). Concurrency group per ref with
     against the free 2000 min/month, so ordinary pushes stay Linux-only.
     After C6 is merged they also run on `master`.
   - **Blocking**: `continue-on-error: true` until C6 is merged; the known
-    reds are listed per system in `docs/requests/C6.md`.
+    reds are listed per system in `docs/requests/C6.md`. But the job
+    **`os-results`** (after them, `if: always()`) downloads their JUnit
+    reports, writes one table of tests, failures, errors and skips per job
+    and the failed tests to the run's summary (`python -m tests.ci_results`),
+    and fails the run when a job left no report: it was cancelled, timed out,
+    or its pytest was killed, so part of its tests never ran.
   - **Skips**: a test is skipped on a system only when it exercises
     something that does not exist there (POSIX fds, `fork`, `SIGKILL`,
     `SingletonLock` symlinks, `/proc`), with a `reason=` saying so, on the
@@ -75,7 +91,12 @@ Status: **active** (no longer a draft). Concurrency group per ref with
     `tests/platform_marks.py`. A test that fails because of a defect in
     `tellurium/` is never skipped.
   - Manual run: `gh workflow run ci.yml --ref <branch>`; read a red with
-    `gh run view <id> --log-failed`.
+    `gh run view <id> --log-failed`. A targeted run costs less:
+    `-f os=windows-2025 -f tests="tests/integration/test_downloads.py"`
+    runs only those paths, in one job, on that system (`os` is `all`,
+    `ubuntu-latest`, `windows-2025` or `macos-15`); with `tests` set the unit
+    jobs are skipped and the Linux `integration` job runs those paths instead
+    of its suites.
 - **`build`** — `python -m build`, `twine check --strict`, uploads `dist/`
   as an artifact. Gated on `unit`.
 
