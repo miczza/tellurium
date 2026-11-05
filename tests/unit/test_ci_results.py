@@ -47,3 +47,17 @@ def test_the_chrome_check_reads_the_major_of_a_user_agent():
 
     ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 HeadlessChrome/157.0.0.0 Safari"
     assert ci_chrome.ua_major(ua) == 157
+
+
+def test_a_report_without_tests_fails_like_a_missing_one(tmp_path, capsys):
+    # pytest that collects nothing (a wrong path: exit code 4) still writes a report.
+    folder = tmp_path / "junit-integration-windows-2025-1"
+    folder.mkdir()
+    (folder / "junit.xml").write_text(
+        '<?xml version="1.0" encoding="utf-8"?><testsuites>'
+        '<testsuite name="pytest" errors="0" failures="0" skipped="0" tests="0"/></testsuites>'
+    )
+    assert ci_results.main([str(tmp_path)], ["junit-integration-windows-2025-1"]) == 1
+    out = capsys.readouterr().out
+    assert "| junit-integration-windows-2025-1 | no tests |" in out
+    assert "ran no tests" in out

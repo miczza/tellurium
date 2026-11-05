@@ -5,9 +5,9 @@ space separated), ``CI_SHARDS`` (integration shards per system) and
 ``CI_UNIT`` (``1`` if the unit jobs ran) in the environment. It prints, and
 appends to ``$GITHUB_STEP_SUMMARY``, one row per job and the failed tests.
 Red tests do not fail it (those jobs are not blocking yet); a job without
-its report does: it was cancelled, timed out, or its pytest was killed (on
-Windows a ``pytest-timeout`` ends the whole process), so its tests did not
-all run.
+its report does (it was cancelled, timed out, or its pytest was killed: on
+Windows a ``pytest-timeout`` ends the whole process), and so does a report
+without a single test (pytest collected nothing): their tests did not run.
 """
 
 from __future__ import annotations
@@ -28,10 +28,12 @@ def expected_names(oses: str, *, shards: int, unit: bool) -> list[str]:
 
 
 def summarize(root: Path, expected: list[str]) -> tuple[list[str], list[str]]:
-    """Markdown lines for the reports under *root*, and the expected ones missing."""
+    """Markdown lines for the reports under *root*, and the expected ones missing
+    or without a single test."""
     lines = ["| job | tests | failures | errors | skipped |", "| --- | --- | --- | --- | --- |"]
     red: list[str] = []
     missing = []
+    empty = []
     for name in expected:
         reports = sorted((root / name).glob("*.xml"))
         if not reports:
@@ -46,12 +48,19 @@ def summarize(root: Path, expected: list[str]) -> tuple[list[str], list[str]]:
                 for case in suite.iter("testcase"):
                     if case.find("failure") is not None or case.find("error") is not None:
                         red.append(f"- {name}: `{case.get('classname')}::{case.get('name')}`")
+        if totals[0] == 0:
+            # pytest wrote a report but collected nothing (a wrong path, exit code 4).
+            empty.append(name)
+            lines.append(f"| {name} | no tests | | | |")
+            continue
         lines.append(f"| {name} | " + " | ".join(map(str, totals)) + " |")
     if red:
         lines += ["", "Failed:", *red]
     if missing:
         lines += ["", "No report (cancelled, timed out or killed): " + ", ".join(missing)]
-    return lines, missing
+    if empty:
+        lines += ["", "The report ran no tests (nothing collected): " + ", ".join(empty)]
+    return lines, missing + empty
 
 
 def main(argv: list[str], expected: list[str] | None = None) -> int:
