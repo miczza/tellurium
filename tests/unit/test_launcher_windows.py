@@ -1,13 +1,15 @@
-"""Windows launch path: dispatch, CRT fd-inheritance block, binary discovery.
+"""Windows launch path: dispatch, CRT fd-inheritance block, environment, discovery.
 
-None of this is exercised against a real chrome.exe — Tellurium's CI is POSIX
-only — so the tests pin the *construction* of the handle block, the command
-line and the platform dispatch, which is what a Windows regression would break
-first.  See launch_chrome_windows()'s "untested on real Windows" note.
+The construction of the CRT block, the environment block and the platform
+dispatch are pinned everywhere; the real launch (a child that reads fd 3,
+writes fd 4, prints its environment to the output it was given) runs on every
+system with Python as the child, so on Windows it goes through ``CreateProcessW``.
 """
 
 from __future__ import annotations
 
+import concurrent.futures
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -15,13 +17,14 @@ from unittest.mock import patch
 
 import pytest
 
-from tellurium.browser import launcher, process
-from tellurium.browser.launcher import (
+from tellurium.browser import launch_windows, launcher, process
+from tellurium.browser.launch_windows import (
     _CRT_FOPEN,
     _CRT_FPIPE,
-    _find_chrome_candidates,
     build_crt_inherit_block,
+    build_environment_block,
 )
+from tellurium.browser.launcher import _find_chrome_candidates
 from tellurium.browser.process import launch_chrome
 
 # ---------------------------------------------------------------------------
@@ -35,36 +38,39 @@ def test_launch_chrome_uses_the_posix_launcher_on_linux(monkeypatch):
     monkeypatch.setattr(
         process,
         "launch_chrome_posix",
-        lambda p, a, out, env: calls.append(("posix", p, a)) or ("P", 3, 4),
+        lambda p, a, out, env: calls.append(("posix", p, a, out, env)) or ("P", 3, 4),
     )
     monkeypatch.setattr(
         process,
         "launch_chrome_windows",
-        lambda p, a: pytest.fail("windows launcher used on linux"),
+        lambda *a: pytest.fail("windows launcher used on linux"),
     )
-    assert launch_chrome("/usr/bin/chrome", ["--x"]) == ("P", 3, 4)
-    assert calls == [("posix", "/usr/bin/chrome", ["--x"])]
+    assert launch_chrome("/usr/bin/chrome", ["--x"], 9, {"A": "1"}) == ("P", 3, 4)
+    assert calls == [("posix", "/usr/bin/chrome", ["--x"], 9, {"A": "1"})]
 
 
 def test_launch_chrome_uses_the_windows_launcher_on_win32(monkeypatch):
+    """Output and environment reach the Windows launcher too."""
     calls = []
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(
-        process, "launch_chrome_windows", lambda p, a: calls.append(("win", p, a)) or ("W", 5, 6)
+        process,
+        "launch_chrome_windows",
+        lambda p, a, out, env: calls.append(("win", p, a, out, env)) or ("W", 5, 6),
     )
     monkeypatch.setattr(
         process,
         "launch_chrome_posix",
-        lambda p, a, out, env: pytest.fail("posix launcher used on win32"),
+        lambda *a: pytest.fail("posix launcher used on win32"),
     )
-    assert launch_chrome(r"C:\chrome.exe", ["--y"]) == ("W", 5, 6)
-    assert calls == [("win", r"C:\chrome.exe", ["--y"])]
+    assert launch_chrome(r"C:\chrome.exe", ["--y"], 9, {"A": "1"}) == ("W", 5, 6)
+    assert calls == [("win", r"C:\chrome.exe", ["--y"], 9, {"A": "1"})]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="checks the POSIX side of the dispatch")
 def test_windows_launcher_refuses_to_run_on_posix():
     with pytest.raises(RuntimeError, match="Windows-only"):
-        launcher.launch_chrome_windows("chrome.exe", [])
+        launch_windows.launch_chrome_windows("chrome.exe", [])
 
 
 def test_browser_launch_goes_through_the_dispatcher():
@@ -73,6 +79,83 @@ def test_browser_launch_goes_through_the_dispatcher():
 
     assert "launch_chrome(chrome_path, flags, output, env)" in Path(process.__file__).read_text()
     assert "launch_chrome_posix" not in Path(browser_mod.__file__).read_text()
+
+
+# ---------------------------------------------------------------------------
+# A real child: pipes on fds 3 and 4, output, environment
+# ---------------------------------------------------------------------------
+
+CHILD = r"""
+import os, sys
+sys.stdout.write("probe=" + ascii(os.environ.get("TELLURIUM_PROBE")) + "\n")
+sys.stdout.flush()
+data = b""
+while not data.endswith(b"\0"):
+    chunk = os.read(3, 100)
+    if not chunk:
+        break
+    data += chunk
+os.write(4, data.upper())
+"""
+
+
+def test_the_child_gets_the_pipes_the_output_and_the_environment(tmp_path):
+    """What Chrome needs from the launcher, checked on a Python child: it reads
+    fd 3 and writes fd 4, prints to the output it was given, sees the environment."""
+    log = tmp_path / "child.log"
+    env = {**os.environ, "TELLURIUM_PROBE": "caf\u00e9 \U0001f600 ok"}
+    with open(log, "ab") as out:
+        child, write_fd, read_fd = launch_chrome(sys.executable, ["-c", CHILD], out.fileno(), env)
+    try:
+        os.write(write_fd, b"ping\0")
+        with concurrent.futures.ThreadPoolExecutor(1) as pool:
+            reply = pool.submit(os.read, read_fd, 100).result(timeout=30)
+        assert reply == b"PING\0"
+        assert child.wait(timeout=30) == 0
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=10)
+        os.close(write_fd)
+        os.close(read_fd)
+    assert "probe='caf\\xe9 \\U0001f600 ok'" in log.read_text()
+
+
+def test_a_killed_child_is_reaped_with_its_exit_code(tmp_path):
+    child, write_fd, read_fd = launch_chrome(sys.executable, ["-c", "import time; time.sleep(60)"])
+    try:
+        assert child.poll() is None
+        child.kill()
+        assert child.wait(timeout=30) != 0
+        assert child.poll() == child.returncode
+        child.kill()  # once it exited: nothing to do, no error
+    finally:
+        os.close(write_fd)
+        os.close(read_fd)
+
+
+# ---------------------------------------------------------------------------
+# Environment block
+# ---------------------------------------------------------------------------
+
+
+def test_the_environment_block_is_sorted_without_regard_to_case():
+    block = build_environment_block({"b": "2", "A": "1", "=C:": "C:\\x", "c": "\u00e9"})
+    assert block == "=C:=C:\\x\0A=1\0b=2\0c=\u00e9\0\0"
+
+
+def test_names_that_differ_only_in_case_are_one_variable():
+    assert build_environment_block({"Path": "a", "PATH": "b"}) == "PATH=b\0\0"
+
+
+def test_an_empty_environment_is_still_terminated():
+    assert build_environment_block({}) == "\0"
+
+
+@pytest.mark.parametrize("env", [{"": "x"}, {"A=B": "x"}, {"A\0": "x"}, {"A": "x\0y"}])
+def test_an_invalid_environment_is_refused(env):
+    with pytest.raises(ValueError):
+        build_environment_block(env)
 
 
 # ---------------------------------------------------------------------------
@@ -175,24 +258,13 @@ def test_windows_discovery_ignores_empty_environment_entries(monkeypatch):
 
 
 def test_create_transport_picks_the_windows_pipe_on_win32(monkeypatch):
-    """_pipe_win refuses to import off-Windows, so stub the module."""
-    import types
-
     import tellurium.cdp.transport as transport_pkg
+    from tellurium.cdp.transport._pipe_win import PipeWindowsTransport
 
-    stub = types.ModuleType("tellurium.cdp.transport._pipe_win")
-
-    class PipeWindowsTransport:
-        def __init__(self, read_fd, write_fd):
-            self.read_fd, self.write_fd = read_fd, write_fd
-
-    stub.PipeWindowsTransport = PipeWindowsTransport
-    monkeypatch.setitem(sys.modules, "tellurium.cdp.transport._pipe_win", stub)
     monkeypatch.setattr(transport_pkg.sys, "platform", "win32")
-
     transport = transport_pkg.create_transport(7, 8)
     assert isinstance(transport, PipeWindowsTransport)
-    assert (transport.read_fd, transport.write_fd) == (7, 8)
+    assert (transport._read_fd, transport._write_fd) == (7, 8)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="checks the POSIX side of the dispatch")
@@ -203,17 +275,13 @@ def test_create_transport_picks_the_posix_pipe_elsewhere():
     assert isinstance(create_transport(7, 8), PipePosixTransport)
 
 
-def test_windows_transport_exposes_start():
-    """browser.py awaits transport.start() on every platform."""
-    source = (
-        Path(launcher.__file__).parent.parent.joinpath("cdp/transport/_pipe_win.py").read_text()
-    )
-    assert "async def start(self)" in source
-
-
 def test_moved_spawn_functions_keep_their_old_import_path():
+    from tellurium.browser.launcher import build_crt_inherit_block as old_block
     from tellurium.browser.launcher import launch_chrome as old_dispatch
     from tellurium.browser.launcher import launch_chrome_posix as old_posix
+    from tellurium.browser.launcher import launch_chrome_windows as old_windows
 
     assert old_dispatch is process.launch_chrome
     assert old_posix is process.launch_chrome_posix
+    assert old_windows is launch_windows.launch_chrome_windows
+    assert old_block is build_crt_inherit_block

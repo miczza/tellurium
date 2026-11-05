@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import time
 
 import pytest
@@ -252,6 +253,60 @@ async def test_seed_used_is_the_seed_something_applies(browser, stealth, expecte
         if plan.stealth_engine is not None:
             plan.stealth_engine.close()
     assert plan.seed_used == expected
+
+
+def _no_tz_database(monkeypatch):
+    """Python without a time zone database, as on Windows without ``tzdata``."""
+    import zoneinfo
+
+    def missing(key):
+        raise zoneinfo.ZoneInfoNotFoundError(f"No time zone found with key {key}")
+
+    monkeypatch.setattr(zoneinfo, "ZoneInfo", missing)
+
+
+@pytest.mark.parametrize("icu, refused", [(False, True), (True, False), (None, False)])
+def test_without_a_database_the_system_icu_decides(monkeypatch, icu, refused):
+    """ICU refuses (False), knows it (True), or is not there to ask (None)."""
+    from tellurium.browser import launch_plan
+
+    _no_tz_database(monkeypatch)
+    asked: list[str] = []
+    monkeypatch.setattr(launch_plan, "_icu_knows_timezone", lambda tz: asked.append(tz) or icu)
+    if refused:
+        with pytest.raises(ValueError, match="timezone"):
+            launch_plan.check_timezone("Mars/Olympus_Mons")
+    else:
+        launch_plan.check_timezone("Mars/Olympus_Mons")
+    assert asked == ["Mars/Olympus_Mons"]
+
+
+def test_with_a_database_icu_is_not_asked(monkeypatch):
+    from tellurium.browser import launch_plan
+
+    monkeypatch.setattr(launch_plan, "_icu_knows_timezone", lambda tz: pytest.fail("asked ICU"))
+    launch_plan.check_timezone("Europe/Rome")
+    with pytest.raises(ValueError):
+        launch_plan.check_timezone("Europe/Romee")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="icu.dll is Windows' own ICU")
+@pytest.mark.parametrize(
+    "timezone, known",
+    [("Europe/Rome", True), ("America/Argentina/Buenos_Aires", True), ("Mars/Olympus_Mons", False)]
+    + [("Europe/Romee", False), ("../etc/passwd", False), ("", False), ("GMT+5", False)],
+)
+def test_windows_icu_knows_the_iana_zones(timezone, known):
+    from tellurium.browser.launch_plan import _icu_knows_timezone
+
+    assert _icu_knows_timezone(timezone) is known
+
+
+def test_off_windows_there_is_no_system_icu_to_ask(monkeypatch):
+    from tellurium.browser import launch_plan
+
+    monkeypatch.setattr(launch_plan.sys, "platform", "linux")
+    assert launch_plan._icu_knows_timezone("Europe/Rome") is None
 
 
 @pytest.mark.parametrize("timezone", ["Mars/Olympus_Mons", "Europe/Romee", "../etc/passwd", ""])

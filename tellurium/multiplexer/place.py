@@ -21,9 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
 import secrets
-import signal
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -289,9 +287,10 @@ class Place:
                 await asyncio.shield(relay.disconnect(code, reason))
         finally:
             if chrome is not None:
-                if kill and chrome.alive:
-                    with contextlib.suppress(ProcessLookupError):
-                        os.kill(chrome.pid, signal.SIGKILL)
+                if kill:
+                    # Through the process object, not the pid: portable, and
+                    # never a pid another process got after Chrome was reaped.
+                    chrome._proc.kill()
                 try:
                     await chrome.close()
                 finally:

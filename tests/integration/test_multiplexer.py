@@ -308,13 +308,12 @@ async def test_each_connection_gets_a_new_seed_and_the_next_proxy():
 # --------------------------------------------------------------------------- #
 
 
-@needs_posix_signals
 async def test_a_killed_chrome_closes_its_client_with_1011_and_the_place_recovers():
     async with serving() as mux:
         async with _client(mux) as ws:
             await _cdp(ws, 1, "Browser.getVersion")
             (pid,) = _pids(mux)
-            os.kill(pid, signal.SIGKILL)
+            mux._pool.places[0].chrome._proc.kill()  # SIGKILL; TerminateProcess on Windows
             code, reason = await _closed(ws)
             assert code == 1011 and "exited" in reason
         async with _client(mux) as ws:
@@ -902,7 +901,6 @@ async def until_reply(ws, id: int, seen: list[dict]) -> dict:
             return message
 
 
-@needs_posix_signals
 async def test_a_lost_chrome_takes_its_answer_to_the_proxy_with_it():
     async with FakeProxy() as proxy:
         url = f"http://{USER}:{PASSWORD}@127.0.0.1:{proxy.port}"
@@ -912,7 +910,7 @@ async def test_a_lost_chrome_takes_its_answer_to_the_proxy_with_it():
                 (place,) = mux._pool.places
                 auth = place.chrome._proc.proxy_auth
                 assert auth is not None and _own_sessions(mux)
-                os.kill(place.chrome.pid, signal.SIGKILL)
+                place.chrome._proc.kill()  # SIGKILL; TerminateProcess on Windows
                 code, _ = await _closed(ws)
                 assert code == 1011
             # The client is told first; then the Chrome is closed, with its answer.

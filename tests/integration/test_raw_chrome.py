@@ -245,12 +245,13 @@ async def test_cancelled_launch_leaves_nothing_behind(private_tempdir, monkeypat
 
 @needs_proc
 async def test_a_mute_chrome_times_out_and_is_reaped(private_tempdir, tmp_path, monkeypatch):
-    from tellurium.browser import raw_chrome
+    from tellurium.browser import process, raw_chrome
 
     script = tmp_path / "mute-chrome"
     script.write_text("#!/bin/sh\nexec sleep 60\n")
     script.chmod(0o755)
     monkeypatch.setattr(raw_chrome, "READY_TIMEOUT", 0.5)
+    monkeypatch.setattr(process, "READY_TIMEOUT", 0.5)  # the spawn waits for an answer first
     before = _children(os.getpid())
 
     with pytest.raises(asyncio.TimeoutError, match="Browser.getVersion"):
