@@ -19,7 +19,6 @@ import signal
 import struct
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -30,6 +29,7 @@ pytest.importorskip("mcp")
 from mcp import Client, StdioServerParameters  # noqa: E402
 
 from tests.integration.conftest import DOWNLOAD_BODY  # noqa: E402
+from tests.private_temp import child_temp_env, short_mkdtemp  # noqa: E402
 
 _TELLURIUM = Path(sys.executable).with_name("tellurium")
 
@@ -336,7 +336,7 @@ def _chrome_using(path: Path) -> int:
 @pytest.fixture
 def short_tmp():
     """An empty TMPDIR for the server: short, Chrome's singleton socket path has a limit."""
-    path = Path(tempfile.mkdtemp(prefix="tm", dir="/tmp"))
+    path = short_mkdtemp("tm")
     yield path
     shutil.rmtree(path, ignore_errors=True)
 
@@ -347,7 +347,7 @@ def _start(home: Path, tmp: Path) -> subprocess.Popen:
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env={**os.environ, "TELLURIUM_HOME": str(home), "TMPDIR": str(tmp)},
+        env={**child_temp_env(str(tmp)), "TELLURIUM_HOME": str(home)},
         text=True,
     )
     hello = {"protocolVersion": "2025-06-18", "capabilities": {}}

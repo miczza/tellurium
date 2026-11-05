@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import re
-import shutil
-import tempfile
 from pathlib import Path
 
 import pytest
+
+from tests.private_temp import private_temp
 
 README = Path(__file__).resolve().parents[2] / "README.md"
 SECTION = "## Using tellurium from an LLM agent"
@@ -30,11 +30,8 @@ def _block(lang: str) -> str:
 def private_tempdir(monkeypatch, tmp_path_factory):
     """Temp dirs of this test alone, so the owned download folder is checked here."""
     tmp_path_factory.getbasetemp()
-    root = Path(tempfile.mkdtemp(prefix="tlr", dir="/tmp"))
-    monkeypatch.setattr(tempfile, "tempdir", str(root))
-    monkeypatch.setenv("TMPDIR", str(root))
-    yield root
-    shutil.rmtree(root, ignore_errors=True)
+    with private_temp(monkeypatch) as root:
+        yield root
 
 
 async def test_readme_agent_example_runs(local_server, capsys):

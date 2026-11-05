@@ -17,6 +17,7 @@ import pytest
 from tellurium.session import SessionBusyError, SessionPool
 from tests.integration.session_child import child_env
 from tests.platform_marks import needs_posix_signals, needs_proc
+from tests.private_temp import FAILING_EXECUTABLE
 
 _CHILD = str(Path(__file__).with_name("session_child.py"))
 
@@ -184,7 +185,7 @@ async def test_a_failed_launch_frees_the_slot(tmp_path):
     from tellurium.browser.launcher import LaunchError
 
     with pytest.raises(LaunchError):  # a "Chrome" that exits at once
-        async with pool.open("a", executable="/bin/false"):
+        async with pool.open("a", executable=FAILING_EXECUTABLE):
             pass
     async with pool.open("b") as browser:
         assert await asyncio.wait_for(browser.main_tab.eval("1 + 1"), 30) == 2

@@ -10,8 +10,6 @@ import asyncio
 import glob
 import json
 import os
-import shutil
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -21,6 +19,7 @@ from tellurium.browser.process import BrowserProcess
 from tellurium.browser.raw_chrome import RawChrome
 from tests.integration.test_authenticated_proxy import GOOD_AUTH, PASSWORD, USER, FakeProxy
 from tests.platform_marks import needs_proc, needs_sh
+from tests.private_temp import private_temp
 
 
 @pytest.fixture(autouse=True)
@@ -28,11 +27,8 @@ def private_tempdir(monkeypatch, tmp_path_factory):
     """Profiles of this test alone (other tellurium runs share /tmp); short for
     Chrome's singleton socket path."""
     tmp_path_factory.getbasetemp()
-    root = Path(tempfile.mkdtemp(prefix="tlr", dir="/tmp"))
-    monkeypatch.setattr(tempfile, "tempdir", str(root))
-    monkeypatch.setenv("TMPDIR", str(root))
-    yield root
-    shutil.rmtree(root, ignore_errors=True)
+    with private_temp(monkeypatch) as root:
+        yield root
 
 
 def _children(pid: int) -> set[int]:

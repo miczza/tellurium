@@ -3,15 +3,14 @@
 import asyncio
 import glob
 import os
-import shutil
 import tempfile
-from pathlib import Path
 
 import pytest
 
 from tellurium import Browser
 from tellurium.browser.download import DownloadError
 from tests.integration.conftest import DOWNLOAD_BODY
+from tests.private_temp import FAILING_EXECUTABLE, private_temp
 
 pytestmark = pytest.mark.asyncio
 
@@ -21,11 +20,8 @@ def private_tempdir(monkeypatch, tmp_path_factory):
     """Temp dirs of this test alone, so leftovers are ours (short: Chrome's
     singleton socket path must fit in 108 bytes)."""
     tmp_path_factory.getbasetemp()
-    root = Path(tempfile.mkdtemp(prefix="tlr", dir="/tmp"))
-    monkeypatch.setattr(tempfile, "tempdir", str(root))
-    monkeypatch.setenv("TMPDIR", str(root))
-    yield root
-    shutil.rmtree(root, ignore_errors=True)
+    with private_temp(monkeypatch) as root:
+        yield root
 
 
 def expect_download(tab, timeout=30):
@@ -204,7 +200,7 @@ async def test_failed_launch_removes_the_owned_folder(monkeypatch):
         BrowserProcess, "make_downloads_dir", lambda self: made.append(original(self)) or made[-1]
     )
     with pytest.raises(LaunchError):
-        await Browser.launch(headless=True, executable="/bin/false")
+        await Browser.launch(headless=True, executable=FAILING_EXECUTABLE)
     assert made and not os.path.exists(made[0])
 
 

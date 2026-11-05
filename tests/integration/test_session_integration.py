@@ -37,7 +37,7 @@ async def test_double_start_raises(tmp_path):
 async def test_start_rejects_user_data_dir_kwarg(tmp_path):
     s = Session("t4", path=str(tmp_path / "s"))
     with pytest.raises(TypeError):
-        async with s.start(headless=True, user_data_dir="/tmp/x"):
+        async with s.start(headless=True, user_data_dir=str(tmp_path / "x")):
             pass
 
 

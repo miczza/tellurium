@@ -6,17 +6,17 @@ from __future__ import annotations
 import gc
 import shutil
 import tempfile
-from pathlib import Path
 
 import pytest
 
 from tellurium import Browser, LaunchError
+from tests.private_temp import FAILING_EXECUTABLE, short_mkdtemp
 
 
 @pytest.fixture
 def isolated_tmp(monkeypatch):
     # Short: Chrome's singleton socket path under TMPDIR has a length limit.
-    path = Path(tempfile.mkdtemp(prefix="ts", dir="/tmp"))
+    path = short_mkdtemp("ts")
     monkeypatch.setattr(tempfile, "tempdir", str(path))
     yield path
     shutil.rmtree(path, ignore_errors=True)
@@ -33,7 +33,7 @@ async def test_stealth_launch_and_close_leave_no_temp_dirs(isolated_tmp):
 
 async def test_failed_stealth_launch_leaves_no_temp_dirs(isolated_tmp):
     with pytest.raises(LaunchError):
-        await Browser.launch(headless=True, stealth=True, executable="/bin/false")
+        await Browser.launch(headless=True, stealth=True, executable=FAILING_EXECUTABLE)
     gc.collect()
     assert list(isolated_tmp.iterdir()) == []
 
