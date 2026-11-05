@@ -874,6 +874,9 @@ async def test_the_relay_answers_the_proxy_and_its_session_never_reaches_the_cli
                 page = page["sessionId"]
                 for n, method in enumerate(("Page.enable", "Network.enable"), 4):
                     await ws.send(json.dumps({"id": n, "method": method, "sessionId": page}))
+                    # Chrome may answer Page.enable after a navigation sent behind it
+                    # has loaded: its load event would then never be reported.
+                    await asyncio.wait_for(until_reply(ws, n, seen), 20)
                 for n, target in enumerate(("http://site.test/", "https://secure.test/"), 6):
                     await ws.send(json.dumps({"id": n, "method": "Page.navigate",
                                               "params": {"url": target}, "sessionId": page}))  # fmt: skip
