@@ -321,6 +321,7 @@ def _cli_env(tmp_path: Path) -> dict[str, str]:
     if managed.is_dir() and not (home / ".tellurium" / "browsers").exists():
         (home / ".tellurium" / "browsers").symlink_to(managed)
     env = {**os.environ, "HOME": str(home), "TELLURIUM_CACHE_DIR": str(tmp_path / "cache")}
+    env["USERPROFILE"] = str(home)  # Windows' home
     env.pop("WAYLAND_DISPLAY", None)
     return env
 
@@ -471,9 +472,9 @@ async def test_ctrl_c_closes_the_command_with_0_on_every_system(
         url = re.search(r"http://127\.0\.0\.1:\d+", first)
         assert url, first + (await proc.stderr.read()).decode()
         port = int(url.group(0).rsplit(":", 1)[1])
-        token_path = Path(_cli_env(tmp_path)["HOME"]) / ".tellurium" / "multiplex-token"
-        await proc.stdout.readline()
-        token = token_path.read_text().strip()
+        # Where the token is: HOME on POSIX, the user profile on Windows.
+        second = (await proc.stdout.readline()).decode()
+        token = Path(second.split("token in ", 1)[1].strip()).read_text().strip()
         async with connect(
             f"ws://127.0.0.1:{port}/devtools/browser/x",
             additional_headers={"Authorization": f"Bearer {token}"},

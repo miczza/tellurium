@@ -365,6 +365,10 @@ async def test_eval_is_off_on_http_unless_allowed(tmp_path):
         assert "eval" in {t.name for t in (await client.list_tools()).tools}
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="no POSIX modes on Windows: a token readable by others is an ACL matter (README)",
+)
 async def test_loose_token_file_stops_the_server(tmp_path):
     home = tmp_path / "home"
     home.mkdir()

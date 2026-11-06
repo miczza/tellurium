@@ -262,7 +262,8 @@ async def test_four_clients_four_chromes_the_fifth_waits_then_503():
             await clients[0].close()
             ws5 = await asyncio.wait_for(fifth, 30)
             assert (await _cdp(ws5, 1, "Browser.getVersion"))["result"]
-            assert pids[0] not in _pids(mux)
+            # The first Chrome is gone (on Windows its place may still be closing it).
+            assert await _wait_until(lambda: pids[0] not in _pids(mux), 30)
 
             mux._pool.acquire_timeout = 4  # the queue time the sixth gets
             loop = asyncio.get_running_loop()
