@@ -149,8 +149,8 @@ def _good(mux: Multiplexer) -> list[tuple[str, str]]:
     return [("Host", f"127.0.0.1:{_port(mux)}"), ("Authorization", f"Bearer {mux.token}")]
 
 
-def _launches(mux: Multiplexer, slot_id: int) -> int:
-    return next(s["launches"] for s in mux.status()["slots"] if s["id"] == slot_id)
+def _launches(mux: Multiplexer) -> int:
+    return sum(s["launches"] for s in mux.status()["slots"])
 
 
 def _pids(mux: Multiplexer) -> list[int]:
@@ -258,8 +258,7 @@ async def test_four_clients_four_chromes_the_fifth_waits_then_503():
             )
             pids = _pids(mux)
             assert len(set(pids)) == 4 and mux.status()["clients"] == 4
-            first = next(slot["id"] for slot in mux.status()["slots"] if slot["pid"] == pids[0])
-            launched = _launches(mux, first)
+            launched = _launches(mux)
 
             fifth = asyncio.ensure_future(stack.enter_async_context(_client(mux)))
             assert await _wait_until(lambda: mux.status()["queue"] == 1, 5)
@@ -268,9 +267,9 @@ async def test_four_clients_four_chromes_the_fifth_waits_then_503():
             await clients[0].close()
             ws5 = await asyncio.wait_for(fifth, 30)
             assert (await _cdp(ws5, 1, "Browser.getVersion"))["result"]
-            # The fifth has a new Chrome in the first one's place (by launch count:
-            # Windows may give the new Chrome the old one's pid).
-            assert _launches(mux, first) == launched + 1
+            # The fifth has a Chrome of its own, launched for it (counted: Windows
+            # may give it the pid of the one that closed).
+            assert _launches(mux) == launched + 1
 
             mux._pool.acquire_timeout = 4  # the queue time the sixth gets
             loop = asyncio.get_running_loop()
