@@ -258,3 +258,33 @@ async def test_the_proxy_auth_is_owned_and_stopped_by_close(tmp_path):
     assert len(stopped) == 1 and not stopped[0].forwarder_stopped
     assert owner.proxy_auth is None
     assert not any(session.handlers.values())
+
+
+class _ExitedProcess:
+    def __init__(self, code: int) -> None:
+        self.returncode = code
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
+async def test_exit_code_21_says_the_profile_is_in_use():
+    """Chrome's RESULT_CODE_PROFILE_IN_USE: on Windows it is all there is, with
+    no output (the release chrome.exe writes nothing to stderr)."""
+    owner = BrowserProcess()
+    owner.process = _ExitedProcess(21)
+
+    error = await owner.launch_error(ConnectionError("pipe closed"))
+
+    assert error is not None
+    assert "exit code 21" in str(error)
+    assert "profile" in str(error).lower() and "in use" in str(error).lower()
+
+
+async def test_other_exit_codes_keep_the_plain_message():
+    owner = BrowserProcess()
+    owner.process = _ExitedProcess(1)
+
+    error = await owner.launch_error(ConnectionError("pipe closed"))
+
+    assert str(error) == "Chrome exited during launch (exit code 1)"

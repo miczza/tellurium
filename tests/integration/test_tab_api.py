@@ -146,10 +146,15 @@ async def test_maximize_and_minimize_do_not_raise(browser, local_server):
 async def test_viewport_launch_flag_sizes_the_window(local_server):
     from tellurium import Browser
 
+    """``viewport`` is the window's size (``--window-size``): what the page sees
+    as ``outerWidth``. ``innerWidth`` is that less the window's frame, none on
+    Linux, 16 px of borders on Windows."""
     browser = await Browser.launch(headless=True, viewport=(1024, 768))
     async with browser:
         tab = await browser.new_tab(f"{local_server}/basic.html")
-        assert await tab.eval("window.innerWidth") == 1024
+        sizes = await tab.eval("[outerWidth, outerHeight, innerWidth, innerHeight]")
+        assert sizes[:2] == [1024, 768], sizes
+        assert 1024 - 32 <= sizes[2] <= 1024, sizes
 
 
 async def test_mouse_profile_is_wired_through_launch(local_server):

@@ -670,6 +670,37 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Windows: the patched binary's remembered SHA256 is hashed again when the file is rewritten
   in place with its mtime put back (the record used `st_ctime`, which on Windows is the
   creation time; it now uses the file's change time).
+- Windows launch: `launch_chrome_windows` (now in `tellurium.browser.launch_windows`) gives
+  Chrome a Unicode environment block (the launch's `env`, so `TZ` and the rest reach it;
+  `TMP` and `TEMP` on a temporary folder of ours, removed at close) and standard handles
+  (`STARTF_USESTDHANDLES`): `chrome_log=` now works on Windows (with
+  `--enable-logging=stderr` added unless the arguments choose a logging mode), and without
+  it Chrome's output tail explains a failed launch as on POSIX. The child inherits only its
+  pipe ends and standard handles (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`). The process
+  wrapper closes its handle once the exit code is read.
+- Windows CDP pipe: reads and writes run on two threads of the transport instead of
+  asyncio's shared executor, where every running Chrome held a worker for good (with a
+  few browsers `asyncio.to_thread` stalled) and two large writes could interleave.
+- `BrowserProcess.spawn` waits for Chrome's first answer (`Browser.getVersion`) up to
+  `READY_TIMEOUT` (60 s) before the first command of the launch: a first start on a cold
+  machine took more than the 30 s of that command (`Browser.setDownloadBehavior got no
+  reply`).
+- Stealth on stock Chrome whose version no file tells: Chrome is started, asked
+  (`Browser.getVersion`), closed and started once more with the `--user-agent` of that
+  version, so service and shared workers and what the browser fetches itself no longer
+  show `HeadlessChrome`. The warning stays only for a product string without a version.
+- The multiplexer kills a crashed or hung Chrome through its process object
+  (`BrowserProcess.kill()`: SIGKILL, `TerminateProcess` on Windows) instead of
+  `os.kill(pid, SIGKILL)`, which does not exist on Windows and could hit a reused pid.
+- `timezone=` is refused when unknown also where Python has no time zone database
+  (Windows without `tzdata`): Windows' own ICU (`icu.dll`) is asked.
+- Chrome's version is read without `chrome --version` where that cannot work: on Windows
+  from the install layout, then the executable's `VERSIONINFO` (never by running
+  `chrome.exe`, which opens a window and does not exit); on macOS from the bundle's
+  `Info.plist` when `--version` prints nothing. `find_chrome()` reads it off the event loop.
+  The detection moved to `tellurium.browser.chrome_version.detect_chrome_version`.
+- A launch that fails because Chrome exits with code 21 (`RESULT_CODE_PROFILE_IN_USE`,
+  what Windows gives for a profile another Chrome holds) says that the profile is in use.
 - `trap_link`: a `mask-image` gradient that fades into an `oklch()`, `lab()` or `color()`
   color is no longer taken for a transparent mask (a link was flagged `transparent`),
   and one whose colors all have alpha 0 in those forms is; a color whose alpha cannot be

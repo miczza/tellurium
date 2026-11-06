@@ -150,26 +150,3 @@ async def test_a_failed_reinstall_keeps_the_previous_install(fake_download, tmp_
 
     assert good.is_file()
     assert [p.name for p in browsers.iterdir()] == ["chrome-140.0.7339.80"]
-
-
-def test_windows_version_comes_from_the_install_layout(tmp_path, monkeypatch):
-    """chrome.exe --version opens a window on Windows and prints nothing."""
-    app = tmp_path / "Application"
-    for name in ("130.0.6723.70", "131.0.6778.86", "SetupMetrics"):
-        (app / name).mkdir(parents=True)
-    (app / "chrome.exe").write_text("")
-    monkeypatch.setattr(launcher.sys, "platform", "win32")
-    monkeypatch.setattr(
-        launcher.subprocess,
-        "check_output",
-        lambda *a, **kw: pytest.fail("ran chrome.exe --version on Windows"),
-    )
-
-    assert launcher._detect_chrome_version(str(app / "chrome.exe")) == (131, 0, 6778, 86)
-
-
-def test_windows_version_is_none_without_a_version_dir(tmp_path, monkeypatch):
-    (tmp_path / "chrome.exe").write_text("")
-    monkeypatch.setattr(launcher.sys, "platform", "win32")
-
-    assert launcher._detect_chrome_version(str(tmp_path / "chrome.exe")) is None

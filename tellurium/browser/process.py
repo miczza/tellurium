@@ -17,10 +17,13 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from tellurium.browser.launcher import LaunchError, launch_chrome_windows
+from tellurium.browser.launch_windows import launch_chrome_windows
+from tellurium.browser.launcher import LaunchError
 from tellurium.browser.proxy_auth import ProxyAuth
 from tellurium.cdp.transport import create_transport
 from tellurium.cdp.transport._base import CDPTransport
@@ -35,6 +38,13 @@ _PARK_FD = 10
 
 #: How long Chrome gets to exit on its own after ``Browser.close``, before the signals.
 CLOSE_GRACE = 5.0
+
+#: Seconds a starting Chrome has to answer its first command.
+READY_TIMEOUT = 60.0
+
+#: The first command, whose answer tells Chrome is ready; an id the router never uses.
+_READY_ID = 2**31 - 4
+_GET_VERSION = json.dumps({"id": _READY_ID, "method": "Browser.getVersion"}).encode() + b"\0"
 
 #: ``Browser.close`` with an id the session router never hands out (it counts
 #: up from 0); its reply, if any, matches no pending command and is dropped.
@@ -107,13 +117,17 @@ def launch_chrome(
 ) -> tuple[Any, int, int]:
     """Launch Chrome with CDP pipes using the current platform's mechanism.
 
-    Returns ``(process, parent_write_fd, parent_read_fd)``. *output* and
-    *env* are not supported on Windows yet: Chrome keeps the parent's
-    standard handles and environment.
+    Chrome's standard output and error go to *output* (an fd, or
+    ``subprocess.DEVNULL``); *env* replaces its environment when given.
+    Returns ``(process, parent_write_fd, parent_read_fd)``.
     """
     if sys.platform == "win32":
-        return launch_chrome_windows(chrome_path, args)
+        return launch_chrome_windows(chrome_path, args, output, env)
     return launch_chrome_posix(chrome_path, args, output, env)
+
+
+#: Chrome's ``RESULT_CODE_PROFILE_IN_USE``: another Chrome holds the profile.
+_PROFILE_IN_USE = 21
 
 
 class OutputTail:
@@ -181,6 +195,8 @@ class BrowserProcess:
         self._output: OutputTail | None = None
         self._log_path: Path | None = None
         self._log_file: Any = None
+        #: Called with Chrome's product once it answers; its flags start it again (see spawn).
+        self.relaunch_with: Callable[[str], list[str] | None] | None = None
 
     async def start_forwarder(self, forwarder: Any) -> None:
         self.forwarder = forwarder
@@ -209,25 +225,46 @@ class BrowserProcess:
         chrome_log: Path | None,
         env: dict[str, str] | None = None,
     ) -> CDPTransport:
-        """Start Chrome and connect its CDP pipe; *env* is added to its environment.
+        """Start Chrome, connect its CDP pipe and wait for its first answer
+        (at most :data:`READY_TIMEOUT` seconds: a first start on a cold machine
+        is slow); *env* is added to its environment.
 
-        Chrome's output goes to *chrome_log* when given; otherwise it is
-        drained and only its tail is kept, to explain a failed launch.
-        Chrome's TMPDIR is a directory of ours, removed by :meth:`close`:
-        it leaves shared-memory files and its singleton socket there.
+        Chrome's output goes to *chrome_log* when given (on Windows with
+        ``--enable-logging=stderr``, without which a release build writes
+        nothing); otherwise it is drained and only its tail is kept, to
+        explain a failed launch. Chrome's temporary directory (``TMPDIR``,
+        on Windows ``TMP`` and ``TEMP``) is one of ours, removed by
+        :meth:`close`: it leaves shared-memory files and its singleton socket
+        there.
+
+        With :attr:`relaunch_with` set, Chrome's ``Browser.getVersion``
+        product goes to it once Chrome answers; then this Chrome is closed and
+        one more is started with the flags it returns (the same flags when it
+        returns None).
         """
+        if self.chrome_tmp is None:
+            self.chrome_tmp = tempfile.mkdtemp(prefix="tellurium_tmp_")
+        env = {**os.environ, **(env or {}), **_temp_dir_env(self.chrome_tmp)}
+        if chrome_log is not None and self._log_file is None:
+            self._log_path = Path(chrome_log)
+            self._log_file = open(self._log_path, "ab")  # noqa: SIM115 - owned, closed in close()
+        await self._start(chrome_path, flags, env)
+        product = await self._wait_ready()
+        relaunch, self.relaunch_with = self.relaunch_with, None
+        if relaunch is not None:
+            await self._stop_chrome()
+            await self._start(chrome_path, relaunch(product) or flags, env)
+            await self._wait_ready()
+        return self.transport
+
+    async def _start(self, chrome_path: str, flags: list[str], env: dict[str, str]) -> None:
         self.headless = any(f == "--headless" or f.startswith("--headless=") for f in flags)
-        self.chrome_tmp = tempfile.mkdtemp(prefix="tellurium_tmp_")
-        env = {**os.environ, **(env or {}), "TMPDIR": self.chrome_tmp}
-        output, tail_fd = subprocess.DEVNULL, None
-        if chrome_log is not None:
-            if sys.platform == "win32":
-                logger.warning("chrome_log is not supported on Windows yet; ignoring it")
-            else:
-                self._log_path = Path(chrome_log)
-                self._log_file = open(self._log_path, "ab")  # noqa: SIM115 - owned, closed in close()
-                output = self._log_file.fileno()
-        elif sys.platform != "win32":
+        if self._log_file is not None:
+            output, tail_fd = self._log_file.fileno(), None
+            if sys.platform == "win32" and not any(f.startswith("--enable-logging") for f in flags):
+                # A release chrome.exe writes nothing to its standard error without it.
+                flags = [*flags, "--enable-logging=stderr"]
+        else:
             tail_fd, output = os.pipe()
         try:
             self.process, write_fd, read_fd = launch_chrome(chrome_path, flags, output, env)
@@ -243,7 +280,52 @@ class BrowserProcess:
             if tail_fd is not None:
                 os.close(output)
         await self.transport.start()
-        return self.transport
+
+    async def _wait_ready(self) -> str:
+        """``Browser.getVersion`` on the pipe; returns its product (``Chrome/<version>``).
+
+        Nothing else comes before its reply (no domain is enabled yet); a
+        message that does is dropped.
+        """
+        transport = self.transport
+
+        async def reply() -> str:
+            await transport.send(_GET_VERSION)
+            while True:
+                message = await transport.recv()
+                if message.get("id") == _READY_ID:
+                    return str(message.get("result", {}).get("product", ""))
+
+        try:
+            return await asyncio.wait_for(reply(), READY_TIMEOUT)
+        except TimeoutError:
+            raise TimeoutError(
+                f"Browser.getVersion got no reply from Chrome within {READY_TIMEOUT:g} s"
+            ) from None
+
+    async def _stop_chrome(self) -> None:
+        """Close the running Chrome and its pipe and output, before another one
+        starts; the profile, the forwarder and the temporary folders stay."""
+        process, transport = self.process, self.transport
+        try:
+            await asyncio.wait_for(transport.send(_BROWSER_CLOSE), 1.0)
+            await asyncio.to_thread(process.wait, CLOSE_GRACE)
+        except (TimeoutError, OSError, ConnectionError, subprocess.TimeoutExpired) as exc:
+            logger.debug("Chrome did not close on request before its relaunch: %s", exc)
+        await asyncio.wait_for(asyncio.to_thread(_stop, process), 15.0)
+        await transport.close()
+        self.transport = None
+        self.process = None
+        if self._output is not None:
+            output, self._output = self._output, None
+            await asyncio.to_thread(output.join, 5.0)
+
+    def kill(self) -> None:
+        """End Chrome at once, as a crash would (SIGKILL; ``TerminateProcess`` on
+        Windows). No-op once it exited; :meth:`close` still releases the rest."""
+        process = self.process
+        if process is not None and process.poll() is None:
+            process.kill()
 
     async def launch_error(self, cause: BaseException) -> LaunchError | None:
         """Explain a launch that failed because Chrome exited on its own.
@@ -261,6 +343,8 @@ class BrowserProcess:
             return None
         output = await self._output_tail()
         message = f"Chrome exited during launch (exit code {code})"
+        if code == _PROFILE_IN_USE:
+            message += ": its profile is in use by another Chrome"
         if output.strip():
             message += f". Its last output:\n{output.strip()}"
         return LaunchError(message)
@@ -322,7 +406,7 @@ class BrowserProcess:
             path = getattr(self, attr)
             if path is not None:
                 setattr(self, attr, None)
-                removal = asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
+                removal = asyncio.to_thread(_remove_tree, path)
                 cancelled |= await _settle(f"remove {path}", removal)
         if cancelled:
             raise asyncio.CancelledError
@@ -366,6 +450,28 @@ async def _settle(what: str, awaitable: Any, timeout: float = 15.0) -> bool:
     if not step.cancelled() and step.exception() is not None:
         logger.warning("Could not %s", what, exc_info=step.exception())
     return cancelled
+
+
+def _remove_tree(path: str, attempts: int = 25, pause: float = 0.2) -> None:
+    """Remove *path* and what it holds, best effort.
+
+    On Windows a file still open in a Chrome process that is exiting cannot
+    be deleted yet: the removal is tried again for a few seconds.
+    """
+    for attempt in range(attempts):
+        shutil.rmtree(path, ignore_errors=True)
+        if not os.path.lexists(path) or sys.platform != "win32":
+            return
+        if attempt + 1 < attempts:
+            time.sleep(pause)
+    logger.debug("Could not remove %s", path)
+
+
+def _temp_dir_env(path: str) -> dict[str, str]:
+    """The variables that name the temporary directory for Chrome on this system."""
+    if sys.platform == "win32":
+        return {"TMP": path, "TEMP": path}
+    return {"TMPDIR": path}
 
 
 def _stop(process: Any) -> None:

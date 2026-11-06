@@ -6,16 +6,15 @@ import asyncio
 import logging
 import os
 import platform
-import re
 import shutil
 import stat
-import subprocess
 import sys
 import tempfile
 import zipfile
 from pathlib import Path
 
 from tellurium.browser._cache import _version_key
+from tellurium.browser.chrome_version import detect_chrome_version
 
 logger = logging.getLogger(__name__)
 
@@ -36,36 +35,6 @@ BASE_FLAGS = [
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-_VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)\.(\d+)")
-
-
-def _detect_chrome_version(executable: str) -> tuple[int, ...] | None:
-    """Run *executable* --version and return a 4-tuple of ints, or None on failure.
-
-    On Windows ``chrome.exe --version`` opens a window and prints nothing: the
-    version is the name of the directory next to the executable.
-    """
-    if sys.platform == "win32":
-        versions = [
-            tuple(int(x) for x in m.groups())
-            for entry in Path(executable).parent.glob("*")
-            if entry.is_dir() and (m := _VERSION_RE.fullmatch(entry.name))
-        ]
-        return max(versions, default=None)
-    try:
-        output = subprocess.check_output(
-            [executable, "--version"],
-            stderr=subprocess.STDOUT,
-            timeout=5,
-        )
-        text = output.decode(errors="replace")
-        m = _VERSION_RE.search(text)
-        if m:
-            return tuple(int(x) for x in m.groups())
-    except Exception:  # noqa: BLE001 - version probe is best-effort
-        pass
-    return None
 
 
 def _determine_platform() -> str:
@@ -279,7 +248,7 @@ async def find_chrome(stealth: bool = False) -> str:
     for path, kind in _find_chrome_candidates():
         logger.debug("Checking Chrome candidate: %s (%s)", path, kind)
         if stealth and kind == "chrome":
-            version = _detect_chrome_version(path)
+            version = await asyncio.to_thread(detect_chrome_version, path)
             if version and version[0] >= 137:
                 logger.warning(
                     "Branded Chrome %d.%d.%d.%d (>= 137) detected at %s. "
@@ -456,216 +425,15 @@ def build_chrome_flags(
     return flags
 
 
-# ---------------------------------------------------------------------------
-# Windows launch
-# ---------------------------------------------------------------------------
-
-# Flags from the MSVC CRT (internal/ioinit.cpp): a handle entry is only
-# adopted when FOPEN is set; FPIPE tells the CRT the handle is a pipe.
-_CRT_FOPEN = 0x01
-_CRT_FPIPE = 0x08
-
-#: ``INVALID_HANDLE_VALUE`` — the placeholder for an fd slot the child must
-#: resolve itself (the CRT falls back to ``GetStdHandle`` for fds 0/1/2).
-_INVALID_HANDLE_VALUE = -1
-
-
-def build_crt_inherit_block(handles: list[int | None], handle_size: int = 8) -> bytes:
-    """Encode the MSVC CRT ``STARTUPINFO.lpReserved2`` inheritance block.
-
-    Windows' ``CreateProcess`` can only pass three handles explicitly
-    (stdin/stdout/stderr).  Every other inherited handle reaches the child as a
-    bare HANDLE with no file-descriptor number — but Chrome's
-    ``--remote-debugging-pipe`` reads the pipe through ``_get_osfhandle(3)`` /
-    ``_get_osfhandle(4)``, i.e. it expects *CRT file descriptors* 3 and 4.
-
-    The only mechanism that populates a child's CRT fd table is the
-    undocumented block the MSVC runtime reads from ``lpReserved2`` (the same
-    one libuv/Node write, which is how Puppeteer's pipe transport works on
-    Windows).  Its layout is::
-
-        int   count;               // number of fd slots
-        char  flags[count];        // per-fd CRT flags
-        HANDLE osfhnd[count];      // per-fd OS handle (pointer-sized)
-
-    *handles* is indexed by file descriptor; ``None`` marks an unused slot.
-    *handle_size* is the child's pointer size (8 on win64, 4 on win32).
-    """
-    count = len(handles)
-    flags = bytearray()
-    raw = bytearray()
-    mask = (1 << (handle_size * 8)) - 1
-    for handle in handles:
-        if handle is None:
-            flags.append(0)
-            raw += (_INVALID_HANDLE_VALUE & mask).to_bytes(handle_size, "little")
-        else:
-            flags.append(_CRT_FOPEN | _CRT_FPIPE)
-            raw += (handle & mask).to_bytes(handle_size, "little")
-    return count.to_bytes(4, "little") + bytes(flags) + bytes(raw)
-
-
-def launch_chrome_windows(
-    chrome_path: str,
-    args: list[str],
-) -> tuple[object, int, int]:
-    """Launch Chrome with CDP pipe handles on Windows.
-
-    **Untested on real Windows** — Tellurium's CI and development machines are
-    POSIX only.  The logic is covered by unit tests that fake ``sys.platform``
-    and the Win32 entry points (``tests/unit/test_launcher_windows.py``); the
-    end-to-end behaviour against a real ``chrome.exe`` has never been observed.
-    Treat a failure here as a bug report, not as a supported path.
-
-    Mirrors :func:`~tellurium.browser.process.launch_chrome_posix`: two anonymous pipes are created, the
-    child ends are handed over as file descriptors 3 (Chrome reads) and 4
-    (Chrome writes), and the parent ends are returned as CRT file descriptors
-    ready for :class:`~tellurium.cdp.transport._pipe_win.PipeWindowsTransport`.
-
-    ``subprocess.Popen`` is bypassed on purpose: it can only pass handles for
-    fds 0-2, and ``STARTUPINFO.lpAttributeList["handle_list"]`` makes a handle
-    *inheritable* without giving it an fd number in the child.  Chrome needs
-    real CRT fds 3/4, so the process is created through ``CreateProcessW``
-    with the CRT block from :func:`build_crt_inherit_block` in ``lpReserved2``.
-
-    Returns ``(process, parent_write_fd, parent_read_fd)`` where *process* is a
-    small ``Popen``-compatible wrapper exposing ``pid``/``poll``/``wait``/
-    ``terminate``/``kill``.
-    """
-    if sys.platform != "win32":  # pragma: no cover - guarded by the dispatcher
-        raise RuntimeError("launch_chrome_windows() is Windows-only; use process.launch_chrome().")
-    import _winapi
-    import ctypes
-    import ctypes.wintypes as wintypes
-    import msvcrt
-
-    class _STARTUPINFOW(ctypes.Structure):
-        _fields_ = [
-            ("cb", wintypes.DWORD),
-            ("lpReserved", wintypes.LPWSTR),
-            ("lpDesktop", wintypes.LPWSTR),
-            ("lpTitle", wintypes.LPWSTR),
-            ("dwX", wintypes.DWORD),
-            ("dwY", wintypes.DWORD),
-            ("dwXSize", wintypes.DWORD),
-            ("dwYSize", wintypes.DWORD),
-            ("dwXCountChars", wintypes.DWORD),
-            ("dwYCountChars", wintypes.DWORD),
-            ("dwFillAttribute", wintypes.DWORD),
-            ("dwFlags", wintypes.DWORD),
-            ("wShowWindow", wintypes.WORD),
-            ("cbReserved2", wintypes.WORD),
-            ("lpReserved2", ctypes.POINTER(ctypes.c_ubyte)),
-            ("hStdInput", wintypes.HANDLE),
-            ("hStdOutput", wintypes.HANDLE),
-            ("hStdError", wintypes.HANDLE),
-        ]
-
-    class _PROCESS_INFORMATION(ctypes.Structure):
-        _fields_ = [
-            ("hProcess", wintypes.HANDLE),
-            ("hThread", wintypes.HANDLE),
-            ("dwProcessId", wintypes.DWORD),
-            ("dwThreadId", wintypes.DWORD),
-        ]
-
-    # CreatePipe() in CPython returns *inheritable* handles; only the two the
-    # child must see may stay that way, otherwise the child keeps the parent's
-    # ends open and the pipe never reports EOF.
-    chrome_read_h, parent_write_h = _winapi.CreatePipe(None, 0)
-    parent_read_h, chrome_write_h = _winapi.CreatePipe(None, 0)
-    os.set_handle_inheritable(parent_write_h, False)
-    os.set_handle_inheritable(parent_read_h, False)
-    os.set_handle_inheritable(chrome_read_h, True)
-    os.set_handle_inheritable(chrome_write_h, True)
-
-    # fds 0/1/2 are left unset: the CRT resolves them from the std handles.
-    block = build_crt_inherit_block(
-        [None, None, None, chrome_read_h, chrome_write_h],
-        handle_size=ctypes.sizeof(ctypes.c_void_p),
-    )
-    buffer = (ctypes.c_ubyte * len(block)).from_buffer_copy(block)
-
-    startup = _STARTUPINFOW()
-    startup.cb = ctypes.sizeof(_STARTUPINFOW)
-    startup.cbReserved2 = len(block)
-    startup.lpReserved2 = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte))
-
-    info = _PROCESS_INFORMATION()
-    command_line = subprocess.list2cmdline([chrome_path, *args])
-    created = ctypes.windll.kernel32.CreateProcessW(
-        ctypes.c_wchar_p(chrome_path),
-        ctypes.c_wchar_p(command_line),
-        None,  # process security attributes
-        None,  # thread security attributes
-        True,  # bInheritHandles — required for the two pipe ends
-        0,  # dwCreationFlags
-        None,  # environment (inherit)
-        None,  # current directory (inherit)
-        ctypes.byref(startup),
-        ctypes.byref(info),
-    )
-    if not created:
-        for handle in (chrome_read_h, chrome_write_h, parent_read_h, parent_write_h):
-            _winapi.CloseHandle(handle)
-        raise OSError(ctypes.GetLastError(), f"CreateProcessW failed for {chrome_path}")
-
-    _winapi.CloseHandle(info.hThread)
-    # The child owns its ends now.
-    _winapi.CloseHandle(chrome_read_h)
-    _winapi.CloseHandle(chrome_write_h)
-
-    # Hand the parent ends to the transport as CRT file descriptors; the fd
-    # now owns the handle, so it must not be closed separately.
-    parent_write_fd = msvcrt.open_osfhandle(parent_write_h, 0)
-    parent_read_fd = msvcrt.open_osfhandle(parent_read_h, os.O_RDONLY)
-
-    return _WindowsProcess(info.hProcess, info.dwProcessId), parent_write_fd, parent_read_fd
-
-
-class _WindowsProcess:
-    """Minimal ``subprocess.Popen`` stand-in around a raw process handle.
-
-    Only the surface ``Browser.close()`` uses is implemented.  **Untested on
-    real Windows.**
-    """
-
-    def __init__(self, handle: int, pid: int):
-        self._handle = handle
-        self.pid = pid
-        self.returncode: int | None = None
-
-    def poll(self) -> int | None:
-        import _winapi
-
-        if self.returncode is None:
-            if _winapi.WaitForSingleObject(self._handle, 0) == 0:  # WAIT_OBJECT_0
-                self.returncode = _winapi.GetExitCodeProcess(self._handle)
-        return self.returncode
-
-    def wait(self, timeout: float | None = None) -> int:
-        import _winapi
-
-        if self.returncode is None:
-            ms = 0xFFFFFFFF if timeout is None else int(timeout * 1000)
-            if _winapi.WaitForSingleObject(self._handle, ms) != 0:
-                raise subprocess.TimeoutExpired("chrome", timeout)
-            self.returncode = _winapi.GetExitCodeProcess(self._handle)
-        return self.returncode
-
-    def terminate(self) -> None:
-        import ctypes
-
-        if self.returncode is None:
-            ctypes.windll.kernel32.TerminateProcess(self._handle, 1)
-
-    kill = terminate
-
-
 def __getattr__(name: str):
-    """Old import paths: process spawning moved to :mod:`tellurium.browser.process`."""
+    """Old import paths: process spawning moved to :mod:`tellurium.browser.process`
+    and :mod:`tellurium.browser.launch_windows`."""
     if name in ("launch_chrome", "launch_chrome_posix"):
         from tellurium.browser import process
 
         return getattr(process, name)
+    if name in ("launch_chrome_windows", "build_crt_inherit_block"):
+        from tellurium.browser import launch_windows
+
+        return getattr(launch_windows, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

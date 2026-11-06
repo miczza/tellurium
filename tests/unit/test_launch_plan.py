@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import socket
+import sys
 import time
 
 import pytest
@@ -52,6 +54,7 @@ class SilentProxy:
     def __init__(self) -> None:
         self.accepted = 0
         self._writers: list = []
+        self._closing = False
 
     async def __aenter__(self) -> SilentProxy:
         self._server = await asyncio.start_server(self._hold, "127.0.0.1", 0)
@@ -59,14 +62,36 @@ class SilentProxy:
         return self
 
     async def __aexit__(self, *exc) -> None:
+        self._closing = True
         self._server.close()
         for writer in self._writers:
             writer.close()
-        await self._server.wait_closed()
+        # A connection accepted just before close() reaches _hold later and is
+        # closed there; until then wait_closed() waits for it.
+        await asyncio.wait_for(self._server.wait_closed(), 10)
 
     async def _hold(self, reader, writer) -> None:
         self.accepted += 1
-        self._writers.append(writer)
+        if self._closing:
+            writer.close()
+        else:
+            self._writers.append(writer)
+
+
+@pytest.mark.parametrize("spins", range(6))
+async def test_the_silent_proxy_closes_connections_it_has_not_held_yet(spins):
+    """A connection accepted just before the exit, whose handler has not run yet,
+    must not keep ``wait_closed()`` waiting for ever (it hung on Windows CI)."""
+
+    async def connect_and_leave() -> socket.socket:
+        async with SilentProxy() as proxy:
+            client = socket.create_connection(("127.0.0.1", proxy.port))
+            for _ in range(spins):
+                await asyncio.sleep(0)
+        return client
+
+    client = await asyncio.wait_for(connect_and_leave(), 5)
+    client.close()
 
 
 async def _flags(**kwargs) -> list[str]:
@@ -252,6 +277,73 @@ async def test_seed_used_is_the_seed_something_applies(browser, stealth, expecte
         if plan.stealth_engine is not None:
             plan.stealth_engine.close()
     assert plan.seed_used == expected
+
+
+def _no_tz_database(monkeypatch):
+    """Python without a time zone database, as on Windows without ``tzdata``."""
+    import zoneinfo
+
+    def missing(key):
+        raise zoneinfo.ZoneInfoNotFoundError(f"No time zone found with key {key}")
+
+    monkeypatch.setattr(zoneinfo, "ZoneInfo", missing)
+
+
+@pytest.mark.parametrize("icu, refused", [(False, True), (True, False), (None, False)])
+def test_without_a_database_the_system_icu_decides(monkeypatch, icu, refused):
+    """ICU refuses (False), knows it (True), or is not there to ask (None)."""
+    from tellurium.browser import launch_plan
+
+    _no_tz_database(monkeypatch)
+    asked: list[str] = []
+    monkeypatch.setattr(launch_plan, "_icu_knows_timezone", lambda tz: asked.append(tz) or icu)
+    if refused:
+        with pytest.raises(ValueError, match="timezone"):
+            launch_plan.check_timezone("Mars/Olympus_Mons")
+    else:
+        launch_plan.check_timezone("Mars/Olympus_Mons")
+    assert asked == ["Mars/Olympus_Mons"]
+
+
+def _tz_database(monkeypatch, *known: str):
+    """Python with a time zone database that knows *known* (Windows CI has none)."""
+    import zoneinfo
+
+    def lookup(key):
+        if key not in known:
+            raise zoneinfo.ZoneInfoNotFoundError(f"No time zone found with key {key}")
+        return key
+
+    monkeypatch.setattr(zoneinfo, "ZoneInfo", lookup)
+
+
+def test_with_a_database_icu_is_not_asked(monkeypatch):
+    from tellurium.browser import launch_plan
+
+    _tz_database(monkeypatch, "UTC", "Europe/Rome")
+    monkeypatch.setattr(launch_plan, "_icu_knows_timezone", lambda tz: pytest.fail("asked ICU"))
+    launch_plan.check_timezone("Europe/Rome")
+    with pytest.raises(ValueError):
+        launch_plan.check_timezone("Europe/Romee")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="icu.dll is Windows' own ICU")
+@pytest.mark.parametrize(
+    "timezone, known",
+    [("Europe/Rome", True), ("America/Argentina/Buenos_Aires", True), ("Mars/Olympus_Mons", False)]
+    + [("Europe/Romee", False), ("../etc/passwd", False), ("", False), ("GMT+5", False)],
+)
+def test_windows_icu_knows_the_iana_zones(timezone, known):
+    from tellurium.browser.launch_plan import _icu_knows_timezone
+
+    assert _icu_knows_timezone(timezone) is known
+
+
+def test_off_windows_there_is_no_system_icu_to_ask(monkeypatch):
+    from tellurium.browser import launch_plan
+
+    monkeypatch.setattr(launch_plan.sys, "platform", "linux")
+    assert launch_plan._icu_knows_timezone("Europe/Rome") is None
 
 
 @pytest.mark.parametrize("timezone", ["Mars/Olympus_Mons", "Europe/Romee", "../etc/passwd", ""])

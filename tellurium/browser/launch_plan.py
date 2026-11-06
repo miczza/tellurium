@@ -15,14 +15,15 @@ import dataclasses
 import functools
 import logging
 import os
+import sys
 import threading
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, TypeVar
 
+from tellurium.browser.chrome_version import detect_chrome_version
 from tellurium.browser.engine import BrowserEngine, StockEngine, select_engine
 from tellurium.browser.launcher import (
-    _detect_chrome_version,
     build_chrome_flags,
     build_load_extension_flag,
     check_chrome_version_for_extensions,
@@ -87,6 +88,8 @@ class LaunchPlan:
     #: Set as soon as it exists: whoever owns the launch closes it on failure.
     stealth_engine: Any = dataclasses.field(init=False, default=None)
     stealth_profile: Any = dataclasses.field(init=False, default=None)
+    #: Builds :attr:`flags` for a version read from the binary (or None), once composed.
+    _assemble: Any = dataclasses.field(init=False, default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.languages is not None:
@@ -178,7 +181,22 @@ class LaunchPlan:
             seeded = SimpleNamespace(seed=self.seed, timezone=timezone)
             engine_args = self.engine.build_args(seeded)
 
-        self.flags = build_chrome_flags(
+        self._assemble = functools.partial(self._assemble_flags, geo, proxy_flag, engine_args)
+        self.flags = self._assemble(found)
+        if found is None and self.stealth_engine is not None:
+            if self.stealth_engine.user_agent_flag():
+                # The flag needs the version: Chrome tells it once started, then
+                # it is started again with the flag (proc.spawn does both).
+                proc.relaunch_with = self._flags_for_product
+
+    def _assemble_flags(
+        self,
+        geo: Any,
+        proxy_flag: str | None,
+        engine_args: list[str],
+        found: tuple[int, ...] | None,
+    ) -> list[str]:
+        return build_chrome_flags(
             headless=self.headless,
             user_data_dir=self.profile_dir,
             proxy=proxy_flag,
@@ -186,9 +204,30 @@ class LaunchPlan:
             engine_args=engine_args,
         )
 
+    def _flags_for_product(self, product: str) -> list[str] | None:
+        """The command line again, with the ``--user-agent`` of the version in
+        *product* (``Browser.getVersion``, e.g. ``HeadlessChrome/157.0.7400.12``),
+        and the stealth profile moved to that version. None when *product*
+        names no version: Chrome keeps running without the flag."""
+        version = parse_product_version(product)
+        if version is None or self.stealth_engine is None or self.stealth_profile is None:
+            logger.warning(
+                "stealth: neither `%s --version` nor Browser.getVersion (%r) told Chrome's "
+                "version, so Chrome runs without --user-agent: what the browser loads itself, "
+                "robots.txt and service workers included, shows Chrome's own User-Agent",
+                self.chrome_path,
+                product,
+            )
+            return None
+        profile = self.stealth_profile.with_browser_version(version)
+        self.stealth_engine.update_profile(profile)
+        self.stealth_profile = profile
+        self.flags = self._assemble(tuple(int(part) for part in version.split(".")))
+        return self.flags
+
     async def _check_extensions(self) -> None:
         """Branded Chrome 137+ ignores ``--load-extension``: refuse it, and warn once."""
-        version = await asyncio.to_thread(_detect_chrome_version, self.chrome_path)
+        version = await asyncio.to_thread(detect_chrome_version, self.chrome_path)
         p = self.chrome_path.lower()
         is_branded_chrome = (
             "google-chrome" in p  # linux binary name
@@ -249,7 +288,7 @@ class LaunchPlan:
             profile = dataclasses.replace(profile, **manual)
         # The UA goes on the command line too: it needs the binary's version
         # now, before Browser.getVersion can tell.
-        if found := await asyncio.to_thread(_detect_chrome_version, self.chrome_path):
+        if found := await asyncio.to_thread(detect_chrome_version, self.chrome_path):
             profile = profile.with_browser_version(".".join(map(str, found)))
 
         self.stealth_profile = profile
@@ -286,14 +325,6 @@ class LaunchPlan:
             ua_flag = self.stealth_engine.user_agent_flag() if found else None
             if ua_flag:
                 flags.append(ua_flag)
-            elif self.headless and self.stealth_engine.user_agent_flag():
-                logger.warning(
-                    "stealth: `%s --version` did not tell Chrome's version, so Chrome is "
-                    "launched without --user-agent: what the browser loads itself, "
-                    "robots.txt included, leaves with Chrome's own User-Agent "
-                    "(HeadlessChrome), while the pages show the profile's",
-                    self.chrome_path,
-                )
             stealth_ext = self.stealth_engine.build_extension()
         if stealth_ext or user_exts:
             flags.append(
@@ -367,8 +398,9 @@ async def _exit_geo(proxy: str, forwarder: Any) -> Any:
 
 def check_timezone(timezone: str) -> None:
     """:class:`ValueError` unless *timezone* is an IANA name (``Europe/Rome``):
-    Chrome takes any string and reports ``Etc/Unknown``. Not checked where
-    Python has no time zone database (Windows without ``tzdata``)."""
+    Chrome takes any string and reports ``Etc/Unknown``. Where Python has no
+    time zone database (Windows without ``tzdata``) the system's ICU, the one
+    Chrome's own kind of check, answers; with neither, nothing is refused."""
     import zoneinfo
 
     try:
@@ -379,8 +411,31 @@ def check_timezone(timezone: str) -> None:
     try:
         zoneinfo.ZoneInfo("UTC")
     except zoneinfo.ZoneInfoNotFoundError:
-        return  # no database to check against
+        if _icu_knows_timezone(timezone) is not False:
+            return  # known to ICU, or nothing to check against
     raise ValueError(f"timezone {timezone!r} is not an IANA time zone, e.g. 'Europe/Rome'")
+
+
+def _icu_knows_timezone(timezone: str) -> bool | None:
+    """Whether Windows' ICU (``icu.dll``, Windows 10 1903 and later) knows
+    *timezone* as a system zone; None where there is no such ICU."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+
+    try:
+        canonical = ctypes.CDLL("icu.dll").ucal_getCanonicalTimeZoneID
+    except (OSError, AttributeError):
+        return None
+    if not timezone or "\0" in timezone:
+        return False
+    int8_p, int_p = ctypes.POINTER(ctypes.c_int8), ctypes.POINTER(ctypes.c_int)
+    canonical.argtypes = [ctypes.c_wchar_p, ctypes.c_int32, ctypes.c_wchar_p, ctypes.c_int32]
+    canonical.argtypes += [int8_p, int_p]
+    canonical.restype = ctypes.c_int32
+    result, system, status = ctypes.create_unicode_buffer(128), ctypes.c_int8(), ctypes.c_int()
+    canonical(timezone, -1, result, 128, ctypes.byref(system), ctypes.byref(status))
+    return status.value <= 0 and bool(system.value)  # U_ZERO_ERROR or a warning
 
 
 async def _webrtc_public_ip(setting: str, proxy: str | None) -> str | None:

@@ -80,3 +80,52 @@ async def test_service_and_shared_workers_have_the_page_client_hints(headless):
             assert values[key] == page[key], (name, key, values[key], page[key])
         assert values["cores"] == page["cores"], (name, "patched before its script")
     assert service_took < 5, f"the service worker started after {service_took:.1f} s"
+
+
+UA_SERVICE = b"""
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', e => e.waitUntil(clients.claim()));
+self.onmessage = e => e.ports[0].postMessage(navigator.userAgent);
+"""
+UA_SHARED = b"onconnect = e => e.ports[0].postMessage(navigator.userAgent);"
+
+
+async def test_with_no_readable_version_workers_still_show_the_page_user_agent(monkeypatch):
+    """E4: no file tells the version (``chrome --version`` mute): Chrome is
+    started once more with the ``--user-agent`` of the version it reports, so
+    service and shared workers, and what the browser fetches itself, never
+    show HeadlessChrome."""
+    from tellurium.browser import launch_plan, process
+
+    monkeypatch.setattr(launch_plan, "detect_chrome_version", lambda _path: None)
+    starts: list[list[str]] = []
+    real_launch = process.launch_chrome
+
+    def counting_launch(chrome_path, flags, *rest):
+        starts.append(list(flags))
+        return real_launch(chrome_path, flags, *rest)
+
+    monkeypatch.setattr(process, "launch_chrome", counting_launch)
+    routes = {
+        "/page": (200, {"Content-Type": "text/html"}, b"<!doctype html><p>ok"),
+        "/sw.js": (200, JS, UA_SERVICE),
+        "/shared.js": (200, JS, UA_SHARED),
+    }
+    async with SiteProxy(routes) as site:
+        browser = await Browser.launch(headless=True, stealth=True)
+        try:
+            tab = await browser.new_tab()
+            await tab.get(site.url + "/page", timeout=15)
+            page = await tab.eval("navigator.userAgent")
+            shared = await tab.eval(ASK_SHARED, timeout=10)
+            service = await tab.eval(ASK_SERVICE, timeout=20)
+        finally:
+            await browser.close()
+    assert len(starts) == 2, "one start, then one more with the flag"
+    assert not any(f.startswith("--user-agent=") for f in starts[0])
+    assert f"--user-agent={page}" in starts[1]
+    assert "HeadlessChrome" not in page
+    assert shared == page and service == page
+    (_, headers), *_ = [entry for entry in site.seen if entry[0].split(" ")[1] == "/sw.js"]
+    fetched_with = {k.lower(): v for k, v in headers.items()}["user-agent"]
+    assert fetched_with == page
