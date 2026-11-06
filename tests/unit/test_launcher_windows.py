@@ -285,3 +285,72 @@ def test_moved_spawn_functions_keep_their_old_import_path():
     assert old_posix is process.launch_chrome_posix
     assert old_windows is launch_windows.launch_chrome_windows
     assert old_block is build_crt_inherit_block
+
+
+# ---------------------------------------------------------------------------
+# WindowsProcess: one handle, polled from the loop and waited on in a thread
+# ---------------------------------------------------------------------------
+
+
+class _FakeWinapi:
+    """``_winapi`` for one process handle: refuses a closed or doubly closed one."""
+
+    def __init__(self) -> None:
+        import threading
+
+        self.exited = threading.Event()
+        self.closed: list[int] = []
+        self.terminated = 0
+
+    def _check(self, handle):
+        if handle is None or handle in self.closed:
+            raise OSError(6, "The handle is invalid")
+
+    def WaitForSingleObject(self, handle, ms):  # noqa: N802 (the API's name)
+        import time
+
+        self._check(handle)
+        if self.exited.wait(None if ms == launch_windows._INFINITE else ms / 1000):
+            if ms == launch_windows._INFINITE:
+                time.sleep(0.2)  # the waiting thread wakes up late
+            return launch_windows._WAIT_OBJECT_0
+        return 0x102  # WAIT_TIMEOUT
+
+    def GetExitCodeProcess(self, handle):  # noqa: N802
+        self._check(handle)
+        return 0
+
+    def CloseHandle(self, handle):  # noqa: N802
+        self._check(handle)
+        self.closed.append(handle)
+
+    def TerminateProcess(self, handle, code):  # noqa: N802
+        self._check(handle)
+        self.terminated += 1
+        self.exited.set()
+
+
+def test_a_poll_racing_a_wait_closes_the_handle_once(monkeypatch):
+    fake = _FakeWinapi()
+    monkeypatch.setitem(sys.modules, "_winapi", fake)
+    proc = launch_windows.WindowsProcess(handle=1234, pid=99)
+    with concurrent.futures.ThreadPoolExecutor(1) as pool:
+        waiting = pool.submit(proc.wait)
+        assert proc.poll() is None
+        fake.exited.set()
+        assert proc.poll() == 0  # the loop sees the exit first
+        assert waiting.result(5) == 0
+    assert fake.closed == [1234]
+    proc.terminate()  # after the exit: nothing to do, no closed handle touched
+    assert fake.terminated == 0
+
+
+def test_terminate_while_a_thread_waits(monkeypatch):
+    fake = _FakeWinapi()
+    monkeypatch.setitem(sys.modules, "_winapi", fake)
+    proc = launch_windows.WindowsProcess(handle=77, pid=5)
+    with concurrent.futures.ThreadPoolExecutor(1) as pool:
+        waiting = pool.submit(proc.wait, 10)
+        proc.kill()
+        assert waiting.result(5) == 0
+    assert fake.terminated == 1 and fake.closed == [77]

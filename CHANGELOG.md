@@ -656,6 +656,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Windows: the CDP pipe holds Chrome up when its reader falls behind (at most 256 KiB
+  read ahead, as on POSIX), so the multiplexer's relay slows a flood down to its slow
+  client instead of queueing it all in memory. The Chrome process handle is closed once,
+  under a lock, when a poll from the event loop races a wait in a thread.
 - `Download.cancel()` (and closing a context or the browser with a download running) no
   longer returns while the partial `<guid>.crdownload` file is still in the folder: Chrome
   reports the cancel before its file thread deletes it, so the call now waits for the file
