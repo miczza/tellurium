@@ -3,8 +3,9 @@ and a clear message when the ``multiplex`` extra or the patched Chrome is
 missing. Imports no ``websockets`` until the command runs.
 
 It prints where it listens and where the token is, never the token itself
-nor a proxy's credentials; SIGINT (Ctrl-C), SIGTERM and SIGHUP close every Chrome,
-forwarder and profile, then it exits with 0.
+nor a proxy's credentials; SIGINT (Ctrl-C), SIGTERM, SIGHUP and on Windows
+SIGBREAK (Ctrl-Break) close every Chrome, forwarder and profile, then it exits
+with 0 (:mod:`tellurium.multiplexer.stop_signals`).
 """
 
 from __future__ import annotations
@@ -13,16 +14,14 @@ import argparse
 import asyncio
 import contextlib
 import math
-import signal
 import sys
 from pathlib import Path
 from typing import Any
 
+from tellurium.multiplexer import stop_signals
+
 INSTALL_HINT = "tellurium multiplex needs websockets: pip install 'tellurium[multiplex]'"
 DEFAULT_LISTEN = "127.0.0.1:9339"
-#: Signals that stop the command cleanly: Ctrl-C, kill, and the terminal (or ssh)
-#: going away; those the platform has (Windows has no SIGHUP).
-_STOP_NAMES = ("SIGINT", "SIGTERM", "SIGHUP")
 _SHAPE = "scheme://[user:password@]host:port, or host:port"
 
 
@@ -184,7 +183,7 @@ def listen_warning(host: str) -> str | None:
 
 async def _serve(mux: Any, host: str, port: int, proxies: int) -> None:
     serving = asyncio.ensure_future(mux.serve(host, port))
-    release = _catch_stop_signals(asyncio.get_running_loop(), serving.cancel)
+    release = stop_signals.catch(asyncio.get_running_loop(), serving.cancel)
     try:
         while mux.url is None and not serving.done():
             await asyncio.wait([serving], timeout=0.05)
@@ -212,47 +211,6 @@ async def _serve(mux: Any, host: str, port: int, proxies: int) -> None:
                 await serving
         release()
     _say("stopped")
-
-
-def _stop_signals() -> tuple[int, ...]:
-    return tuple(getattr(signal, name) for name in _STOP_NAMES if hasattr(signal, name))
-
-
-def _catch_stop_signals(loop: asyncio.AbstractEventLoop, stop: Any) -> Any:
-    """Call *stop* on each stop signal, until the returned function is called;
-    after that those signals are ignored (blocked where the platform can), not
-    back to their defaults: one that comes while the process exits cannot kill
-    it nor turn its 0 into -2. Without ``loop.add_signal_handler`` (Windows) the
-    handlers are plain ``signal.signal`` ones that hand *stop* to the loop."""
-    signals = _stop_signals()
-    native: list[int] = []
-    try:
-        for signum in signals:
-            loop.add_signal_handler(signum, stop)
-            native.append(signum)
-    except (NotImplementedError, AttributeError):
-        for signum in native:
-            loop.remove_signal_handler(signum)
-        native = []
-
-        def handler(*_: Any) -> None:
-            loop.call_soon_threadsafe(stop)
-
-        for signum in signals:
-            signal.signal(signum, handler)
-
-    def release() -> None:
-        if hasattr(signal, "pthread_sigmask"):
-            signal.pthread_sigmask(signal.SIG_BLOCK, signals)
-            for signum in native:
-                loop.remove_signal_handler(signum)
-            return
-        for signum in native:
-            loop.remove_signal_handler(signum)
-        for signum in signals:
-            signal.signal(signum, signal.SIG_IGN)
-
-    return release
 
 
 def _patched_installed() -> bool:

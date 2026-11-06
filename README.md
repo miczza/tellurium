@@ -1853,6 +1853,21 @@ and shared workers and what the browser fetches itself never show
 Where Python has no time zone database (Windows without the `tzdata`
 package) `timezone` is checked against Windows' own ICU (`icu.dll`).
 
+On Windows the token files (`~/.tellurium/mcp-token`, `multiplex-token`) and
+the session files (`session.json`, `cookies.json`) get no `0600`: Windows has
+no POSIX modes, and tellurium sets no ACL on them, so they are as private as
+the folder they are in (by default the user's profile). `tellurium multiplex`
+and `tellurium mcp` stop cleanly on Ctrl-C and on Ctrl-Break, the console
+event a service manager or a script sends a process group of its own
+(`os.kill(pid, signal.CTRL_BREAK_EVENT)` on a process started with
+`CREATE_NEW_PROCESS_GROUP`); `TerminateProcess` (what `kill` and SIGTERM are
+there) ends them at once, without closing the browsers.
+
+Session names are checked against the strictest system, so a pool can move
+from one to another: names Windows reserves (`CON`, `NUL`, `COM1`, ...,
+with any extension) or ending with a dot are refused everywhere, and so is a
+name that differs from one already in the pool only by case.
+
 ### WebGPU
 
 WebGPU exposes adapter and limit information that cannot be masked from

@@ -13,7 +13,6 @@ import gc
 import logging
 import os
 import select
-import signal
 import sys
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import AbstractAsyncContextManager, nullcontext
@@ -29,6 +28,11 @@ from tellurium.mcp.config import ServerConfig
 from tellurium.mcp.results import explain, failure, success
 from tellurium.mcp.sessions import SessionPool
 from tellurium.mcp.tool import Tool
+from tellurium.multiplexer import stop_signals
+
+#: What stops the server like the client going away: kill, Ctrl-C, and on
+#: Windows Ctrl-Break (SIGTERM is TerminateProcess there).
+_STOP_NAMES = ("SIGTERM", "SIGINT", "SIGBREAK")
 
 logger = logging.getLogger(__name__)
 
@@ -178,20 +182,21 @@ async def serve(
 
 
 def run(config: ServerConfig, transport: str = "stdio") -> None:
-    """Blocking entry point of ``tellurium mcp``. SIGTERM and SIGINT close and save
-    every session like the client closing stdin does, then end the process.
+    """Blocking entry point of ``tellurium mcp``. SIGTERM, SIGINT and on Windows
+    SIGBREAK (Ctrl-Break) close and save every session like the client closing
+    stdin does, then end the process with 0.
     A configuration the server cannot start with ends it with a message."""
     logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 
     async def main() -> None:
         stop = asyncio.Event()
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            try:
-                loop.add_signal_handler(sig, stop.set)
-            except (NotImplementedError, RuntimeError):  # Windows
-                pass
-        if await serve(config, transport, stop) and transport == "stdio":
+        # On Windows Ctrl-Break too: the way to ask it to stop from outside.
+        release = stop_signals.catch(asyncio.get_running_loop(), stop.set, _STOP_NAMES)
+        try:
+            stopped = await serve(config, transport, stop)
+        finally:
+            release()  # a late signal cannot kill it while it exits
+        if stopped and transport == "stdio":
             # The stdio transport reads stdin in a worker thread that no
             # cancellation reaches, so the loop could never finish; every
             # resource the server owns (browsers, profiles, pipes) is closed.

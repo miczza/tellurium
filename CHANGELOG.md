@@ -670,6 +670,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Windows: `tellurium multiplex` and `tellurium mcp` stop cleanly, closing every browser
+  and exiting with 0, on Ctrl-C and on Ctrl-Break (`CTRL_BREAK_EVENT` to a process group of
+  their own, the way to stop them from a script or a service manager). `tellurium mcp`
+  now also ignores a stop signal that comes while it exits instead of dying with it.
 - macOS: a stale `SingletonLock` naming a PID the system gave to another process no longer
   makes a session busy: the process's command line comes from `sysctl(KERN_PROCARGS2)`
   (there is no `/proc`), and an exited process not yet reaped counts as gone.
