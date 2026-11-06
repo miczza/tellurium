@@ -134,16 +134,44 @@ async def _stdio(server: Server[Any], stop: asyncio.Event) -> None:
 
 async def _until_reader_gone(fd: int, stop: asyncio.Event) -> None:
     """Set *stop* once nobody reads the pipe *fd* writes to (a client that closed
-    only its end of our stdout): replies could never arrive. POSIX pipes report
-    that as POLLERR on the writing end, without writing anything."""
-    if not hasattr(select, "poll"):
+    only its end of our stdout): replies could never arrive. Nothing is written:
+    Linux's poll() reports POLLERR on the writing end, macOS's kqueue EV_EOF
+    (its poll() reports nothing for a pipe)."""
+    if not hasattr(select, "poll") and not hasattr(select, "kqueue"):
         return  # Windows: the next reply fails instead
-    poller = select.poll()
-    poller.register(fd, 0)  # POLLERR / POLLHUP / POLLNVAL are always reported
-    while not poller.poll(0):
-        await asyncio.sleep(READER_POLL)
+    watch = _ReaderWatch(fd)
+    try:
+        while not watch.gone():
+            await asyncio.sleep(READER_POLL)
+    finally:
+        watch.close()
     logger.warning("the client stopped reading replies: shutting down")
     stop.set()
+
+
+class _ReaderWatch:
+    """Whether the reader of the pipe *fd* writes to is gone, without waiting."""
+
+    def __init__(self, fd: int) -> None:
+        self._queue: Any = None
+        self._poller: Any = None
+        if sys.platform == "darwin" and hasattr(select, "kqueue"):
+            self._queue = select.kqueue()
+            change = select.kevent(fd, filter=select.KQ_FILTER_WRITE, flags=select.KQ_EV_ADD)
+            self._queue.control([change], 0, 0)
+        else:
+            self._poller = select.poll()
+            self._poller.register(fd, 0)  # POLLERR / POLLHUP / POLLNVAL always come
+
+    def gone(self) -> bool:
+        if self._queue is not None:
+            events = self._queue.control(None, 1, 0)
+            return any(event.flags & select.KQ_EV_EOF for event in events)
+        return bool(self._poller.poll(0))
+
+    def close(self) -> None:
+        if self._queue is not None:
+            self._queue.close()
 
 
 async def _serve_stdio(config: ServerConfig, stop: asyncio.Event) -> bool:

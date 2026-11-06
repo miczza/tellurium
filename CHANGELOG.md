@@ -670,6 +670,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- macOS: `tellurium mcp` over stdio stops (saving its sessions) when the client closes
+  only its end of the reply pipe, as on Linux: the pipe is watched with kqueue, since
+  macOS's `poll()` does not report a pipe left without a reader.
 - Windows: `tellurium multiplex` and `tellurium mcp` stop cleanly, closing every browser
   and exiting with 0, on Ctrl-C and on Ctrl-Break (`CTRL_BREAK_EVENT` to a process group of
   their own, the way to stop them from a script or a service manager). `tellurium mcp`
