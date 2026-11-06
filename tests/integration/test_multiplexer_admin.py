@@ -478,6 +478,10 @@ def test_the_warning_for_a_network_address_says_what_is_exposed():
         assert "plain text" in warning and "Host check is off" in warning
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="chmod does not make a folder unwritable on Windows (that takes an ACL)",
+)
 async def test_a_token_home_that_cannot_be_written_is_named_as_such(tmp_path):
     _cli_env(tmp_path)
     home = tmp_path / "cli-home" / ".tellurium"

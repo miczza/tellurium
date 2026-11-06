@@ -105,4 +105,8 @@ def test_launch_rejects_socks_credentials_before_spawning(monkeypatch):
 
     monkeypatch.setattr(BrowserProcess, "spawn", no_spawn)
     with pytest.raises(ValueError, match="SOCKS"):
-        asyncio.run(Browser.launch(executable="/bin/false", proxy="socks5://user:pw@10.0.0.1:1080"))
+        asyncio.run(
+            Browser.launch(
+                executable="chrome-never-started", proxy="socks5://user:pw@10.0.0.1:1080"
+            )
+        )

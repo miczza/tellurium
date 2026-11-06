@@ -1,5 +1,6 @@
 """Key presses the page really acts on: ``Enter`` submits, arrows move a
-``<select>``, ``Control+a`` selects all. Chrome needs the Windows virtual key
+``<select>``, ``Control+a`` selects all (on macOS too: see
+:data:`_EDITING_COMMANDS`). Chrome needs the Windows virtual key
 code (and the text of a printable key) to act; a key it would not know is
 refused with ``ValueError`` before any event is sent, never silently dropped.
 """
@@ -55,6 +56,11 @@ _PUNCTUATION_CODE = dict(
         strict=True,
     )
 )
+
+# Control+<letter> editing shortcuts, by virtual key code -> Chrome's editing command.
+# Sent with the key down on every system: macOS binds them to Command, so there
+# Control+a alone would select nothing; with the command it does, as elsewhere.
+_EDITING_COMMANDS = {65: "selectAll", 67: "copy", 86: "paste", 88: "cut", 90: "undo"}
 
 Send = Callable[[str, dict[str, Any]], Awaitable[Any]]
 
@@ -129,6 +135,9 @@ def event(key: Key, kind: str) -> dict[str, Any]:
     }
     if physical := dom_code(key.key):
         params["code"] = physical
+    if kind == "rawKeyDown" and key.modifiers == CONTROL and key.key.isalpha():
+        if command := _EDITING_COMMANDS.get(code):
+            params["commands"] = [command]
     return params
 
 

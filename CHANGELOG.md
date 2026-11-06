@@ -656,6 +656,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Download.cancel()` (and closing a context or the browser with a download running) no
+  longer returns while the partial `<guid>.crdownload` file is still in the folder: Chrome
+  reports the cancel before its file thread deletes it, so the call now waits for the file
+  to go, and removes it itself if it is still there when the timeout ends.
+- macOS: `Tab.keyboard_press("Control+A")` (and `+C`, `+V`, `+X`, `+Z`) selects all, copies,
+  pastes, cuts and undoes as on Linux and Windows: the key down carries Chrome's editing
+  command (`selectAll`, `copy`, `paste`, `cut`, `undo`) on every system, since macOS binds
+  them to Command.
+- Windows: switching the patched cache's `current` version no longer fails with
+  `PermissionError` once a version is current (Windows cannot rename over a directory link:
+  the old link moves aside first and comes back if the switch fails).
+- Windows: the patched binary's remembered SHA256 is hashed again when the file is rewritten
+  in place with its mtime put back (the record used `st_ctime`, which on Windows is the
+  creation time; it now uses the file's change time).
 - `trap_link`: a `mask-image` gradient that fades into an `oklch()`, `lab()` or `color()`
   color is no longer taken for a transparent mask (a link was flagged `transparent`),
   and one whose colors all have alpha 0 in those forms is; a color whose alpha cannot be

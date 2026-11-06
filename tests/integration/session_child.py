@@ -49,18 +49,23 @@ _LINKS: list[str] = []
 
 
 def child_env(path: str) -> dict[str, str]:
-    """The environment for a child holding the session at *path*: its ``TMPDIR``
-    is a hidden folder next to it (inside the test's tmp_path; a pool skips
-    it), reached through a short link in /tmp, since Chrome's singleton
-    socket path must stay short. The links go when the tests end."""
+    """The environment for a child holding the session at *path*: its temp
+    directory is a hidden folder next to it (inside the test's tmp_path; a
+    pool skips it). On POSIX it is reached through a short link in the short
+    temp root, since Chrome's singleton socket path must stay short; Windows
+    has no such socket. The links go when the tests end."""
+    from tests.private_temp import SHORT_ROOT, child_temp_env
+
     tmpdir = os.path.join(os.path.dirname(os.path.abspath(path)), ".child-tmp")
     os.makedirs(tmpdir, exist_ok=True)
-    link = os.path.join("/tmp", f"tlrc-{uuid.uuid4().hex[:10]}")
+    if sys.platform == "win32":
+        return child_temp_env(tmpdir)
+    link = os.path.join(SHORT_ROOT, f"tlrc-{uuid.uuid4().hex[:10]}")
     os.symlink(tmpdir, link)
     if not _LINKS:
         atexit.register(_unlink_all)
     _LINKS.append(link)
-    return {**os.environ, "TMPDIR": link}
+    return child_temp_env(link)
 
 
 def _unlink_all() -> None:

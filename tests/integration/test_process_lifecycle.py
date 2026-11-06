@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import glob
 import os
-import shutil
 import tempfile
 import threading
 from pathlib import Path
@@ -21,6 +20,7 @@ import pytest
 from tellurium import Browser
 from tellurium.browser.launcher import LaunchError
 from tests.platform_marks import needs_proc
+from tests.private_temp import private_temp
 
 VERBOSE = ["--enable-logging=stderr", "--v=1"]
 
@@ -43,11 +43,8 @@ def private_tempdir(monkeypatch, tmp_path_factory):
     TMPDIR too, so whatever Chrome would leave in the system temp dir shows.
     Short on purpose: Chrome's singleton socket path must fit in 108 bytes."""
     tmp_path_factory.getbasetemp()  # pytest's own temp root, fixed before the patch
-    root = Path(tempfile.mkdtemp(prefix="tlr", dir="/tmp"))
-    monkeypatch.setattr(tempfile, "tempdir", str(root))
-    monkeypatch.setenv("TMPDIR", str(root))
-    yield root
-    shutil.rmtree(root, ignore_errors=True)
+    with private_temp(monkeypatch) as root:
+        yield root
 
 
 def _temp_profiles() -> set[str]:

@@ -11,9 +11,14 @@ import pytest
 
 from tellurium.browser import _cache
 from tellurium.browser import _patched_download as dl
+from tellurium.browser._cache import BINARY_NAME
 from tellurium.browser._manifest import current_platform
+from tests.platform_marks import WINDOWS
 
 VERSION = "146.0.7680.188"
+# The installer writes no ``current`` link on Windows (a symlink there needs a
+# privilege the user may not have): the default version is the newest one.
+INSTALLED_CURRENT = None if WINDOWS else VERSION
 BINARY = b"\x7fELF fake chromium-telluride binary"
 
 
@@ -37,7 +42,7 @@ def _make_tarball(
 ) -> Path:
     manifest = manifest if manifest is not None else _manifest(binary)
     files = {
-        "chrome": binary,
+        BINARY_NAME: binary,
         "MANIFEST.json": json.dumps(manifest).encode(),
         "icudtl.dat": b"icu",
         "locales/en-US.pak": b"pak",
@@ -47,7 +52,7 @@ def _make_tarball(
         for name, data in files.items():
             info = tarfile.TarInfo(f"chromium-telluride/{name}")
             info.size = len(data)
-            info.mode = 0o755 if name == "chrome" else 0o644
+            info.mode = 0o755 if name == BINARY_NAME else 0o644
             tf.addfile(info, io.BytesIO(data))
     return path
 
@@ -63,12 +68,13 @@ def test_install_from_tarball_layout(tmp_path):
     entry = dl.install_from_tarball(tar, cache_root=root)
 
     assert entry.version == VERSION
-    assert entry.binary == root / VERSION / "chrome"
+    assert entry.binary == root / VERSION / BINARY_NAME
     assert (root / VERSION / "MANIFEST.json").is_file()
     assert (root / VERSION / "locales" / "en-US.pak").is_file()
     assert entry.binary.stat().st_mode & 0o111
-    assert _cache.current_version(root) == VERSION
-    assert entry.is_current
+    assert _cache.current_version(root) == INSTALLED_CURRENT
+    assert entry.is_current is (INSTALLED_CURRENT is not None)
+    assert _cache.installed_version(root) == VERSION
     # No staging leftovers
     leftovers = [p.name for p in root.iterdir() if p.name.startswith(".")]
     assert set(leftovers) <= {_cache.LOCK_NAME, _cache.GATE_NAME}
@@ -83,11 +89,11 @@ def test_install_from_tarball_matches_engine_resolution(tmp_path):
     dl.install_from_tarball(tar, cache_root=root)
 
     pinned = PatchedEngine(cache_root=root, chromium_version=VERSION)
-    assert pinned.resolve_binary_path() == root / VERSION / "chrome"
+    assert pinned.resolve_binary_path() == root / VERSION / BINARY_NAME
 
     with patch("tellurium.browser._update_check.check_for_update", return_value=None):
         default = PatchedEngine(cache_root=root)
-        assert default.resolve_binary_path().resolve() == (root / VERSION / "chrome").resolve()
+        assert default.resolve_binary_path().resolve() == (root / VERSION / BINARY_NAME).resolve()
 
 
 def test_install_rejects_binary_hash_mismatch(tmp_path):
@@ -121,10 +127,10 @@ def test_install_replaces_existing_version(tmp_path):
     root = tmp_path / "cache"
     old = root / VERSION
     old.mkdir(parents=True)
-    (old / "chrome").write_bytes(b"corrupt")
+    (old / BINARY_NAME).write_bytes(b"corrupt")
     (old / "stale.txt").write_text("x")
     dl.install_from_tarball(_make_tarball(tmp_path / "rel.tar.gz"), cache_root=root)
-    assert (old / "chrome").read_bytes() == BINARY
+    assert (old / BINARY_NAME).read_bytes() == BINARY
     assert not (old / "stale.txt").exists()
 
 
@@ -244,11 +250,12 @@ def test_latest_version_parses_tag(tmp_path):
         assert dl.latest_version() == VERSION
 
 
+@pytest.mark.skipif(WINDOWS, reason="the installer writes no current link on Windows")
 def test_reinstall_keeps_current_flag(tmp_path):
     tar = _make_tarball(tmp_path / "rel.tar.gz")
     root = tmp_path / "cache"
     dl.install_from_tarball(tar, cache_root=root)
-    (root / VERSION / "chrome").write_bytes(b"corrupted")
+    (root / VERSION / BINARY_NAME).write_bytes(b"corrupted")
     urlopen, _, _ = _fake_github(tmp_path, tar)
     with patch("urllib.request.urlopen", urlopen):
         entry = dl.reinstall(VERSION, cache_root=root)
@@ -300,7 +307,11 @@ def test_install_handles_hardlinks_under_the_top_dir(tmp_path):
     tar = tmp_path / "hardlink.tar.gz"
     manifest = json.dumps(_manifest()).encode()
     with tarfile.open(tar, "w:gz") as tf:
-        for name, data in (("chrome", BINARY), ("MANIFEST.json", manifest), ("libfoo.so", b"lib")):
+        for name, data in (
+            (BINARY_NAME, BINARY),
+            ("MANIFEST.json", manifest),
+            ("libfoo.so", b"lib"),
+        ):
             info = tarfile.TarInfo(f"chromium-telluride/{name}")
             info.size = len(data)
             info.mode = 0o755
@@ -403,8 +414,8 @@ def test_concurrent_installs_of_one_release_all_succeed(tmp_path):
     root = tmp_path / "cache"
     errors = _hammer(3, 8, lambda: dl.install_from_tarball(tar, cache_root=root))
     assert errors == []
-    assert (root / VERSION / "chrome").read_bytes() == BINARY
-    assert _cache.current_version(root) == VERSION
+    assert (root / VERSION / BINARY_NAME).read_bytes() == BINARY
+    assert _cache.current_version(root) == INSTALLED_CURRENT
     assert [p.name for p in root.iterdir() if p.is_dir() and p.name != "current"] == [VERSION]
 
 
@@ -414,7 +425,7 @@ def test_reinstalling_the_same_release_keeps_the_running_install(tmp_path):
     first = dl.install_from_tarball(tar, cache_root=root)
     inode = first.binary.stat().st_ino
     dl.install_from_tarball(tar, cache_root=root)
-    assert (root / VERSION / "chrome").stat().st_ino == inode  # not yanked from under Chrome
+    assert (root / VERSION / BINARY_NAME).stat().st_ino == inode  # not yanked from under Chrome
 
 
 def test_concurrent_set_current_never_fails(tmp_path):
@@ -448,9 +459,9 @@ def test_a_failed_reinstall_keeps_the_installed_version(tmp_path):
     with patch("urllib.request.urlopen", urlopen):
         with pytest.raises(dl.DownloadError, match="SHA256SUMS"):
             dl.reinstall(VERSION, cache_root=root)
-        assert (root / VERSION / "chrome").read_bytes() == BINARY  # still usable
-        assert _cache.current_version(root) == VERSION
-        (root / VERSION / "chrome").write_bytes(b"corrupted")
+        assert (root / VERSION / BINARY_NAME).read_bytes() == BINARY  # still usable
+        assert _cache.installed_version(root) == VERSION
+        (root / VERSION / BINARY_NAME).write_bytes(b"corrupted")
         entry = dl.reinstall(VERSION, cache_root=root, allow_unverified=True)
     assert entry.binary.read_bytes() == BINARY
 
@@ -471,7 +482,7 @@ def test_concurrent_forced_installs_all_return_the_entry(tmp_path):
     root = tmp_path / "cache"
     errors = _hammer(4, 6, lambda: dl.install_from_tarball(tar, cache_root=root, force=True))
     assert errors == []
-    assert (root / VERSION / "chrome").read_bytes() == BINARY
+    assert (root / VERSION / BINARY_NAME).read_bytes() == BINARY
 
 
 def test_a_failed_swap_puts_the_old_install_back(tmp_path, monkeypatch):
@@ -488,7 +499,7 @@ def test_a_failed_swap_puts_the_old_install_back(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "rename", failing_rename)
     with pytest.raises(dl.DownloadError, match="No space left"):
         dl.install_from_tarball(tar, cache_root=root, force=True)
-    assert (root / VERSION / "chrome").read_bytes() == BINARY
+    assert (root / VERSION / BINARY_NAME).read_bytes() == BINARY
     assert [b.version for b in _cache.installed_browsers(root)] == [VERSION]
     assert not list(root.glob(".old-*"))
 
@@ -498,7 +509,7 @@ def test_orphaned_old_installs_are_cleaned(tmp_path):
     root = tmp_path / "cache"
     orphan = root / f".old-{VERSION}-deadbeef"
     orphan.mkdir(parents=True)
-    (orphan / "chrome").write_bytes(b"x")
+    (orphan / BINARY_NAME).write_bytes(b"x")
     assert _cache.remove_orphans(root) == [orphan]
     assert not orphan.exists()
     orphan.mkdir()

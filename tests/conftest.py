@@ -5,13 +5,20 @@ with ``WAYLAND_DISPLAY`` set Chrome picks Wayland even when ``DISPLAY`` names
 an Xvfb. So the session starts its own Xvfb before collection (tests read
 ``DISPLAY`` to skip) and hides Wayland from every Chrome it launches.
 ``TELLURIUM_TEST_DISPLAY=host`` keeps the user's display, to watch a test.
+
+On Windows, with ``--timeout``, async tests are guarded (``tests/async_guard.py``):
+a hung one fails instead of ending the run.
 """
 
 from __future__ import annotations
 
+import inspect
 import os
 import shutil
 import subprocess
+import sys
+
+from tests.async_guard import guard_seconds, guarded
 
 _xvfb: subprocess.Popen | None = None
 
@@ -56,3 +63,14 @@ def pytest_unconfigure(config) -> None:
         _xvfb.kill()
         _xvfb.wait()
     _xvfb = None
+
+
+def pytest_collection_modifyitems(config, items) -> None:
+    if sys.platform != "win32":
+        return  # elsewhere pytest-timeout fails just the test (signal method)
+    seconds = guard_seconds(getattr(config.option, "timeout", None))
+    if seconds is None:
+        return
+    for item in items:
+        if inspect.iscoroutinefunction(getattr(item, "obj", None)):
+            item.obj = guarded(item.obj, seconds)

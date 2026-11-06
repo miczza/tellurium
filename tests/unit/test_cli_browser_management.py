@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from tellurium.browser import _cache
+from tellurium.browser._cache import BINARY_NAME
 from tellurium.browser._manifest import current_platform
 from tellurium.cli import main
 
@@ -16,7 +17,7 @@ def _install(
 ):
     d = tmp_path / version
     d.mkdir(parents=True)
-    (d / "chrome").write_bytes(binary)
+    (d / BINARY_NAME).write_bytes(binary)
     if manifest:
         data = {
             "version": "0.1.0",
@@ -115,7 +116,7 @@ def test_cli_verify_browser_reinstall_allow_unverified(tmp_path):
     entry = _cache.InstalledBrowser(
         version="146.0.7680.188",
         path=tmp_path,
-        binary=tmp_path / "chrome",
+        binary=tmp_path / BINARY_NAME,
         manifest=None,
         is_current=True,
     )
@@ -210,7 +211,7 @@ def test_cli_download_browser_allow_unverified_reaches_the_installer(tmp_path, f
     entry = _cache.InstalledBrowser(
         version="146.0.7680.188",
         path=tmp_path,
-        binary=tmp_path / "chrome",
+        binary=tmp_path / BINARY_NAME,
         manifest=None,
         is_current=True,
     )
@@ -230,4 +231,4 @@ def test_cli_prune_browsers_removes_orphaned_old_installs(tmp_path):
         with patch("sys.argv", ["tellurium", "prune-browsers"]):
             main()
     assert not orphan.exists()
-    assert (tmp_path / "146.0.7680.188" / "chrome").is_file()
+    assert (tmp_path / "146.0.7680.188" / BINARY_NAME).is_file()

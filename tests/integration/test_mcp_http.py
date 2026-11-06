@@ -33,7 +33,9 @@ from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 from mcp.shared._httpx_utils import create_mcp_http_client  # noqa: E402
 from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS  # noqa: E402
 
-_TELLURIUM = Path(sys.executable).with_name("tellurium")
+from tests.tellurium_cli import TELLURIUM_CLI  # noqa: E402
+
+_TELLURIUM = TELLURIUM_CLI
 _LISTENING = re.compile(r"listening on (http://\S+/mcp)")
 _INIT = {
     "jsonrpc": "2.0",

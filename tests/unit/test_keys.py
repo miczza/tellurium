@@ -200,3 +200,27 @@ def test_a_newline_is_typed_as_enter():
     assert up["key"] == "Enter" and up["type"] == "keyUp" and "text" not in up
     assert keys.typing_event("\n", "rawKeyDown") == down
     assert keys.typing_event("\n", "char") is None
+
+
+@pytest.mark.parametrize(
+    "combo, command",
+    [
+        ("Control+a", "selectAll"),
+        ("Control+A", "selectAll"),
+        ("Control+c", "copy"),
+        ("Control+v", "paste"),
+        ("Control+x", "cut"),
+        ("Control+z", "undo"),
+    ],
+)
+async def test_control_editing_shortcuts_carry_their_command_on_key_down(combo, command):
+    """macOS binds editing to Command: without the command, Control+a there
+    would select nothing. Sent on every system, so all behave alike."""
+    events = await _sent(combo)
+    assert events[0]["type"] == "rawKeyDown" and events[0]["commands"] == [command]
+    assert all("commands" not in e for e in events[1:])
+
+
+@pytest.mark.parametrize("combo", ["a", "Control+b", "Control+Shift+z", "Alt+a", "Meta+a"])
+async def test_other_keys_carry_no_command(combo):
+    assert all("commands" not in e for e in await _sent(combo))

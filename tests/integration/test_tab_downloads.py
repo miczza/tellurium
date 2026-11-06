@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import re
-import shutil
-import tempfile
-from pathlib import Path
 
 import pytest
 
 from tellurium import Download, DownloadError, NavigationError
 from tests.integration.conftest import DOWNLOAD_BODY
+from tests.private_temp import private_temp
 
 _INNER_CLICK = "document.getElementById('frame').contentDocument.getElementById('inner').click()"
 
@@ -20,11 +18,8 @@ _INNER_CLICK = "document.getElementById('frame').contentDocument.getElementById(
 def private_tempdir(monkeypatch, tmp_path_factory):
     """Temp dirs of this test alone (short: Chrome's singleton socket path must fit)."""
     tmp_path_factory.getbasetemp()  # pytest's own base stays where it was
-    root = Path(tempfile.mkdtemp(prefix="tlr", dir="/tmp"))
-    monkeypatch.setattr(tempfile, "tempdir", str(root))
-    monkeypatch.setenv("TMPDIR", str(root))
-    yield root
-    shutil.rmtree(root, ignore_errors=True)
+    with private_temp(monkeypatch) as root:
+        yield root
 
 
 async def test_download_started_by_a_ref_click(browser, local_server, tmp_path):

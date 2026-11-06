@@ -317,7 +317,7 @@ def test_merge_kwargs_used_when_no_hints():
 
 def test_merge_rejects_user_data_dir():
     with pytest.raises(TypeError):
-        _merge_launch_params({"user_data_dir": "/tmp"}, {})
+        _merge_launch_params({"user_data_dir": "profile"}, {})
 
 
 def test_merge_rejects_seed():

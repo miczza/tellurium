@@ -632,6 +632,7 @@ await tab.mouse_click(100, 200, human=True) # Human trajectory + click
 await tab.keyboard_press("Enter")             # submits the focused form
 await tab.keyboard_press("Tab")
 await tab.keyboard_press("Control+a")         # combos: Control, Alt, Shift, Meta
+# Control+a/c/v/x/z select all, copy, paste, cut and undo on every system, macOS too
 await tab.keyboard_press("Shift+1")           # types "!": Shift follows the US layout
 await tab.keyboard_press("ArrowDown", human=True)  # holds the key 40-110 ms
 # An unknown key or modifier ("Entr", "Hyper+a") raises ValueError, sending nothing

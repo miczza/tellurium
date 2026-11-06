@@ -8,7 +8,6 @@ import os
 import shutil
 import ssl
 import subprocess
-import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -17,6 +16,7 @@ import pytest
 from tellurium import Browser
 from tellurium.browser.navigation import NavigationError
 from tellurium.browser.proxy_auth import ProxyAuth
+from tests.private_temp import point_temp_at, short_mkdtemp
 
 pytestmark = pytest.mark.asyncio
 
@@ -421,9 +421,8 @@ def _chromes_under(root: Path) -> set[int]:
 async def test_a_launch_cancelled_with_fetch_on_leaves_nothing_behind(monkeypatch):
     """Cancelled while Chrome answers the proxy: no ProxyAuth task, no
     forwarder port, no Chrome process and no temporary profile left."""
-    root = Path(tempfile.mkdtemp(prefix="tlr", dir="/tmp"))  # short: Chrome's socket path
-    monkeypatch.setattr(tempfile, "tempdir", str(root))
-    monkeypatch.setenv("TMPDIR", str(root))
+    root = short_mkdtemp()  # short: Chrome's socket path
+    point_temp_at(monkeypatch, root)
     started = asyncio.Event()
     seen: dict = {}
     real_start = ProxyAuth.start
