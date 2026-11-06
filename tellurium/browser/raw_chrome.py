@@ -80,7 +80,8 @@ class RawChrome:
         *geoip* (with a *proxy*) takes the time zone and languages from the
         proxy's exit IP, best effort; *timezone* and *languages* win over it.
         The time zone reaches Chrome as ``TZ`` in its environment (and as
-        ``--fingerprint-timezone`` with the patched engine).
+        ``--fingerprint-timezone`` with the patched engine); stock Chrome on
+        Windows ignores ``TZ`` and keeps the system's.
         The launch is all-or-nothing: on failure or cancellation Chrome, the
         forwarder and the profile are released, and a Chrome that exits on its
         own raises :class:`~tellurium.browser.launcher.LaunchError` with its

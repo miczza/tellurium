@@ -76,9 +76,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   credential forwarder, WebRTC UDP only through the proxy, time zone and languages of the
   proxy's exit IP with `geoip=True`), with no stealth engine, extension or User-Agent
   rewrite, and always a temporary profile. The time zone (`timezone=` or the exit IP's)
-  reaches Chrome as `TZ` in its environment, so stock Chrome gets it too. `seed` is `None`
+  reaches Chrome as `TZ` in its environment, so stock Chrome gets it too (not on Windows,
+  where Chrome takes the system's time zone and ignores `TZ`). `seed` is `None`
   with stock Chrome, which takes none; a Chrome silent on the pipe for `READY_TIMEOUT`
-  (30 s) raises `asyncio.TimeoutError`. Launch waits for `Browser.getVersion` on the
+  (60 s) raises `asyncio.TimeoutError`. Launch waits for `Browser.getVersion` on the
   pipe; a failure or cancellation at any step releases Chrome, forwarder and profile.
 - `Slots.slot(timeout=None)` (the browser slots of `SessionPool`): *timeout* limits only the
   wait for a slot; past it `TimeoutError`, with no slot taken and no place left in the queue.
@@ -709,7 +710,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   in place with its mtime put back (the record used `st_ctime`, which on Windows is the
   creation time; it now uses the file's change time).
 - Windows launch: `launch_chrome_windows` (now in `tellurium.browser.launch_windows`) gives
-  Chrome a Unicode environment block (the launch's `env`, so `TZ` and the rest reach it;
+  Chrome a Unicode environment block (the launch's `env` reaches it, though Chrome there
+  reads no time zone from `TZ`;
   `TMP` and `TEMP` on a temporary folder of ours, removed at close) and standard handles
   (`STARTF_USESTDHANDLES`): `chrome_log=` now works on Windows (with
   `--enable-logging=stderr` added unless the arguments choose a logging mode), and without

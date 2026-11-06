@@ -245,7 +245,9 @@ async def test_a_message_without_an_integer_id_closes_with_1007(message):
 
 
 async def test_four_clients_four_chromes_the_fifth_waits_then_503():
-    async with serving(4, acquire_timeout=4) as mux:
+    # The fifth waits for the first Chrome to close and a new one to start: on a
+    # slow runner (macOS, Windows) that takes more than a few seconds.
+    async with serving(4, acquire_timeout=60) as mux:
         async with contextlib.AsyncExitStack() as stack:
             clients = await asyncio.gather(
                 *(stack.enter_async_context(_client(mux)) for _ in range(4))
@@ -262,6 +264,7 @@ async def test_four_clients_four_chromes_the_fifth_waits_then_503():
             assert (await _cdp(ws5, 1, "Browser.getVersion"))["result"]
             assert pids[0] not in _pids(mux)
 
+            mux._pool.acquire_timeout = 4  # the queue time the sixth gets
             loop = asyncio.get_running_loop()
             start = loop.time()
             with pytest.raises(InvalidStatus) as refused:

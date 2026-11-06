@@ -1863,6 +1863,11 @@ event a service manager or a script sends a process group of its own
 `CREATE_NEW_PROCESS_GROUP`); `TerminateProcess` (what `kill` and SIGTERM are
 there) ends them at once, without closing the browsers.
 
+`RawChrome` and `tellurium multiplex` give stock Chrome its time zone
+(`timezone=` or the proxy's) through `TZ`, which Chrome on Windows ignores: there
+pages see the system's time zone (the patched binary, Linux-only for now, gets
+`--fingerprint-timezone`; `Browser.launch` with stealth sets it over CDP).
+
 Session names are checked against the strictest system, so a pool can move
 from one to another: names Windows reserves (`CON`, `NUL`, `COM1`, ...,
 with any extension) or ending with a dot are refused everywhere, and so is a
