@@ -321,7 +321,6 @@ def _cli_env(tmp_path: Path) -> dict[str, str]:
     if managed.is_dir() and not (home / ".tellurium" / "browsers").exists():
         (home / ".tellurium" / "browsers").symlink_to(managed)
     env = {**os.environ, "HOME": str(home), "TELLURIUM_CACHE_DIR": str(tmp_path / "cache")}
-    env["USERPROFILE"] = str(home)  # Windows' home
     env.pop("WAYLAND_DISPLAY", None)
     return env
 
@@ -475,11 +474,16 @@ async def test_ctrl_c_closes_the_command_with_0_on_every_system(
         # Where the token is: HOME on POSIX, the user profile on Windows.
         second = (await proc.stdout.readline()).decode()
         token = Path(second.split("token in ", 1)[1].strip()).read_text().strip()
-        async with connect(
-            f"ws://127.0.0.1:{port}/devtools/browser/x",
-            additional_headers={"Authorization": f"Bearer {token}"},
-            open_timeout=60,
-        ) as ws:
+        try:
+            ws = await connect(
+                f"ws://127.0.0.1:{port}/devtools/browser/x",
+                additional_headers={"Authorization": f"Bearer {token}"},
+                open_timeout=60,
+            )
+        except TimeoutError:
+            proc.kill()
+            raise AssertionError((await proc.stderr.read()).decode()) from None
+        async with ws:
             await _cdp(ws, 1, "Browser.getVersion")
             interrupt(proc)
             code, _ = await _closed(ws)
