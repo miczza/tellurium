@@ -504,6 +504,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `RawChrome.kill()` ends Chrome at once through its process object (SIGKILL,
+  `TerminateProcess` on Windows); the multiplexer uses it. `RawChrome.launch` waits for
+  Chrome's first answer once, in the process start (`READY_TIMEOUT` is now that wait's 60 s,
+  no longer a second 30 s wait after it).
+
 - Session names are portable: `SessionPool` (and the MCP server's named sessions) refuse
   on every system a name Windows cannot hold (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`,
   `LPT1`-`LPT9`, with any extension, and a name ending with `.`), and one that differs
