@@ -61,3 +61,36 @@ def test_a_report_without_tests_fails_like_a_missing_one(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "| junit-integration-windows-2025-1 | no tests |" in out
     assert "ran no tests" in out
+
+
+def test_a_collection_error_fails_the_run(tmp_path, capsys):
+    # A module that fails at import stops the shard ("Interrupted"): its other
+    # files never run, and the report holds just that one error.
+    folder = tmp_path / "junit-integration-windows-2025-1"
+    folder.mkdir()
+    (folder / "junit.xml").write_text(
+        '<?xml version="1.0" encoding="utf-8"?><testsuites>'
+        '<testsuite name="pytest" errors="1" failures="0" skipped="0" tests="1">'
+        '<testcase classname="" name="tests.integration.test_bad" time="0.000">'
+        '<error message="collection failure">ImportError</error></testcase>'
+        "</testsuite></testsuites>"
+    )
+    assert ci_results.main([str(tmp_path)], ["junit-integration-windows-2025-1"]) == 1
+    out = capsys.readouterr().out
+    assert "tests.integration.test_bad" in out
+    assert "collection" in out
+
+
+def test_an_error_in_a_test_setup_is_only_listed(tmp_path):
+    folder = tmp_path / "junit-unit-macos-15"
+    folder.mkdir()
+    (folder / "junit.xml").write_text(
+        '<?xml version="1.0" encoding="utf-8"?><testsuites>'
+        '<testsuite name="pytest" errors="1" failures="0" skipped="0" tests="2">'
+        '<testcase classname="tests.unit.test_a" name="test_ok" time="0.1"/>'
+        '<testcase classname="tests.unit.test_a" name="test_b" time="0.1">'
+        '<error message="failed on setup with &quot;boom&quot;">x</error></testcase>'
+        "</testsuite></testsuites>"
+    )
+    lines, failing = ci_results.summarize(tmp_path, ["junit-unit-macos-15"])
+    assert failing == []
