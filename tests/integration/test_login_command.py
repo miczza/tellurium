@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 
 import pytest
 
@@ -100,7 +101,8 @@ async def test_closing_the_window_saves_a_session_mcp_reopens_signed_in(
     assert json.loads((folder / "session.json").read_text())["name"] == "acct"
     saved = json.loads((folder / "cookies.json").read_text())["cookies"]
     assert any(c["name"] == "http_sso" and c["expires"] == -1 for c in saved)
-    assert (folder / "cookies.json").stat().st_mode & 0o777 == 0o600
+    if sys.platform != "win32":  # no POSIX modes there (an ACL would be needed)
+        assert (folder / "cookies.json").stat().st_mode & 0o777 == 0o600
 
     async with SessionPool(config) as pool:
         opened, _ = await pool.open("acct")

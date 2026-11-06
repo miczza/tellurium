@@ -170,17 +170,21 @@ async def test_portability_new_session_loads_metadata(tmp_path, local_server):
     import shutil
 
     os.remove(os.path.join(s_a.path, "cookies.json"))
-    default_dir = os.path.join(s_a.path, "chrome", "Default")
-    for entry in os.listdir(default_dir):
-        if entry.startswith("Cookies"):
-            target = os.path.join(default_dir, entry)
-            if os.path.isdir(target):
-                shutil.rmtree(target, ignore_errors=True)
-            else:
-                try:
+    # Chrome keeps them in Default/ or, as on Windows, in Default/Network/.
+    removed = 0
+    for folder in ("Default", os.path.join("Default", "Network")):
+        default_dir = os.path.join(s_a.path, "chrome", folder)
+        if not os.path.isdir(default_dir):
+            continue
+        for entry in os.listdir(default_dir):
+            if entry.startswith("Cookies"):
+                target = os.path.join(default_dir, entry)
+                if os.path.isdir(target):
+                    shutil.rmtree(target)
+                else:
                     os.remove(target)
-                except OSError:
-                    pass
+                removed += 1
+    assert removed  # else the validator passes on the old cookies
 
     s_b = Session("port-test", path=str(tmp_path / "s"))
     # script B never calls .add() -- relies entirely on file contents

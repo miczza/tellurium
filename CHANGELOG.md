@@ -673,6 +673,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - macOS: a stale `SingletonLock` naming a PID the system gave to another process no longer
   makes a session busy: the process's command line comes from `sysctl(KERN_PROCARGS2)`
   (there is no `/proc`), and an exited process not yet reaped counts as gone.
+- Windows: a session start (and `SessionPool.delete()`) waits for the Chrome of a killed
+  holder to let go of the profile, as on Linux and macOS: Chrome's `lockfile`, held while
+  it runs, is the mark there (there is no `SingletonLock` symlink).
 - Windows: concurrent writes of `session.json` and `cookies.json` no longer fail with
   `PermissionError` while another rename lands; reads try again for a moment too.
 - Windows: the CDP pipe holds Chrome up when its reader falls behind (at most 256 KiB

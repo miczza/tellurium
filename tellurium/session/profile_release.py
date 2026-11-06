@@ -4,8 +4,10 @@ When the process holding a session dies (``kill -9`` too) the OS frees the
 session lock at once, but its Chrome only notices the closed CDP pipe and exits
 a moment later (~0.1 s); a Chrome started on the profile meanwhile fails with
 "profile in use". Chrome marks a profile it holds with ``SingletonLock``, a
-symlink to ``<hostname>-<pid>`` (Linux and macOS). :func:`wait` polls that link until the
-Chrome is gone, or reports it if it stays.
+symlink to ``<hostname>-<pid>`` (Linux and macOS), or on Windows with
+``lockfile``, open for writing and shared for reading only while it runs.
+:func:`wait` polls that mark until the Chrome is gone, or reports it if it
+stays.
 """
 
 from __future__ import annotations
@@ -36,9 +38,10 @@ async def wait(chrome_dir: str, timeout: float = TIMEOUT) -> int | None:
 
 def _holder(chrome_dir: str) -> int | None:
     """The PID of a live Chrome of this host on *chrome_dir*, from its
-    ``SingletonLock``; ``None`` if there is none (or it is not ours to judge)."""
+    ``SingletonLock``; ``None`` if there is none (or it is not ours to judge).
+    On Windows ``0`` (the PID is not told) while its ``lockfile`` is held."""
     if sys.platform == "win32":
-        return None  # no SingletonLock symlink there: Chrome judges by itself
+        return _windows_holder(chrome_dir)
     try:
         target = os.readlink(os.path.join(chrome_dir, "SingletonLock"))
     except OSError:
@@ -50,6 +53,24 @@ def _holder(chrome_dir: str) -> int | None:
     if not _alive(pid):
         return None
     return pid if _runs_on(pid, chrome_dir) else None
+
+
+def _windows_holder(chrome_dir: str) -> int | None:
+    """``0`` while a Chrome holds *chrome_dir*'s ``lockfile``: opening it for
+    writing is refused as long as Chrome has it open (it shares reading only).
+    A handle of ours is closed at once: a Chrome starting meanwhile would find
+    the profile in use, but nobody starts one on a profile whose session lock
+    the caller holds."""
+    try:
+        fd = os.open(os.path.join(chrome_dir, "lockfile"), os.O_WRONLY)
+    except FileNotFoundError:
+        return None
+    except PermissionError:
+        return 0  # held (or deleted on close right now: the next poll tells)
+    except OSError:
+        return None
+    os.close(fd)
+    return None
 
 
 def _alive(pid: int) -> bool:

@@ -27,7 +27,9 @@ async def _hold(path: str) -> asyncio.subprocess.Process:
         env=child_env(path),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
-        start_new_session=True,  # its Chrome too can be killed as a group
+        # Its Chrome too can be killed as a group (POSIX; on Windows that
+        # Chrome exits by itself once the holder's end of its pipe is gone).
+        start_new_session=sys.platform != "win32",
     )
     try:
         line = await asyncio.wait_for(proc.stdout.readline(), 60)
@@ -41,8 +43,11 @@ async def _hold(path: str) -> asyncio.subprocess.Process:
 
 def _kill_group(proc: asyncio.subprocess.Process) -> None:
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
+        if sys.platform == "win32":
+            proc.kill()  # TerminateProcess: no group to kill
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):  # gone already
         pass
 
 
@@ -57,7 +62,7 @@ async def test_second_process_gets_busy_error_then_takes_the_lock_of_a_killed_on
         assert info.value.pid == holder.pid
         assert SessionLock.holder(path) == holder.pid
     finally:
-        os.kill(holder.pid, signal.SIGKILL)  # the Python process only: no cleanup runs
+        holder.kill()  # the Python process only (SIGKILL, TerminateProcess): no cleanup runs
         await holder.wait()
     try:
         assert SessionLock.holder(path) is None

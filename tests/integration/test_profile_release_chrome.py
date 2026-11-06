@@ -5,6 +5,7 @@ its profile while it lives, and let go once it has closed."""
 from __future__ import annotations
 
 import os
+import sys
 
 import pytest
 
@@ -59,3 +60,16 @@ async def test_a_headed_chrome_with_a_url_and_a_dash_dash_path_holds_its_profile
         assert await profile_release.wait(str(chrome_dir), 0.3) == pid
     finally:
         await browser.close()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Chrome's lockfile is the Windows marker")
+async def test_a_live_chrome_holds_its_profile_on_windows_too(tmp_path):
+    """Chrome on Windows holds ``lockfile`` open, shared for reading only, while
+    it runs, and Windows deletes it when Chrome lets go."""
+    chrome_dir = tmp_path / "chrome"
+    browser = await Browser.launch(user_data_dir=str(chrome_dir), headless=True)
+    try:
+        assert await profile_release.wait(str(chrome_dir), 0.3) is not None
+    finally:
+        await browser.close()
+    assert await profile_release.wait(str(chrome_dir), 10.0) is None
