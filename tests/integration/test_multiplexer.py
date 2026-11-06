@@ -673,6 +673,12 @@ async def test_a_burst_of_events_slows_a_slow_client_down_without_closing_it(mon
         peak, logs = 0, 0
         loop = asyncio.get_running_loop()
         start = loop.time()
+        # The client stops reading until the relay holds the pipe up: how fast Chrome
+        # logs (a loaded runner, Windows) must not decide whether it ever falls behind.
+        while relay.pauses == 0 and loop.time() - start < 30:
+            await asyncio.sleep(0.05)
+            if relay._client is not None:
+                peak = max(peak, relay._client.queued)
         while logs < total:
             message = json.loads(await asyncio.wait_for(ws.recv(), 30))
             if message.get("method") == "Runtime.consoleAPICalled":
