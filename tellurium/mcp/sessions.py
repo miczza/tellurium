@@ -23,12 +23,11 @@ from tellurium.mcp.config import ServerConfig
 from tellurium.mcp.limits import SessionBudget
 from tellurium.mcp.results import Reply, ToolError
 from tellurium.mcp.tool import Tool, param
-from tellurium.session import Session, SessionBusyError
+from tellurium.session import Session, SessionBusyError, names
 from tellurium.session.stealth_choice import notice
 
 logger = logging.getLogger(__name__)
 
-_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 _TEMP_PREFIX = "temp-"
 # A tab's live state is a nicety in listings: never wait long for it.
 _LIST_TIMEOUT = 2.0
@@ -153,6 +152,10 @@ class SessionPool:
         stack = AsyncExitStack()
         stack.callback(self._claims.release, name, self)  # last out: after the save and close
         try:
+            try:
+                await asyncio.to_thread(names.check_folder, str(self.config.sessions_dir), name)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from None
             session = await asyncio.to_thread(Session, name, path=path)
             warning = notice(session)
             options = {**self._launch_options(), "stealth": warning is None}
@@ -261,10 +264,11 @@ class SessionPool:
 
 
 def _check_name(name: str) -> None:
-    if not _NAME.fullmatch(name) or re.fullmatch(rf"{_TEMP_PREFIX}\d+", name):
+    if not names.is_valid(name) or re.fullmatch(rf"{_TEMP_PREFIX}\d+", name):
         raise ToolError(
             f"Invalid session name {name!r}: 1-64 letters, digits, '.', '_' or '-', "
-            f"starting with a letter or digit, not '{_TEMP_PREFIX}<n>'"
+            f"starting with a letter or digit, not ending with '.', not a Windows "
+            f"device name (CON, NUL, COM1, ...), not '{_TEMP_PREFIX}<n>'"
         )
 
 

@@ -10,9 +10,14 @@ import sys
 
 import pytest
 
-from tellurium.session import profile_release
+from tellurium.session import process_args, profile_release
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="SingletonLock is POSIX")
+#: The command line of another process: /proc on Linux, sysctl on macOS.
+needs_cmdline = pytest.mark.skipif(
+    sys.platform != "darwin" and not os.path.isdir("/proc"),
+    reason="no way to read another process's command line here",
+)
 
 
 def _link(chrome_dir, pid, host=None):
@@ -36,7 +41,7 @@ async def test_holder_on_another_host_is_left_to_chrome(tmp_path):
     assert await profile_release.wait(str(tmp_path / "chrome"), 1.0) is None
 
 
-@pytest.mark.skipif(not os.path.isdir("/proc"), reason="needs /proc")
+@needs_cmdline
 async def test_a_reused_pid_is_not_a_chrome_of_this_profile(tmp_path):
     _link(tmp_path / "chrome", os.getpid())  # alive, but not started on this profile
     assert await profile_release.wait(str(tmp_path / "chrome"), 1.0) is None
@@ -112,7 +117,7 @@ async def test_start_waits_for_the_profile_before_launching(tmp_path, monkeypatc
     assert SessionLock.holder(str(tmp_path)) is None  # released on the way out
 
 
-@pytest.mark.skipif(not os.path.isdir("/proc"), reason="needs /proc")
+@needs_cmdline
 async def test_a_chrome_seen_through_a_symlink_is_waited_for(tmp_path):
     real = tmp_path / "real"
     real.mkdir()
@@ -129,7 +134,7 @@ async def test_a_chrome_seen_through_a_symlink_is_waited_for(tmp_path):
         proc.wait()
 
 
-@pytest.mark.skipif(not os.path.isdir("/proc"), reason="needs /proc")
+@needs_cmdline
 async def test_a_chrome_on_a_sibling_profile_is_not_ours(tmp_path):
     sibling = tmp_path / "chrome2"
     sibling.mkdir()
@@ -153,20 +158,11 @@ def test_user_data_dir_is_read_from_a_rewritten_title_too():
 
 
 def _title(tmp_path, monkeypatch, cmdline: bytes):
-    """/proc/<pid>/cmdline of a process that rewrote its title to *cmdline*."""
-    real_open = open
-
-    def fake_open(path, *args, **kwargs):
-        if str(path).endswith("/cmdline"):
-            import io
-
-            return io.BytesIO(cmdline)
-        return real_open(path, *args, **kwargs)
-
-    monkeypatch.setattr("builtins.open", fake_open)
+    """The command line of a process that rewrote its title to *cmdline*."""
+    monkeypatch.setattr(process_args, "command_line", lambda pid: cmdline)
 
 
-@pytest.mark.skipif(not os.path.isdir("/proc"), reason="needs /proc")
+@needs_cmdline
 def test_a_title_with_a_url_after_the_profile_is_recognised(tmp_path, monkeypatch):
     chrome_dir = tmp_path / "chrome"
     chrome_dir.mkdir()
@@ -175,7 +171,7 @@ def test_a_title_with_a_url_after_the_profile_is_recognised(tmp_path, monkeypatc
     assert profile_release._runs_on(os.getpid(), str(chrome_dir))
 
 
-@pytest.mark.skipif(not os.path.isdir("/proc"), reason="needs /proc")
+@needs_cmdline
 def test_a_profile_path_with_a_dash_dash_is_recognised(tmp_path, monkeypatch):
     chrome_dir = tmp_path / "a --b" / "chrome"
     chrome_dir.mkdir(parents=True)
@@ -184,10 +180,60 @@ def test_a_profile_path_with_a_dash_dash_is_recognised(tmp_path, monkeypatch):
     assert not profile_release._runs_on(os.getpid(), str(tmp_path / "a"))
 
 
-@pytest.mark.skipif(not os.path.isdir("/proc"), reason="needs /proc")
+@needs_cmdline
 def test_a_prefix_of_the_profile_is_another_profile(tmp_path, monkeypatch):
     (tmp_path / "chrome").mkdir()
     (tmp_path / "chrome dir").mkdir()
     _title(tmp_path, monkeypatch, f"/opt/chrome --user-data-dir={tmp_path}/chrome dir".encode())
     assert profile_release._runs_on(os.getpid(), str(tmp_path / "chrome dir"))
     assert not profile_release._runs_on(os.getpid(), str(tmp_path / "chrome"))
+
+
+@needs_cmdline
+def test_the_command_line_of_a_live_process_is_read():
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import sys; sys.stdin.read()", "--user-data-dir=/x/y z"],
+        stdin=subprocess.PIPE,
+    )
+    try:
+        import time
+
+        deadline = time.monotonic() + 5
+        while True:  # right after exec the arguments may not be there yet
+            line = process_args.command_line(proc.pid)
+            if b"--user-data-dir" in (line or b"") or time.monotonic() > deadline:
+                break
+            time.sleep(0.02)
+        assert line.split(b"\0")[-3:] == [
+            b"import sys; sys.stdin.read()",
+            b"--user-data-dir=/x/y z",
+            b"",
+        ]
+    finally:
+        proc.stdin.close()
+        proc.wait()
+    with pytest.raises(ProcessLookupError):
+        process_args.command_line(proc.pid)
+
+
+@needs_cmdline
+def test_an_exited_process_not_reaped_has_no_arguments():
+    proc = subprocess.Popen([sys.executable, "-c", "pass", "--user-data-dir=/x"])
+    try:
+        import time
+
+        deadline = time.monotonic() + 5
+        while process_args.command_line(proc.pid) != process_args.ZOMBIE:
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+    finally:
+        proc.wait()
+
+
+def test_a_procargs2_buffer_is_parsed():
+    raw = (
+        (3).to_bytes(4, sys.byteorder)
+        + b"/Applications/Chrome.app/Contents/MacOS/Chrome\0\0\0\0"
+        + b"Chrome\0--user-data-dir=/tmp/a b\0--headless\0PATH=/usr/bin\0HOME=/x\0"
+    )
+    assert process_args.parse_procargs2(raw) == b"Chrome\0--user-data-dir=/tmp/a b\0--headless\0"

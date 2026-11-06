@@ -209,7 +209,7 @@ def test_session_names_are_safe_directory_names():
 
     for good in ("github", "work.2", "a_b-c"):
         _check_name(good)
-    for bad in ("../x", ".hidden", "", "a/b", "x" * 65, "temp-3"):
+    for bad in ("../x", ".hidden", "", "a/b", "x" * 65, "temp-3", "CON", "nul.txt", "a."):
         with pytest.raises(ToolError, match="Invalid session name"):
             _check_name(bad)
 

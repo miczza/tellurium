@@ -6,12 +6,19 @@ import json
 import os
 import sys
 import tempfile
+import time
 import warnings
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeVar
 
 from tellurium import __version__ as _tellurium_version
 from tellurium.session.errors import SessionCorruptError
+
+#: On Windows a file being renamed over, or open while another rename lands,
+#: refuses access for a moment: how long a write or a read keeps trying.
+SHARING_PATIENCE = 2.0
+_T = TypeVar("_T")
 
 _KNOWN_FIELDS = frozenset(
     {
@@ -56,7 +63,7 @@ def write_private(path: str, data: Any) -> None:
             json.dump(data, f, indent=2, sort_keys=True)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        _shared(lambda: os.replace(tmp, path))
     except BaseException:
         try:
             os.unlink(tmp)
@@ -67,6 +74,35 @@ def write_private(path: str, data: Any) -> None:
         os.chmod(path, 0o600)
 
 
+def read_bytes(path: str) -> bytes:
+    """The content of *path*, tried again for a moment on Windows while another
+    writer's rename lands on it."""
+
+    def read() -> bytes:
+        with open(path, "rb") as f:
+            return f.read()
+
+    return _shared(read)
+
+
+def read_text(path: str) -> str:
+    """:func:`read_bytes`, as UTF-8 text."""
+    return read_bytes(path).decode("utf-8")
+
+
+def _shared(call: Callable[[], _T]) -> _T:
+    """*call*, again for up to :data:`SHARING_PATIENCE` seconds while Windows
+    refuses access (a file another thread or process renames or reads)."""
+    deadline = time.monotonic() + SHARING_PATIENCE
+    while True:
+        try:
+            return call()
+        except PermissionError:
+            if sys.platform != "win32" or time.monotonic() >= deadline:
+                raise
+        time.sleep(0.005)
+
+
 def load(path: str) -> dict[str, Any] | None:
     """Read session.json at `path`. Returns None if the file does not exist.
 
@@ -74,8 +110,7 @@ def load(path: str) -> dict[str, Any] | None:
     as a JSON object. Unknown top-level fields emit a warning and are dropped.
     """
     try:
-        with open(path, encoding="utf-8") as f:
-            raw = json.load(f)
+        raw = json.loads(read_text(path))
     except FileNotFoundError:
         return None
     except (json.JSONDecodeError, OSError) as exc:

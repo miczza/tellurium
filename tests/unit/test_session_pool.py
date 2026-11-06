@@ -187,7 +187,8 @@ async def test_create_list_get_delete(tmp_path, chrome):
     await pool.delete("b")
     assert await pool.list() == ["a"]
     assert not os.path.exists(pool.path("b"))
-    assert os.listdir(tmp_path / "pool") == ["a"]  # nothing left behind
+    # Nothing left behind but the locks, beside the folders.
+    assert sorted(os.listdir(tmp_path / "pool")) == [".a.lock", ".b.lock", "a"]
     with pytest.raises(FileNotFoundError):
         await pool.delete("b")
     with pytest.raises(FileNotFoundError):
@@ -241,6 +242,114 @@ def test_max_browsers_must_be_positive(tmp_path):
 
 def test_the_directory_may_start_with_a_tilde(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # what Windows reads
     pool = SessionPool("~/sessions")
     assert pool.directory == str(tmp_path / "sessions")
     assert pool.path("a") == str(tmp_path / "sessions" / "a")
+
+
+@pytest.mark.parametrize(
+    "name", ["CON", "con", "nul", "Aux", "PRN", "COM1", "lpt9", "con.txt", "NUL.json", "a.", "a.."]
+)
+async def test_names_windows_cannot_hold_are_refused_everywhere(tmp_path, chrome, name):
+    pool = SessionPool(tmp_path)
+    with pytest.raises(ValueError):
+        pool.path(name)
+    with pytest.raises(ValueError):
+        await pool.create(name)
+
+
+@pytest.mark.parametrize("name", ["console", "com10", "nullable", "a.b", "a-.b_"])
+async def test_names_close_to_reserved_ones_are_fine(tmp_path, chrome, name):
+    pool = SessionPool(tmp_path)
+    await pool.create(name)
+    assert await pool.list() == [name]
+
+
+async def test_a_name_differing_only_by_case_is_refused(tmp_path, chrome):
+    pool = SessionPool(tmp_path)
+    await pool.create("Alice")
+    with pytest.raises(ValueError, match="Alice"):
+        await pool.create("alice")
+    with pytest.raises(ValueError, match="Alice"):
+        await pool.get("ALICE")
+    with pytest.raises(ValueError, match="Alice"):
+        async with pool.open("alice"):
+            pass
+    with pytest.raises(ValueError, match="Alice"):
+        await pool.delete("alice")
+    assert await pool.list() == ["Alice"]
+    assert chrome.started == []
+
+
+async def test_names_differing_only_by_case_share_one_lock(tmp_path, chrome):
+    pool = SessionPool(tmp_path)
+    await pool.create("Alice")
+    held = SessionLock(pool.path("Alice"))
+    held.acquire()
+    try:
+        assert SessionLock.holder(os.path.join(str(tmp_path), "alice")) == os.getpid()
+    finally:
+        held.release()
+
+
+async def test_a_name_that_is_a_symlink_is_refused_clearly(tmp_path, chrome):
+    pool = SessionPool(tmp_path / "pool")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (tmp_path / "pool").mkdir()
+    try:
+        os.symlink(elsewhere, tmp_path / "pool" / "linked", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("this system lets no unprivileged user make a symlink")
+    for call in (pool.get, pool.delete, pool.create):
+        with pytest.raises(ValueError, match="symlink"):
+            await call("linked")
+    with pytest.raises(ValueError, match="symlink"):
+        async with pool.open("linked"):
+            pass
+    assert elsewhere.exists() and chrome.started == []
+
+
+async def test_delete_renames_the_folder_with_its_lock_held(tmp_path, chrome, monkeypatch):
+    """The lock is beside the folder, so the folder moves under it (Windows
+    renames no folder with a file open inside)."""
+    pool = SessionPool(tmp_path)
+    await pool.create("a")
+    held_at_rename = []
+    real_rename = os.rename
+
+    def rename(src, dst, *args, **kwargs):
+        held_at_rename.append(SessionLock.holder(os.fspath(src)))
+        return real_rename(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "rename", rename)
+    await pool.delete("a")
+    assert held_at_rename == [os.getpid()]
+    assert not os.listdir(tmp_path) or os.listdir(tmp_path) == [".a.lock"]
+
+
+async def test_an_interrupted_delete_leaves_no_folder_behind(tmp_path, chrome, monkeypatch):
+    pool = SessionPool(tmp_path)
+    await pool.create("a")
+    await pool.create("b")
+    import shutil
+
+    real_rmtree = shutil.rmtree
+
+    def broken(path, *args, **kwargs):
+        raise OSError("interrupted")
+
+    monkeypatch.setattr(shutil, "rmtree", broken)
+    with pytest.raises(OSError):
+        await pool.delete("a")
+    monkeypatch.setattr(shutil, "rmtree", real_rmtree)
+    graves = [n for n in os.listdir(tmp_path) if ".deleted-" in n]
+    assert graves  # what an interrupted delete leaves
+    # The next delete clears it, and so does a pool opened afterwards.
+    await pool.delete("b")
+    assert [n for n in os.listdir(tmp_path) if ".deleted-" in n] == []
+    os.mkdir(tmp_path / graves[0])
+    (tmp_path / graves[0] / "cookies.json").write_text("{}")
+    assert await SessionPool(tmp_path).list() == []
+    assert [n for n in os.listdir(tmp_path) if ".deleted-" in n] == []

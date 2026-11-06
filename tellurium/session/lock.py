@@ -1,8 +1,13 @@
 """SessionLock: one process at a time on a session folder.
 
-The lock is an OS lock on ``session.lock`` inside the folder (``fcntl.flock`` on
-POSIX, ``msvcrt.locking`` on Windows), held from before Chrome starts until
-after it is closed; the file carries the holder's PID for the error message.
+The lock is an OS lock on ``.<name>.lock`` beside the folder ``<name>``
+(:func:`lock_file`; ``fcntl.flock`` on POSIX, ``msvcrt.locking`` on Windows),
+held from before Chrome starts until after it is closed; the file carries the
+holder's PID for the error message. Beside, not inside: Windows renames no
+folder with a file open in it, and a delete moves the folder away under the
+lock. The name is case-folded, so ``Alice`` and ``alice`` share one lock (one
+folder on Windows and macOS). A ``session.lock`` inside the folder, from
+earlier versions, is ignored.
 The OS drops the lock when its holder dies, ``kill -9`` included, so a
 crashed process never leaves the session locked: there is nothing stale to
 clean up. Every call is a non-blocking syscall on a file of a few bytes.
@@ -21,7 +26,6 @@ import time
 
 from tellurium.session.errors import SessionBusyError
 
-LOCK_FILE = "session.lock"
 # Windows locks byte ranges, and a locked range cannot be read by anyone
 # else: lock one byte past the PID, so the PID stays readable.
 _WINDOWS_OFFSET = 1 << 20
@@ -45,11 +49,13 @@ class SessionLock:
 
     def acquire(self) -> None:
         """Take the lock, writing our PID; :class:`SessionBusyError` if another
-        holder (another process, or another lock in this one) has it."""
+        holder (another process, or another lock in this one) has it. Creates
+        the folder's parent, not the folder."""
         if self._fd is not None:
             raise RuntimeError("session lock already held")
-        os.makedirs(self.path, exist_ok=True)
-        fd = os.open(self._file(), os.O_RDWR | os.O_CREAT, 0o600)
+        file = lock_file(self.path)
+        os.makedirs(os.path.dirname(file), exist_ok=True)
+        fd = os.open(file, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             if not _try_lock(fd):
                 raise SessionBusyError(self.path, _read_pid(fd))
@@ -90,7 +96,7 @@ class SessionLock:
         """The PID holding the lock of *path* (``0`` if unknown), ``None`` if it
         is free. Probes without creating anything."""
         try:
-            fd = os.open(os.path.join(path, LOCK_FILE), os.O_RDWR)
+            fd = os.open(lock_file(path), os.O_RDWR)
         except FileNotFoundError:
             return None
         try:
@@ -101,8 +107,13 @@ class SessionLock:
         finally:
             os.close(fd)
 
-    def _file(self) -> str:
-        return os.path.join(self.path, LOCK_FILE)
+
+def lock_file(path: str) -> str:
+    """The lock file of the session folder *path*: ``.<name>.lock`` beside it,
+    *name* case-folded."""
+    folder = os.path.normpath(os.path.abspath(path))
+    parent, name = os.path.split(folder)
+    return os.path.join(parent, f".{name.casefold()}.lock")
 
 
 def _try_lock(fd: int, shared: bool = False) -> bool:

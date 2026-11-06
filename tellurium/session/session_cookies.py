@@ -65,8 +65,7 @@ def read(folder: str) -> tuple[list[Cookie], bool]:
     next close writes a good one."""
     path = _file(folder)
     try:
-        with open(path, "rb") as f:
-            data = f.read()
+        data = storage.read_bytes(path)
     except FileNotFoundError:
         return [], False
     except OSError as exc:

@@ -237,8 +237,7 @@ def test_two_writers_never_leave_a_corrupt_or_partial_file(tmp_path):
 
     def reader():
         while not stop.is_set():
-            with open(path, encoding="utf-8") as f:
-                text = f.read()
+            text = storage.read_text(path)  # on Windows, retried across a rename
             try:
                 json.loads(text)
             except ValueError:

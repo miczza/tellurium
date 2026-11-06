@@ -504,6 +504,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Session names are portable: `SessionPool` (and the MCP server's named sessions) refuse
+  on every system a name Windows cannot hold (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`,
+  `LPT1`-`LPT9`, with any extension, and a name ending with `.`), and one that differs
+  from an identity already in the pool only by case (`alice` beside `Alice`), with
+  `ValueError`. A session folder that is a symlink is refused with a `ValueError` that
+  says so.
+- The session lock is `<pool>/.<name>.lock` beside the folder (name case-folded), no longer
+  `session.lock` inside it: on Windows `SessionPool.delete()` now moves the folder away
+  with the lock held, so no other process can open a session half removed. A lock file of
+  an earlier version is ignored. `SessionLock.acquire()` creates the folder's parent only;
+  `Session.start()` creates the folder once it holds the lock.
+- `SessionPool.delete()` and the first call on a pool remove the `.<name>.deleted-*`
+  folders an interrupted delete left behind.
+
 - `Tab.keyboard_press` of a character typed with Shift on the US layout, pressed alone
   (`"!"`, `"?"`, `"+"`), is now pressed as a keyboard does it: Shift held (`shiftKey`
   true, modifier bit 8) on its physical key (`Digit1`, keycode 49), the same events as
@@ -656,6 +670,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- macOS: a stale `SingletonLock` naming a PID the system gave to another process no longer
+  makes a session busy: the process's command line comes from `sysctl(KERN_PROCARGS2)`
+  (there is no `/proc`), and an exited process not yet reaped counts as gone.
+- Windows: concurrent writes of `session.json` and `cookies.json` no longer fail with
+  `PermissionError` while another rename lands; reads try again for a moment too.
 - Windows: the CDP pipe holds Chrome up when its reader falls behind (at most 256 KiB
   read ahead, as on POSIX), so the multiplexer's relay slows a flood down to its slow
   client instead of queueing it all in memory. The Chrome process handle is closed once,
