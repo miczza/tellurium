@@ -353,3 +353,46 @@ async def test_an_interrupted_delete_leaves_no_folder_behind(tmp_path, chrome, m
     (tmp_path / graves[0] / "cookies.json").write_text("{}")
     assert await SessionPool(tmp_path).list() == []
     assert [n for n in os.listdir(tmp_path) if ".deleted-" in n] == []
+
+
+async def test_a_delete_that_cannot_remove_the_folder_says_so(
+    tmp_path, chrome, monkeypatch, caplog
+):
+    """The identity is gone, but its folder (cookies included) is still on disk:
+    a warning names it, and the next pool removes it."""
+    pool = SessionPool(tmp_path)
+    await pool.create("a")
+    import shutil
+
+    real_rmtree = shutil.rmtree
+
+    def refused(path, ignore_errors=False, *args, **kwargs):
+        if not ignore_errors:
+            raise PermissionError("in use")
+
+    monkeypatch.setattr(shutil, "rmtree", refused)
+    with caplog.at_level("WARNING", logger="tellurium"):
+        await pool.delete("a")
+    assert await pool.list() == []
+    graves = [n for n in os.listdir(tmp_path) if ".deleted-" in n]
+    assert graves
+    assert any(graves[0] in r.getMessage() for r in caplog.records)
+    monkeypatch.setattr(shutil, "rmtree", real_rmtree)
+    assert await SessionPool(tmp_path).list() == []
+    assert [n for n in os.listdir(tmp_path) if ".deleted-" in n] == []
+
+
+async def test_a_folder_whose_name_is_no_longer_valid_is_left_out_with_a_warning(
+    tmp_path, chrome, caplog
+):
+    """A pool made before the portable names (``CON``, ``a.``) keeps those
+    folders out of list(), but says which and why."""
+    pool = SessionPool(tmp_path)
+    await pool.create("ok")
+    os.mkdir(tmp_path / "CON.x")
+    os.mkdir(tmp_path / ".hidden")  # not a session: no warning
+    with caplog.at_level("WARNING", logger="tellurium"):
+        assert await pool.list() == ["ok"]
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("'CON.x'" in m for m in messages)
+    assert not any(".hidden" in m for m in messages)

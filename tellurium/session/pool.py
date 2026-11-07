@@ -12,15 +12,18 @@ another process holds (its session lock), instead of queueing for a slot.
 
 Names are portable (:mod:`tellurium.session.names`): one that Windows cannot
 hold, or that differs from another identity's only by case, is refused on
-every system. A delete moves the folder away under the session lock, then
-removes it; what an interrupted one leaves is removed by the next delete and
-by the first call of a pool opened afterwards.
+every system; a folder named so (made before the rule) is left out of
+:meth:`SessionPool.list` with a warning. A delete moves the folder away under
+the session lock, then removes it; what an interrupted or failed one leaves
+(a warning names it) is removed by the next delete and by the first call of a
+pool opened afterwards.
 """
 
 from __future__ import annotations
 
 import asyncio
 import functools
+import logging
 import os
 import shutil
 import threading
@@ -35,6 +38,8 @@ from tellurium.session import names, profile_release
 from tellurium.session.errors import SessionBusyError
 from tellurium.session.session import _MANAGED_LAUNCH_KEYS, Session
 from tellurium.session.slots import Slots
+
+logger = logging.getLogger(__name__)
 
 _SESSION_FILE = "session.json"
 
@@ -174,11 +179,16 @@ class SessionPool:
         except FileNotFoundError:
             return []
         with entries:
-            return sorted(
-                e.name
-                for e in entries
-                if names.is_valid(e.name) and e.is_dir(follow_symlinks=False)
-            )
+            folders = [e.name for e in entries if e.is_dir(follow_symlinks=False)]
+        for name in folders:
+            if not names.is_valid(name) and not name.startswith("."):
+                logger.warning(
+                    "folder %r of the session pool %s is left out: its name is not "
+                    "portable (rename it to use it as a session)",
+                    name,
+                    self.directory,
+                )
+        return sorted(name for name in folders if names.is_valid(name))
 
     def _create(self, name: str, path: str, seed: int | None) -> Session:
         os.makedirs(self.directory, exist_ok=True)
@@ -213,6 +223,13 @@ class SessionPool:
 def _remove_graves(directory: str) -> None:
     for grave in names.graves(directory):
         shutil.rmtree(grave, ignore_errors=True)
+        if os.path.lexists(grave):
+            logger.warning(
+                "could not remove %s, the folder of a deleted session (its cookies too); "
+                "the next delete or pool opened on %s tries again",
+                grave,
+                directory,
+            )
 
 
 def _ensure(name: str, path: str, session: Session, create: bool) -> None:

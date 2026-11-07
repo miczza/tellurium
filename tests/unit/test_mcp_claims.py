@@ -24,12 +24,21 @@ class _FakeSession:
     started: list[str] = []
     fail_start = False
     busy_pid: int | None = None
+    twin_before_lock: str | None = None  # a folder another process makes meanwhile
 
     def __init__(self, name, path):
         self.name = name
+        self.path = path
+        self._on_lock = None
 
     @asynccontextmanager
     async def start(self, **options):
+        if _FakeSession.twin_before_lock is not None:
+            import os
+
+            os.makedirs(os.path.join(os.path.dirname(self.path), _FakeSession.twin_before_lock))
+        if self._on_lock is not None:  # as Session.start: under the lock, before Chrome
+            await asyncio.to_thread(self._on_lock)
         if _FakeSession.fail_start:
             raise RuntimeError("chrome did not start")
         if _FakeSession.busy_pid is not None:
@@ -54,6 +63,7 @@ def fake_session(monkeypatch):
     _FakeSession.started = []
     _FakeSession.fail_start = False
     _FakeSession.busy_pid = None
+    _FakeSession.twin_before_lock = None
     monkeypatch.setattr(sessions, "Session", _FakeSession)
     return _FakeSession
 
@@ -165,3 +175,13 @@ async def test_busy_error_from_the_launch_becomes_a_tool_error(tmp_path, fake_se
         await a.open("github")
     fake_session.busy_pid = None
     await b.open("github")
+
+
+async def test_a_twin_by_case_made_before_the_lock_is_refused_under_it(tmp_path, fake_session):
+    """Another process creates ``GitHub`` between the first check and the
+    session lock: the check made again under the lock refuses ``github``."""
+    (a,) = _pools(tmp_path, 1)
+    fake_session.twin_before_lock = "GitHub"
+    with pytest.raises(ToolError, match="only by case"):
+        await a.open("github")
+    assert fake_session.started == []

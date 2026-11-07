@@ -151,12 +151,20 @@ class SessionPool:
         self._claims.take(name, self, path)
         stack = AsyncExitStack()
         stack.callback(self._claims.release, name, self)  # last out: after the save and close
-        try:
+        directory = str(self.config.sessions_dir)
+
+        def check_folder() -> None:
             try:
-                await asyncio.to_thread(names.check_folder, str(self.config.sessions_dir), name)
+                names.check_folder(directory, name)
             except ValueError as exc:
                 raise ToolError(str(exc)) from None
+
+        try:
+            await asyncio.to_thread(check_folder)
             session = await asyncio.to_thread(Session, name, path=path)
+            # Again under the session lock (shared by names equal but for case):
+            # a twin made by another process meanwhile is refused too.
+            session._on_lock = check_folder
             warning = notice(session)
             options = {**self._launch_options(), "stealth": warning is None}
             browser = await stack.enter_async_context(session.start(**options))

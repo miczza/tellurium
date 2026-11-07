@@ -683,6 +683,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the GeoIP lookups share one TLS context (making one reads the system's certificates, on
   Windows from its certificate store, slowly and holding the GIL), and the search for a
   Chrome executable runs off the loop.
+- `SessionPool.delete` that cannot remove the folder it moved aside (cookies included) says
+  so with a warning naming it (the next delete or pool tries again); `SessionPool.list`
+  warns about the folders it leaves out because their names are not portable (`CON`,
+  `a.`). `tellurium mcp` checks a session name against its twins by case again under the
+  session lock, so a twin another process creates meanwhile is refused too.
 - `tellurium login`: when the person closes both windows, the jar read while a window was
   open is added to `cookies.json` after Chrome closes, instead of being put back into
   Chrome, which ends its browsing session (dropping the cookies with no expiry) some time
