@@ -129,15 +129,14 @@ jobs:
         run: xvfb-run -a pytest ${TESTS:-tests/integration tests/stealth} -q -rfE --durations=15
 
   # Windows and macOS: the same events as Linux (the repo is public, minutes are
-  # free). Red tests do not block until C6 is merged; a job without its JUnit
-  # report does (see os-results).
+  # free). A red test blocks as on Linux; a job without its JUnit report also
+  # fails the run (see os-results).
   unit-os:
     name: unit (${{ matrix.os }})
     if: >-
       github.event_name != 'workflow_dispatch' ||
       (!inputs.tests && inputs.os != 'ubuntu-latest')
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -171,7 +170,6 @@ jobs:
     if: >-
       github.event_name != 'workflow_dispatch' || inputs.os != 'ubuntu-latest'
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     timeout-minutes: 35
     strategy:
       fail-fast: false

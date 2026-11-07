@@ -5,7 +5,7 @@ Linux-only.
 
 | Workflow | Trigger | Blocking? |
 | --- | --- | --- |
-| `ci.yml` | push to `master` and `fetta/**`, any PR, manual | Linux jobs yes (`lint` included); Windows/macOS: a missing report yes, red tests not until C6 is merged |
+| `ci.yml` | push to `master` and `fetta/**`, any PR, manual | yes, on all three systems (`lint` included) |
 | `release.yml` | push of a `v*` tag, manual | n/a |
 | `nightly-creepjs.yml` | weekly cron (Mon 04:17 UTC), manual | no — informational |
 
@@ -79,9 +79,8 @@ run, and a manual run does not cancel it. Every job installs the `geoip`,
     few macOS jobs at a time, and one run asks for five), so a push that
     supersedes another cancels its run (`cancel-in-progress`), and a targeted
     manual run (below) is the quick way to retry one test on one system.
-  - **Blocking**: `continue-on-error: true` until C6 is merged; the known
-    reds are listed per system in `docs/requests/C6.md`. But the job
-    **`os-results`** (after them, `if: always()`) downloads their JUnit
+  - **Blocking**: a red test on Windows or macOS fails the run as on Linux.
+    The job **`os-results`** (after them, `if: always()`) downloads their JUnit
     reports, writes one table of tests, failures, errors and skips per job
     and the failed tests to the run's summary (`python -m tests.ci_results`),
     and fails the run when a job left no report (it was cancelled, timed out,
