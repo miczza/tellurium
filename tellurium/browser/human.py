@@ -55,8 +55,12 @@ DONE_LABEL = "Done"
 # not in the document; (3) puts back its style and its place in the top layer
 # and, if its button is not what a click there would hit (hidden, covered,
 # inert under a modal dialog), moves it on top or into the modal dialog.
+# The button joins the banner only once the document has painted: before its
+# first frame a person sees nothing, and Chrome (on macOS) drops the press of
+# a click there, so the click would be lost.
 # "unbound": the binding is missing from this world; "nodoc": no document
-# yet; "blocked": the button cannot be made reachable this round.
+# yet; "unpainted": the document has not painted yet, no button; "blocked":
+# the button cannot be made reachable this round.
 _SHOW_JS = """
 (function (reason, done, label) {
   const call = function () {
@@ -114,9 +118,9 @@ _SHOW_JS = """
       // click(), requestSubmit() or a synthetic event do not.
       if (navigator.userActivation.isActive) call();
     });
-    form.append(text, button);
+    form.append(text);
     shadow.append(form);
-    return {host: host, shadow: shadow, button: button, css: null};
+    return {host: host, shadow: shadow, form: form, button: button, css: null};
   };
   const raise = function (host) {
     try {
@@ -146,6 +150,10 @@ _SHOW_JS = """
   if (b.host.getAttribute('popover') !== 'manual') b.host.setAttribute('popover', 'manual');
   if (b.host.inert) b.host.inert = false;
   if (!b.host.matches(':popover-open')) raise(b.host);
+  if (!b.button.isConnected) {
+    if (performance.getEntriesByType('paint').length === 0) return 'unpainted';
+    b.form.append(b.button);
+  }
   if (reachable(b)) return 'shown';
   // Inert under a modal dialog of the page: only the dialog's subtree is not.
   const places = [root].concat(Array.from(document.querySelectorAll('dialog:modal')).reverse());
@@ -362,9 +370,7 @@ class _Banner:
         _keep(self._adding, self._owner)
 
     async def bring_to_front(self) -> None:
-        """Show the tab and give its window the focus: the person must see it,
-        and a window without the focus may spend the first press of a click
-        on taking it (macOS), so "Done" would not see it."""
+        """Show the tab and give its window the focus: the person must see it."""
         try:
             await self._send("Page.bringToFront", {})
         except (TimeoutError, CDPError):
