@@ -66,3 +66,43 @@ async def test_headless_comes_from_how_the_browser_was_launched():
 
 async def test_a_headed_browser_is_not_headless():
     assert not await human._headless(_version_tab(False, "Chrome/156.0.0.0"))
+
+
+async def test_a_limit_that_fires_a_tick_early_still_names_the_timeout(monkeypatch):
+    """Windows' clock ticks every ~15.6 ms and the loop runs a timer up to one
+    tick early: the condition's limit then expires while ``loop.time()`` is
+    still short of the deadline. That is the wait's limit all the same."""
+    monkeypatch.setattr(human, "POLL", 0.01)
+    loop = asyncio.get_running_loop()
+    # A coarse clock, made plain: the poll wakes up to 0.4 s early and the
+    # loop runs the timers due within its resolution.
+    monkeypatch.setattr(loop, "_clock_resolution", 0.5)
+    select = loop._selector.select
+    monkeypatch.setattr(loop._selector, "select", lambda t=None: select(t and max(t - 0.4, 0)))
+
+    async def never(tab) -> bool:
+        await asyncio.sleep(3600)
+        return True
+
+    replies = ["http://x/login"] * 1000
+    try:
+        await human.wait_for_human(_tab(replies), "Sign in", until=never, timeout=0.2)
+    except TimeoutError as exc:
+        assert "'Sign in'" in str(exc) and "within 0.2 s" in str(exc)
+    else:
+        raise AssertionError("no TimeoutError")
+
+
+async def test_a_timeout_error_of_the_condition_itself_is_not_the_limit(monkeypatch):
+    monkeypatch.setattr(human, "POLL", 0.01)
+
+    async def fails(tab) -> bool:
+        raise TimeoutError("the condition's own")
+
+    replies = ["http://x/login"] * 1000
+    try:
+        await human.wait_for_human(_tab(replies), "Sign in", until=fails, timeout=30)
+    except TimeoutError as exc:
+        assert str(exc) == "the condition's own"
+    else:
+        raise AssertionError("no TimeoutError")

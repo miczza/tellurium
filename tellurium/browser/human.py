@@ -277,14 +277,19 @@ async def _main_frame(tab: Tab, deadline: float) -> dict | None:
 async def _bounded(
     awaitable: Awaitable[bool], deadline: float, reason: str, timeout: float | None
 ) -> bool:
-    """*awaitable*'s result, or the wait's ``TimeoutError`` past *deadline*."""
-    left = deadline - asyncio.get_running_loop().time()
-    if left == math.inf:
+    """*awaitable*'s result, or the wait's ``TimeoutError`` once the limit at
+    *deadline* fires. Whether it fired is the limit's own say, not the clock's:
+    the loop runs a timer up to one clock tick early (~15.6 ms on Windows), so
+    ``loop.time()`` can still be short of *deadline* then. A ``TimeoutError``
+    of *awaitable* itself goes through as it is."""
+    if deadline == math.inf:
         return await awaitable
+    limit = asyncio.timeout_at(deadline)
     try:
-        return await asyncio.wait_for(awaitable, max(left, 0))
+        async with limit:
+            return await awaitable
     except TimeoutError:
-        if asyncio.get_running_loop().time() >= deadline:
+        if limit.expired():
             raise _timeout(reason, timeout) from None
         raise
 

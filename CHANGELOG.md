@@ -676,6 +676,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Tab.wait_for_human(until=...)`: a condition still running when the wait's time runs out
+  always ends in the `TimeoutError` that names the reason and the timeout; on Windows, whose
+  clock ticks every ~15.6 ms, it was sometimes a bare `TimeoutError`.
 - `Browser.launch` and `RawChrome.launch` start Chrome on `about:blank` when the arguments
   name no page: Chrome's New Tab page, loading late, no longer replaces the document of the
   first navigation or of a screenshot taken before it (the flags are otherwise unchanged).
