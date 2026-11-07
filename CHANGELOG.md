@@ -676,6 +676,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `tellurium login`: the cookies of the sign-in that Chrome drops with its last window are
+  written to `cookies.json` by the session's close, still holding the session's lock. They
+  were added after the lock was let go: a process opening the session in that moment started
+  without them and overwrote them on closing, and a `delete` then saw the folder made again.
+  Only the cookies with no expiry are put back: one with an expiry that the site deleted in
+  the last 0.3 s before the windows closed (a logout) no longer comes back.
+- `SessionLock` resolves the parent of the session folder: the same folder reached through a
+  symbolic link (or an 8.3 short name on Windows) takes the same lock instead of a second one.
+- `SessionPool.list()` warns of a folder with a non-portable name once per pool, not at every
+  call.
 - `Tab.wait_for_human(until=...)`: a condition still running when the wait's time runs out
   always ends in the `TimeoutError` that names the reason and the timeout; on Windows, whose
   clock ticks every ~15.6 ms, it was sometimes a bare `TimeoutError`.

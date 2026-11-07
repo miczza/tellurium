@@ -396,3 +396,7 @@ async def test_a_folder_whose_name_is_no_longer_valid_is_left_out_with_a_warning
     messages = [r.getMessage() for r in caplog.records]
     assert any("'CON.x'" in m for m in messages)
     assert not any(".hidden" in m for m in messages)
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="tellurium"):
+        assert await pool.list() == ["ok"]
+    assert not any("'CON.x'" in r.getMessage() for r in caplog.records)  # once per pool

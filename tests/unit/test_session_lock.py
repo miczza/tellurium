@@ -77,6 +77,27 @@ def test_the_lock_is_beside_the_folder_and_acquire_makes_only_its_parent(tmp_pat
     assert not (tmp_path / "a" / "B").exists()
 
 
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="no symlinks")
+def test_a_folder_seen_through_a_link_takes_the_same_lock(tmp_path):
+    """The same folder by another path (a symlink to its parent; on Windows also
+    an 8.3 short name) is one session: one lock."""
+    real = tmp_path / "real"
+    real.mkdir()
+    alias = tmp_path / "alias"
+    try:
+        os.symlink(real, alias, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks need a privilege here")
+    lock = SessionLock(str(real / "s"))
+    lock.acquire()
+    try:
+        assert lock_file(str(alias / "s")) == lock_file(str(real / "s"))
+        with pytest.raises(SessionBusyError):
+            SessionLock(str(alias / "s")).acquire()
+    finally:
+        lock.release()
+
+
 def test_a_lock_file_inside_the_folder_from_earlier_versions_is_ignored(tmp_path):
     folder = tmp_path / "s"
     folder.mkdir()

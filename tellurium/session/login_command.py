@@ -11,10 +11,11 @@ Chrome drops the cookies with no expiry (a sign-in's) when its last window
 closes, so a second window of its own, minimized, keeps its browsing session
 open while the person works in the first: closing that one ends the login with
 the whole jar, a cookie written an instant before included. If the person
-closes both, Chrome stays up anyway (:data:`KEEP_ALIVE`) and the jar read
-while a window was open is added to ``cookies.json`` after the close (a cookie
-of its last :data:`POLL` seconds can then be missed). Not put back into
-Chrome: it ends its browsing session some time after the last window has gone
+closes both, Chrome stays up anyway (:data:`KEEP_ALIVE`) and the session's
+close, still under its lock, adds to ``cookies.json`` the cookies with no
+expiry Chrome dropped of the jar read while a window was open (a cookie of its
+last :data:`POLL` seconds can then be missed, and one with no expiry the site
+deleted in them comes back). Not put back into Chrome: it ends its browsing session some time after the last window has gone
 from its targets (long enough to be seen on Windows), so a cookie put back
 too early would be dropped again.
 """
@@ -105,9 +106,8 @@ async def login(name: str, url: str | None = None, *, directory: str, enter: boo
             except (TimeoutError, NavigationError) as exc:
                 print(f"Warning: could not open {url}: {exc}", file=sys.stderr)
         jar = await _until_done(browser, tab, sys.stdin if enter else None, keeper)
-    await session.save_now()
-    if jar:
-        await asyncio.to_thread(session_cookies.add_missing, session.path, jar)
+        if jar:  # saved by the close, under the session's lock
+            session._jar_before_close = jar
     return session.path
 
 

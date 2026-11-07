@@ -6,12 +6,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 
 import pytest
 
 import tellurium
-from tellurium.session import login_command
+from tellurium.session import login_command, session_cookies
 from tests.integration.test_wait_for_human import _click_node, _done_button
 from tests.platform_marks import needs_display
 
@@ -175,5 +176,49 @@ async def test_session_cookies_chrome_drops_after_the_windows_went_are_saved(
         await asyncio.wait_for(task, 30)
     finally:
         task.cancel()
+    saved = json.loads((tmp_path / "acct" / "cookies.json").read_text())["cookies"]
+    assert any(c["name"] == "http_sso" and c["expires"] == -1 for c in saved)
+
+
+async def test_the_login_cookies_are_written_under_the_session_lock(
+    tmp_path, local_server, launched, monkeypatch
+):
+    """The jar read while a window was open goes to cookies.json before the
+    session lets its lock go: another process opening the session (or a delete)
+    right after the login never sees the file without them, nor has it rewritten."""
+    from tellurium.session.lock import SessionLock
+
+    real_windows_closed = login_command._windows_closed
+
+    async def windows_closed_then_late_drop(browser, keeper):
+        kept = await real_windows_closed(browser, keeper)
+        await browser.clear_cookies()  # Chrome drops the cookies with no expiry, late
+        return kept
+
+    folder = str(tmp_path / "acct")
+    writes: list[tuple[bool, bool]] = []  # (has the login's cookie, lock held)
+    real_save = session_cookies.save
+
+    def watched_save(path, cookies, *, at_close=False):
+        if os.path.normpath(path) == os.path.normpath(folder):
+            has = any(c.name == "http_sso" for c in cookies)
+            writes.append((has, SessionLock.holder(folder) is not None))
+        real_save(path, cookies, at_close=at_close)
+
+    monkeypatch.setattr(login_command, "_windows_closed", windows_closed_then_late_drop)
+    monkeypatch.setattr(session_cookies, "save", watched_save)
+    task = asyncio.create_task(
+        login_command.login("acct", f"{local_server}/session-cookie", directory=str(tmp_path))
+    )
+    try:
+        browser = await _first(launched)
+        await _cookie(browser, "http_sso")
+        await asyncio.sleep(4 * login_command.POLL)  # a cookie that old is never missed
+        await _close_windows(browser)
+        await asyncio.wait_for(task, 30)
+    finally:
+        task.cancel()
+    assert writes and writes[-1][0]  # the last write has the login's cookie
+    assert all(held for _, held in writes)
     saved = json.loads((tmp_path / "acct" / "cookies.json").read_text())["cookies"]
     assert any(c["name"] == "http_sso" and c["expires"] == -1 for c in saved)

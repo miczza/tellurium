@@ -59,10 +59,22 @@ def save(folder: str, cookies: list[Cookie], *, at_close: bool = False) -> None:
 def add_missing(folder: str, cookies: list[Cookie]) -> None:
     """Add to ``cookies.json`` those of *cookies* it lacks (same name, domain,
     path and partition); those it has stay as they are, and so does its
-    *at_close*."""
+    *at_close*. A file that cannot be written stays as it was, with a warning."""
     saved, at_close = read(folder)
     have = {_key(c) for c in saved}
-    save(folder, saved + [c for c in cookies if _key(c) not in have], at_close=at_close)
+    try:
+        save(folder, saved + [c for c in cookies if _key(c) not in have], at_close=at_close)
+    except OSError as exc:
+        warnings.warn(f"could not add cookies to {_file(folder)}: {exc}", stacklevel=2)
+
+
+def with_dropped(jar: list[Cookie], earlier: list[Cookie]) -> list[Cookie]:
+    """*jar* (Chrome's at the close) with the cookies of *earlier* (a jar read
+    while a window was open) that have no expiry and that *jar* lacks: Chrome
+    drops those when its last window closes. One with an expiry missing from
+    *jar* was deleted by the site (or expired) since, and stays gone."""
+    have = {_key(c) for c in jar}
+    return jar + [c for c in earlier if c.expires == -1 and _key(c) not in have]
 
 
 def read(folder: str) -> tuple[list[Cookie], bool]:

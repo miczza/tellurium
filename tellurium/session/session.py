@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import os
 import secrets
 import threading
@@ -13,7 +12,13 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
-from tellurium.session import manual_login, profile_release, session_cookies, storage
+from tellurium.session import (
+    manual_login,
+    metadata_value,
+    profile_release,
+    session_cookies,
+    storage,
+)
 from tellurium.session.errors import (
     SessionBusyError,
     SessionInvalidError,
@@ -65,6 +70,9 @@ class Session:
         self._cookies_at_close = False
         # The saved cookies the running start puts back (None: no start yet).
         self._reinjection: session_cookies.Reinjection | None = None
+        # A jar read while a window was open, set by ``tellurium login`` once
+        # the windows are gone: the close keeps what Chrome dropped of it.
+        self._jar_before_close: list = []
         # Run in a thread once start holds the lock, before Chrome (SessionPool).
         self._on_lock: Any = None
         # The Chrome of the running start (None between starts), its loop,
@@ -115,12 +123,12 @@ class Session:
         """Set metadata[key] = value only if key is not present."""
         if key in self.metadata:
             return
-        _validate_json_value(value)
+        metadata_value.check(value)
         self.metadata[key] = value
 
     def set(self, key: str, value: Any) -> None:
         """Set metadata[key] = value, overwriting any existing value."""
-        _validate_json_value(value)
+        metadata_value.check(value)
         self.metadata[key] = value
 
     def validate(self, fn):
@@ -260,6 +268,12 @@ class Session:
             session_cookies.save(self.path, cookies, at_close=epoch is None)
             return True
 
+    def _add_to_jar(self, cookies: list) -> None:
+        """Add to cookies.json those of *cookies* it lacks; no live save after."""
+        with self._jar_lock:
+            self._jar_epoch += 1
+            session_cookies.add_missing(self.path, cookies)
+
     def _seal_jar(self) -> None:
         """No live save writes from now on; one under way has ended."""
         with self._jar_lock:
@@ -357,6 +371,7 @@ class Session:
                 if browser is not None:
                     await self._close_browser(browser)
             finally:
+                self._jar_before_close = []
                 lock.release()  # last: after Chrome has let go of the profile
 
     async def _launch(self, browser_cls, chrome_dir: str, params: dict):
@@ -384,7 +399,10 @@ class Session:
         """Keep the cookie jar, then close Chrome (that even if the
         first step fails or is cancelled). Not before the start has read
         cookies.json: Chrome's jar lacks the cookies it holds, so writing it
-        would lose them."""
+        would lose them. A jar read before the windows went (``tellurium
+        login``) gives the cookies with no expiry Chrome has dropped since;
+        all of it, if Chrome's jar cannot be read. Under the lock, like every
+        write of the start."""
         try:
             saving = self._saving
             if saving is not None and not saving.done():  # a live save writes first
@@ -392,10 +410,13 @@ class Session:
             if self._reinjection is None:
                 return  # the finally still closes Chrome
             cookies = self._reinjection.keep(await session_cookies.snapshot(browser))
+            cookies = session_cookies.with_dropped(cookies, self._jar_before_close)
             await asyncio.to_thread(self._write_jar, cookies)
             self._session_cookies, self._cookies_at_close = cookies, True
         except Exception:  # noqa: BLE001 - Chrome gone: keep the previous file
             logger.warning("could not save the cookies of %s", self.path, exc_info=True)
+            if self._jar_before_close:  # Chrome gone: what the file lacks of it
+                await asyncio.to_thread(self._add_to_jar, self._jar_before_close)
         finally:
             if self._reinjection is not None:
                 self._reinjection.drop()
@@ -453,33 +474,6 @@ def _merge_launch_params(kwargs: dict, hints: dict) -> dict:
         raise TypeError(f"session.start() manages these parameters internally: {sorted(bad)}")
     safe_hints = {k: v for k, v in hints.items() if k not in _MANAGED_LAUNCH_KEYS}
     return {**safe_hints, **kwargs}
-
-
-def _validate_json_value(value: Any) -> None:
-    """Raise TypeError if value (or any nested element) is not JSON-serializable."""
-    if value is None or isinstance(value, (str, int, bool)):
-        return
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise TypeError(
-                f"metadata float values must be finite (got {value!r}); "
-                "NaN and Infinity are not valid JSON"
-            )
-        return
-    if isinstance(value, list):
-        for v in value:
-            _validate_json_value(v)
-        return
-    if isinstance(value, dict):
-        for k, v in value.items():
-            if not isinstance(k, str):
-                raise TypeError(f"metadata dict keys must be str, got {type(k).__name__}")
-            _validate_json_value(v)
-        return
-    raise TypeError(
-        f"metadata values must be JSON-serializable "
-        f"(str, int, float, bool, None, list, dict); got {type(value).__name__}"
-    )
 
 
 def _running_loop() -> asyncio.AbstractEventLoop | None:

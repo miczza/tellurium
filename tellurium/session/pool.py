@@ -66,6 +66,7 @@ class SessionPool:
         self._claims_lock = threading.Lock()  # _claimed, from any thread
         self._claimed: set[str] = set()  # case-folded names being opened, open or being deleted
         self._swept = False  # the leftovers of interrupted deletes are gone
+        self._left_out: set[str] = set()  # folders with a non-portable name, warned of
 
     def path(self, name: str) -> str:
         """The folder of identity *name*; :class:`ValueError` for a name that is
@@ -181,7 +182,8 @@ class SessionPool:
         with entries:
             folders = [e.name for e in entries if e.is_dir(follow_symlinks=False)]
         for name in folders:
-            if not names.is_valid(name) and not name.startswith("."):
+            if not names.is_valid(name) and not name.startswith(".") and name not in self._left_out:
+                self._left_out.add(name)  # once per pool
                 logger.warning(
                     "folder %r of the session pool %s is left out: its name is not "
                     "portable (rename it to use it as a session)",
