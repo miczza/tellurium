@@ -116,7 +116,9 @@ async def test_the_lock_file_is_never_removed_while_held(tmp_path, launched, mon
     held would let another process lock a new one beside it."""
     pool = SessionPool(tmp_path, max_browsers=1)
     await pool.create("b", seed=77)
-    lock_file = os.path.join(pool.path("b"), "session.lock")
+    from tellurium.session.lock import lock_file as lock_path
+
+    lock_file = lock_path(pool.path("b"))
     removed: list[str] = []
     real_unlink = os.unlink
 

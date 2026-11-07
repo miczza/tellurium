@@ -140,3 +140,59 @@ async def test_threads_are_named_for_the_transport():
         os.close(chrome_write)
         await transport.close()
         os.close(chrome_read)
+
+
+async def test_a_reader_that_falls_behind_holds_chrome_up():
+    """Nobody calls recv: the read thread stops reading once a bounded amount is
+    queued, so Chrome's writes block (backpressure, like a POSIX pipe)."""
+    transport, chrome_read, chrome_write = _pipes()
+    await transport.start()
+    message = json.dumps({"method": "Runtime.consoleAPICalled", "pad": "x" * 4000}).encode() + b"\0"
+    total = 2000  # ~8 MB
+    written = 0
+
+    def chrome() -> None:
+        nonlocal written
+        for _ in range(total):
+            os.write(chrome_write, message)
+            written += len(message)
+
+    writer = threading.Thread(target=chrome, daemon=True)
+    writer.start()
+    try:
+        await asyncio.sleep(1.0)
+        # The pipe's own buffer, plus what the transport queues.
+        assert written < 2 * 1024 * 1024
+        assert writer.is_alive()
+        for _ in range(total):
+            assert (await asyncio.wait_for(transport.recv(), 10))["pad"] == "x" * 4000
+        writer.join(10)
+        assert not writer.is_alive()
+    finally:
+        os.close(chrome_write)
+        await transport.close()
+        os.close(chrome_read)
+
+
+async def test_close_frees_a_read_thread_held_up_by_a_full_queue():
+    transport, chrome_read, chrome_write = _pipes()
+    await transport.start()
+    message = b'{"pad": "' + b"x" * 60000 + b'"}\0'
+
+    def chrome() -> None:
+        try:
+            for _ in range(200):
+                os.write(chrome_write, message)
+        except OSError:
+            pass
+        finally:
+            os.close(chrome_write)  # Chrome exits
+
+    writer = threading.Thread(target=chrome, daemon=True)
+    writer.start()
+    await asyncio.sleep(0.5)
+    await asyncio.wait_for(transport.close(), 5)
+    writer.join(10)
+    transport._reader.join(10)
+    assert not transport._reader.is_alive() and transport._read_fd is None
+    os.close(chrome_read)

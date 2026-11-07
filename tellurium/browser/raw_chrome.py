@@ -30,12 +30,10 @@ from tellurium.browser.launch_plan import LaunchPlan
 from tellurium.browser.process import BrowserProcess
 from tellurium.cdp.transport._base import CDPTransport
 
-#: Seconds Chrome gets to answer its first ``Browser.getVersion`` on the pipe.
-READY_TIMEOUT = 30.0
+#: Seconds Chrome gets to answer its first ``Browser.getVersion`` on the pipe
+#: (asked by :meth:`BrowserProcess.spawn`, the only wait for it).
+READY_TIMEOUT = process_module.READY_TIMEOUT
 
-#: Id of that first command: replies before the hand-over are read here, and
-#: whoever takes the pipe numbers its own commands.
-_PROBE_ID = 2**31 - 2
 #: Id of the ``Browser.close`` sent by :meth:`RawChrome.close` (its reply, if
 #: read, matches nothing: the relay draws its ids below ``2**31 - 16``).
 _CLOSE_ID = 2**31 - 3
@@ -82,7 +80,8 @@ class RawChrome:
         *geoip* (with a *proxy*) takes the time zone and languages from the
         proxy's exit IP, best effort; *timezone* and *languages* win over it.
         The time zone reaches Chrome as ``TZ`` in its environment (and as
-        ``--fingerprint-timezone`` with the patched engine).
+        ``--fingerprint-timezone`` with the patched engine); stock Chrome on
+        Windows ignores ``TZ`` and keeps the system's.
         The launch is all-or-nothing: on failure or cancellation Chrome, the
         forwarder and the profile are released, and a Chrome that exits on its
         own raises :class:`~tellurium.browser.launcher.LaunchError` with its
@@ -117,8 +116,7 @@ class RawChrome:
             # Stock Chrome has no time zone flag; ICU reads TZ (the patched one gets both).
             tz = plan.effective_timezone
             env = {"TZ": tz} if tz else None
-            transport = await proc.spawn(plan.chrome_path, plan.flags, log, env)
-            await _wait_ready(transport)
+            await proc.spawn(plan.chrome_path, plan.flags, log, env)  # waits for Chrome
         except BaseException as exc:
             try:
                 error = await proc.launch_error(exc)
@@ -195,6 +193,13 @@ class RawChrome:
         process = self._proc.process
         return process is not None and process.poll() is None
 
+    def kill(self) -> None:
+        """End Chrome at once, as a crash would (SIGKILL; ``TerminateProcess`` on
+        Windows), through the process object, never a pid another process may
+        have got since. No-op once it exited; :meth:`close` still releases the
+        pipe, the forwarder and the profile."""
+        self._proc.kill()
+
     async def close(self) -> None:
         """Stop Chrome, then release the pipe, the forwarder and the profile.
 
@@ -260,20 +265,3 @@ class _Launch:
     async def __aexit__(self, *exc: Any) -> None:
         if self._raw is not None:
             await self._raw.close()
-
-
-async def _wait_ready(transport: CDPTransport) -> None:
-    """Chrome answers on the pipe; what it says before that is dropped."""
-    probe = {"id": _PROBE_ID, "method": "Browser.getVersion"}
-    await transport.send(json.dumps(probe).encode() + b"\0")
-
-    async def reply() -> None:
-        while (await transport.recv()).get("id") != _PROBE_ID:
-            pass
-
-    try:
-        await asyncio.wait_for(reply(), READY_TIMEOUT)
-    except TimeoutError:
-        raise TimeoutError(
-            f"Browser.getVersion got no reply from Chrome within {READY_TIMEOUT:g} s"
-        ) from None

@@ -5,45 +5,15 @@ from __future__ import annotations
 
 import asyncio
 import os
-import signal
-import sys
-from pathlib import Path
 
 import pytest
 
 from tellurium import Session, SessionBusyError
 from tellurium.session.lock import SessionLock
-from tests.integration.session_child import child_env
+from tests.integration.session_child import kill_holder, start_holder
 
-_CHILD = str(Path(__file__).with_name("session_child.py"))
-
-
-async def _hold(path: str) -> asyncio.subprocess.Process:
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        _CHILD,
-        "hold",
-        path,
-        env=child_env(path),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-        start_new_session=True,  # its Chrome too can be killed as a group
-    )
-    try:
-        line = await asyncio.wait_for(proc.stdout.readline(), 60)
-    except BaseException:
-        _kill_group(proc)
-        await proc.wait()
-        raise
-    assert line.strip() == b"ready"
-    return proc
-
-
-def _kill_group(proc: asyncio.subprocess.Process) -> None:
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+_hold = start_holder
+_kill_group = kill_holder
 
 
 async def test_second_process_gets_busy_error_then_takes_the_lock_of_a_killed_one(tmp_path):
@@ -57,7 +27,7 @@ async def test_second_process_gets_busy_error_then_takes_the_lock_of_a_killed_on
         assert info.value.pid == holder.pid
         assert SessionLock.holder(path) == holder.pid
     finally:
-        os.kill(holder.pid, signal.SIGKILL)  # the Python process only: no cleanup runs
+        holder.kill()  # the Python process only (SIGKILL, TerminateProcess): no cleanup runs
         await holder.wait()
     try:
         assert SessionLock.holder(path) is None

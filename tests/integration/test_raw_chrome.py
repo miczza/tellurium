@@ -18,7 +18,7 @@ from tellurium.browser.launcher import LaunchError
 from tellurium.browser.process import BrowserProcess
 from tellurium.browser.raw_chrome import RawChrome
 from tests.integration.test_authenticated_proxy import GOOD_AUTH, PASSWORD, USER, FakeProxy
-from tests.platform_marks import needs_proc, needs_sh
+from tests.platform_marks import needs_proc, needs_sh, needs_tz_env
 from tests.private_temp import private_temp
 
 
@@ -407,6 +407,7 @@ async def _page_time_zone(raw: RawChrome) -> str:
     return answer["result"]["result"]["value"]
 
 
+@needs_tz_env
 async def test_stock_chrome_takes_the_manual_time_zone(private_tempdir):
     async with RawChrome.launch(headless=True, timezone="Pacific/Chatham") as raw:
         assert await _page_time_zone(raw) == "Pacific/Chatham"

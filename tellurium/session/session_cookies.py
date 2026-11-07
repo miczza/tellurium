@@ -56,6 +56,15 @@ def save(folder: str, cookies: list[Cookie], *, at_close: bool = False) -> None:
     storage.write_private(_file(folder), payload)
 
 
+def add_missing(folder: str, cookies: list[Cookie]) -> None:
+    """Add to ``cookies.json`` those of *cookies* it lacks (same name, domain,
+    path and partition); those it has stay as they are, and so does its
+    *at_close*."""
+    saved, at_close = read(folder)
+    have = {_key(c) for c in saved}
+    save(folder, saved + [c for c in cookies if _key(c) not in have], at_close=at_close)
+
+
 def read(folder: str) -> tuple[list[Cookie], bool]:
     """The cookies of ``cookies.json`` not yet expired, and whether they were
     saved as Chrome closed; none if it is missing. A file that cannot be read
@@ -65,8 +74,7 @@ def read(folder: str) -> tuple[list[Cookie], bool]:
     next close writes a good one."""
     path = _file(folder)
     try:
-        with open(path, "rb") as f:
-            data = f.read()
+        data = storage.read_bytes(path)
     except FileNotFoundError:
         return [], False
     except OSError as exc:

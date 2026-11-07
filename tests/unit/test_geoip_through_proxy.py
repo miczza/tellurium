@@ -310,3 +310,35 @@ async def test_a_trickling_proxy_cannot_hold_a_lookup_past_its_timeout(
                 break
             await asyncio.sleep(0.05)
         assert proxy.open == 0
+
+
+def test_many_lookups_at_once_load_the_system_certificates_once(monkeypatch):
+    """Each TLS context reads the system's certificates (on Windows the
+    certificate store, slow and under the GIL): 40 launches looking up at once
+    must not make 40 of them before their first connection."""
+    import ssl
+
+    made: list[int] = []
+    real = ssl.create_default_context
+
+    def counting(*args, **kwargs):
+        made.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ssl, "create_default_context", counting)
+    monkeypatch.setattr(geoip, "_TLS", [])
+    with socket.socket() as closed:  # a port nobody listens on: each get fails at once
+        closed.bind(("127.0.0.1", 0))
+        port = closed.getsockname()[1]
+    via = geoip._HttpProxy("127.0.0.1", port)
+
+    def lookup() -> None:
+        with pytest.raises(OSError):
+            via.get("https://ip.test/", 2)
+
+    threads = [threading.Thread(target=lookup) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert len(made) == 1

@@ -313,7 +313,7 @@ class Session:
         from tellurium import Browser
 
         lock = SessionLock(self.path)
-        await lock.acquire_async()  # creates the folder; non-blocking syscalls
+        await lock.acquire_async()  # beside the folder; non-blocking syscalls
         chrome_dir = os.path.join(self.path, "chrome")
 
         # Single try covers both Browser.launch failure (leak prevention) and
@@ -325,6 +325,7 @@ class Session:
         try:
             if self._on_lock is not None:
                 await asyncio.to_thread(self._on_lock)
+            await asyncio.to_thread(os.makedirs, self.path, exist_ok=True)
             browser = await self._launch(Browser, chrome_dir, merged)
             # Only record params of a successful launch, so save(full=True)
             # after a failed start() does not persist a bad configuration.

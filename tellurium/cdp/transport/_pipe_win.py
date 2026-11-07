@@ -12,7 +12,11 @@ import threading
 from tellurium.cdp.transport._base import CDPTransport
 from tellurium.cdp.transport._framing import NullFramer
 
-_CHUNK = 1 << 20
+#: One read from the pipe, and how many of them may wait for :meth:`recv`:
+#: past that the read thread stops reading and Chrome's writes block, as
+#: with a POSIX pipe read by asyncio (which pauses past 128 KiB).
+_CHUNK = 64 * 1024
+_QUEUED_CHUNKS = 4
 
 
 class PipeWindowsTransport(CDPTransport):
@@ -25,6 +29,11 @@ class PipeWindowsTransport(CDPTransport):
     executor, where a read blocked for the whole life of each Chrome would
     take a worker away from ``asyncio.to_thread`` for good, and two writes
     could interleave.
+
+    At most :data:`_QUEUED_CHUNKS` reads wait for :meth:`recv`; past them
+    the read thread waits, so a consumer that falls behind (the
+    multiplexer's relay holding a slow client up) holds Chrome up too, and
+    memory stays bounded.
 
     The read thread closes the read fd once Chrome closes its end (EOF):
     closing an anonymous pipe handle while a ``ReadFile`` is pending on it
@@ -43,6 +52,8 @@ class PipeWindowsTransport(CDPTransport):
         self._reader: threading.Thread | None = None
         self._writer: concurrent.futures.ThreadPoolExecutor | None = None
         self._eof = False
+        self._room = threading.Semaphore(_QUEUED_CHUNKS)  # free places in _chunks
+        self._closing = False  # close() ran: read on to EOF without waiting for room
 
     async def start(self) -> None:
         """Start the read and write threads on the running loop."""
@@ -64,11 +75,17 @@ class PipeWindowsTransport(CDPTransport):
     def _read_loop(self, loop: asyncio.AbstractEventLoop, chunks: asyncio.Queue[bytes]) -> None:
         try:
             while True:
+                if not self._closing:
+                    self._room.acquire()  # close() releases it too
                 fd = self._read_fd
                 try:
                     chunk = os.read(fd, _CHUNK) if fd is not None else b""
                 except OSError:
                     chunk = b""
+                if self._closing:  # nobody reads any more: drop it, read on to EOF
+                    if not chunk:
+                        return
+                    continue
                 try:
                     loop.call_soon_threadsafe(chunks.put_nowait, chunk)
                 except RuntimeError:  # the loop is closed: nobody reads any more
@@ -119,6 +136,7 @@ class PipeWindowsTransport(CDPTransport):
             if self._eof:
                 raise EOFError("Pipe closed")
             chunk = await self._chunks.get()
+            self._room.release()
             if not chunk:
                 self._eof = True
                 raise EOFError("Pipe closed")
@@ -131,6 +149,8 @@ class PipeWindowsTransport(CDPTransport):
         stopped Chrome fails at once); the read end only when no read thread
         holds it, else the thread closes it at EOF.
         """
+        self._closing = True
+        self._room.release()  # a read thread waiting for room goes on to EOF
         writer, self._writer = self._writer, None
         if writer is not None:
             writer.shutdown(wait=False, cancel_futures=True)

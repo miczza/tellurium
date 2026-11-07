@@ -11,6 +11,7 @@ PATH`` opens it, prints ``ready`` and waits until it is killed.
 
 The tests start it with :func:`child_env`: killed with SIGKILL, it cannot
 remove its temporary folders, so they go in the test's own tmp_path.
+:func:`start_holder` and :func:`kill_holder` run a ``hold`` child on every system.
 """
 
 from __future__ import annotations
@@ -46,6 +47,42 @@ async def read(path: str) -> None:
 
 
 _LINKS: list[str] = []
+_SELF = os.path.abspath(__file__)
+
+
+async def start_holder(path: str) -> asyncio.subprocess.Process:
+    """A ``hold`` child of the session at *path*, once it has printed ``ready``."""
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        _SELF,
+        "hold",
+        path,
+        env=child_env(path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+        # Its Chrome too can be killed as a group (POSIX; on Windows that
+        # Chrome exits by itself once the holder's end of its pipe is gone).
+        start_new_session=sys.platform != "win32",
+    )
+    try:
+        line = await asyncio.wait_for(proc.stdout.readline(), 60)
+    except BaseException:
+        kill_holder(proc)
+        await proc.wait()
+        raise
+    assert line.strip() == b"ready"
+    return proc
+
+
+def kill_holder(proc: asyncio.subprocess.Process) -> None:
+    """Kill *proc* and, on POSIX, its Chrome with it (its process group)."""
+    try:
+        if sys.platform == "win32":
+            proc.kill()  # TerminateProcess: no group to kill
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):  # gone already
+        pass
 
 
 def child_env(path: str) -> dict[str, str]:

@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 from collections.abc import Mapping
 
 # Flags from the MSVC CRT (internal/ioinit.cpp): a handle entry is only
@@ -298,22 +299,37 @@ class WindowsProcess:
     :meth:`terminate` and :meth:`kill` both end the process at once
     (``TerminateProcess``): Windows has no polite signal for a GUI process.
     The handle is closed once the exit code is known, so the pid can no
-    longer name another process here.
+    longer name another process here; :meth:`poll` from the loop and
+    :meth:`wait` in a thread may race, so the handle is closed under a lock
+    and only once no ``WaitForSingleObject`` still uses it.
     """
 
     def __init__(self, handle: int, pid: int) -> None:
         self._handle: int | None = handle
         self.pid = pid
         self.returncode: int | None = None
+        self._lock = threading.Lock()
+        self._waiting = 0  # calls inside WaitForSingleObject on _handle
 
     def _reap(self, timeout_ms: int) -> int | None:
         import _winapi
 
-        if self.returncode is None and self._handle is not None:
-            if _winapi.WaitForSingleObject(self._handle, timeout_ms) == _WAIT_OBJECT_0:
-                self.returncode = _winapi.GetExitCodeProcess(self._handle)
-                _winapi.CloseHandle(self._handle)
-                self._handle = None
+        with self._lock:
+            handle = self._handle
+            if self.returncode is not None or handle is None:
+                return self.returncode
+            self._waiting += 1
+        signaled = False
+        try:
+            signaled = _winapi.WaitForSingleObject(handle, timeout_ms) == _WAIT_OBJECT_0
+        finally:
+            with self._lock:
+                self._waiting -= 1
+                if signaled and self.returncode is None:
+                    self.returncode = _winapi.GetExitCodeProcess(handle)
+                if self.returncode is not None and not self._waiting and self._handle is not None:
+                    _winapi.CloseHandle(self._handle)
+                    self._handle = None
         return self.returncode
 
     def poll(self) -> int | None:
@@ -329,10 +345,13 @@ class WindowsProcess:
     def terminate(self) -> None:
         import _winapi
 
-        if self.poll() is None and self._handle is not None:
-            try:
-                _winapi.TerminateProcess(self._handle, 1)
-            except PermissionError:  # already exiting: the wait tells
-                pass
+        if self.poll() is not None:
+            return
+        with self._lock:
+            if self.returncode is None and self._handle is not None:
+                try:
+                    _winapi.TerminateProcess(self._handle, 1)
+                except PermissionError:  # already exiting: the wait tells
+                    pass
 
     kill = terminate

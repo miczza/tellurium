@@ -2,7 +2,8 @@
 
 Each case is launched up to the spawn, where the flags are captured; temporary
 paths and the forwarder's port are normalized. The expected lists were taken
-from ``Browser.launch`` as it was before the extraction (master f8ffe71).
+from ``Browser.launch`` as it was before the extraction (master f8ffe71), plus
+the first page, ``about:blank``, at the end (none when the arguments name one).
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ CASES: dict[str, dict] = {
         "args": ["--mute-audio"],
     },
     "socks_proxy": {"headless": True, "proxy": "socks5://127.0.0.1:1080"},
+    "own_first_page": {"headless": True, "args": ["--mute-audio", "https://example.com/"]},
     "proxy_with_credentials": {"headless": True, "proxy": "http://u:p@127.0.0.1:9"},
     "patched_manual": {
         "headless": True,
@@ -74,6 +76,7 @@ EXPECTED: dict[str, list[str]] = {
         *COMMON,
         "--user-data-dir=<tmp>",
         "--headless=new",
+        "about:blank",
     ],
     "headed_identity": [
         *COMMON,
@@ -81,6 +84,14 @@ EXPECTED: dict[str, list[str]] = {
         "--mute-audio",
         "--accept-lang=it-IT,it",
         "--window-size=1280,800",
+        "about:blank",
+    ],
+    "own_first_page": [
+        *COMMON,
+        "--user-data-dir=<tmp>",
+        "--headless=new",
+        "--mute-audio",
+        "https://example.com/",
     ],
     "patched_manual": [
         *COMMON,
@@ -89,18 +100,21 @@ EXPECTED: dict[str, list[str]] = {
         "--fingerprint=7",
         "--fingerprint-timezone=Europe/Rome",
         "--fingerprint-webrtc-ip=203.0.113.4",
+        "about:blank",
     ],
     "proxy_with_credentials": [
         *COMMON,
         "--user-data-dir=<tmp>",
         "--headless=new",
         "--proxy-server=<forwarder>",
+        "about:blank",
     ],
     "socks_proxy": [
         *COMMON,
         "--user-data-dir=<tmp>",
         "--headless=new",
         "--proxy-server=socks5://127.0.0.1:1080",
+        "about:blank",
     ],
     "stealth_overrides": [
         *COMMON,
@@ -109,6 +123,7 @@ EXPECTED: dict[str, list[str]] = {
         "--window-size=800,600",
         "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7000.1 Safari/537.36",
         "--load-extension=<tmp>",
+        "about:blank",
     ],
     "stealth_patched_geoip": [
         *COMMON,
@@ -120,6 +135,7 @@ EXPECTED: dict[str, list[str]] = {
         "--fingerprint=11",
         "--fingerprint-platform=linux",
         "--fingerprint-timezone=Europe/Rome",
+        "about:blank",
     ],
     "stealth_stock": [
         *COMMON,
@@ -128,6 +144,7 @@ EXPECTED: dict[str, list[str]] = {
         "--accept-lang=en-US,en",
         "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7000.1 Safari/537.36",
         "--load-extension=<tmp>",
+        "about:blank",
     ],
 }
 

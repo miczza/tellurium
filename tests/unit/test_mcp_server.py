@@ -4,7 +4,9 @@ the tool set, the CLI entry and how actions read where the page went."""
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -296,3 +298,23 @@ def test_tool_schemas_stay_small(tmp_path: Path):
     assert len(dumped) <= 7600
     target_ids = {json.dumps(t.input_schema()["properties"]["targetId"]) for t in tools if t.page}
     assert target_ids == {'{"type": "string"}'}  # explained once, in the instructions
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows: the next reply fails instead")
+async def test_a_reader_gone_from_the_reply_pipe_stops_the_server(monkeypatch):
+    """poll() on Linux, kqueue's EV_EOF on macOS (whose poll() does not report a
+    pipe left without a reader)."""
+    from tellurium.mcp import server
+
+    monkeypatch.setattr(server, "READER_POLL", 0.02)
+    read_end, write_end = os.pipe()
+    stop = asyncio.Event()
+    watcher = asyncio.ensure_future(server._until_reader_gone(write_end, stop))
+    try:
+        await asyncio.sleep(0.1)
+        assert not stop.is_set()  # a reader is there
+        os.close(read_end)
+        await asyncio.wait_for(stop.wait(), 5)
+    finally:
+        watcher.cancel()
+        os.close(write_end)

@@ -15,7 +15,6 @@ import contextlib
 import json
 import os
 import re
-import signal
 import stat
 import sys
 import time
@@ -33,6 +32,7 @@ from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 from mcp.shared._httpx_utils import create_mcp_http_client  # noqa: E402
 from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS  # noqa: E402
 
+from tests.console_signals import NEW_GROUP, terminate  # noqa: E402
 from tests.tellurium_cli import TELLURIUM_CLI  # noqa: E402
 
 _TELLURIUM = TELLURIUM_CLI
@@ -61,7 +61,7 @@ class _Server:
 
     async def stop(self, timeout: float = 30) -> int:
         if self.proc.returncode is None:
-            self.proc.send_signal(signal.SIGTERM)
+            terminate(self.proc)  # Ctrl-Break on Windows
         try:
             return await asyncio.wait_for(self.proc.wait(), timeout)
         except TimeoutError:
@@ -79,6 +79,7 @@ async def _spawn(home: Path, *options: str) -> asyncio.subprocess.Process:
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
+        **NEW_GROUP,
     )
 
 
@@ -148,7 +149,8 @@ async def _post(server: _Server, headers: dict[str, str], url: str | None = None
 async def test_token_file_created_0600_and_requests_without_it_refused(tmp_path):
     async with _server(tmp_path / "home") as server:
         token_file = server.home / "mcp-token"
-        assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
+        if sys.platform != "win32":  # no POSIX modes there: README, Platform support
+            assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
         token = server.token
         assert token not in "".join(server.stderr)  # never printed
 
@@ -363,6 +365,10 @@ async def test_eval_is_off_on_http_unless_allowed(tmp_path):
         assert "eval" in {t.name for t in (await client.list_tools()).tools}
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="no POSIX modes on Windows: a token readable by others is an ACL matter (README)",
+)
 async def test_loose_token_file_stops_the_server(tmp_path):
     home = tmp_path / "home"
     home.mkdir()

@@ -476,13 +476,20 @@ async def test_a_page_with_a_strict_csp_does_not_block_the_download(site):
         await tab.get("http://site.test/private", timeout=15)
 
 
-async def test_the_first_tab_on_the_new_tab_page_is_checked(site):
-    """Chrome's first tab shows chrome://newtab, whose CSP refuses any load."""
-    proxy, browser = site
-    tab = await browser.get("http://site.test/public", timeout=15)
-    assert await tab.eval("document.title") == "/public"
-    with pytest.raises(RobotsDisallowedError):
-        await browser.get("http://site.test/private", timeout=15)
+async def test_the_first_tab_on_the_new_tab_page_is_checked():
+    """A first tab on chrome://newtab (asked for in the arguments; tellurium's
+    own first page is about:blank), whose CSP refuses any load."""
+    async with SiteProxy({"/robots.txt": (200, TEXT, ROBOTS)}) as proxy:
+        browser = await Browser.launch(
+            headless=True, proxy=proxy.url, respect_robots=True, args=["chrome://newtab"]
+        )
+        try:
+            tab = await browser.get("http://site.test/public", timeout=15)
+            assert await tab.eval("document.title") == "/public"
+            with pytest.raises(RobotsDisallowedError):
+                await browser.get("http://site.test/private", timeout=15)
+        finally:
+            await browser.close()
 
 
 async def test_the_hidden_target_is_not_a_tab(site):

@@ -41,6 +41,14 @@ def test_file_is_private(tmp_path):
         assert path.stat().st_mode & 0o777 == 0o600
 
 
+def test_add_missing_keeps_the_file_and_adds_only_what_it_lacks(tmp_path):
+    folder = str(tmp_path)
+    session_cookies.save(folder, [_KEPT], at_close=True)
+    other = Cookie(name="kept", value="other", domain="127.0.0.1", expires=4102444800.0)
+    session_cookies.add_missing(folder, [other, _SSO, _GONE])
+    assert session_cookies.read(folder) == ([_KEPT, _SSO], True)
+
+
 def test_missing_file_is_no_cookies(tmp_path):
     assert session_cookies.load(str(tmp_path)) == []
 

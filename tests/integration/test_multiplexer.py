@@ -149,6 +149,10 @@ def _good(mux: Multiplexer) -> list[tuple[str, str]]:
     return [("Host", f"127.0.0.1:{_port(mux)}"), ("Authorization", f"Bearer {mux.token}")]
 
 
+def _launches(mux: Multiplexer) -> int:
+    return sum(s["launches"] for s in mux.status()["slots"])
+
+
 def _pids(mux: Multiplexer) -> list[int]:
     return [s["pid"] for s in mux.status()["slots"] if s["pid"]]
 
@@ -245,13 +249,16 @@ async def test_a_message_without_an_integer_id_closes_with_1007(message):
 
 
 async def test_four_clients_four_chromes_the_fifth_waits_then_503():
-    async with serving(4, acquire_timeout=4) as mux:
+    # The fifth waits for the first Chrome to close and a new one to start: on a
+    # slow runner (macOS, Windows) that takes more than a few seconds.
+    async with serving(4, acquire_timeout=60) as mux:
         async with contextlib.AsyncExitStack() as stack:
             clients = await asyncio.gather(
                 *(stack.enter_async_context(_client(mux)) for _ in range(4))
             )
             pids = _pids(mux)
             assert len(set(pids)) == 4 and mux.status()["clients"] == 4
+            launched = _launches(mux)
 
             fifth = asyncio.ensure_future(stack.enter_async_context(_client(mux)))
             assert await _wait_until(lambda: mux.status()["queue"] == 1, 5)
@@ -260,8 +267,11 @@ async def test_four_clients_four_chromes_the_fifth_waits_then_503():
             await clients[0].close()
             ws5 = await asyncio.wait_for(fifth, 30)
             assert (await _cdp(ws5, 1, "Browser.getVersion"))["result"]
-            assert pids[0] not in _pids(mux)
+            # The fifth has a Chrome of its own, launched for it (counted: Windows
+            # may give it the pid of the one that closed).
+            assert _launches(mux) == launched + 1
 
+            mux._pool.acquire_timeout = 4  # the queue time the sixth gets
             loop = asyncio.get_running_loop()
             start = loop.time()
             with pytest.raises(InvalidStatus) as refused:
@@ -673,6 +683,12 @@ async def test_a_burst_of_events_slows_a_slow_client_down_without_closing_it(mon
         peak, logs = 0, 0
         loop = asyncio.get_running_loop()
         start = loop.time()
+        # The client stops reading until the relay holds the pipe up: how fast Chrome
+        # logs (a loaded runner, Windows) must not decide whether it ever falls behind.
+        while relay.pauses == 0 and loop.time() - start < 30:
+            await asyncio.sleep(0.05)
+            if relay._client is not None:
+                peak = max(peak, relay._client.queued)
         while logs < total:
             message = json.loads(await asyncio.wait_for(ws.recv(), 30))
             if message.get("method") == "Runtime.consoleAPICalled":

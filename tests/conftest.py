@@ -17,6 +17,9 @@ import os
 import shutil
 import subprocess
 import sys
+import time
+
+import pytest
 
 from tests.async_guard import guard_seconds, guarded
 
@@ -73,4 +76,17 @@ def pytest_collection_modifyitems(config, items) -> None:
         return
     for item in items:
         if inspect.iscoroutinefunction(getattr(item, "obj", None)):
-            item.obj = guarded(item.obj, seconds)
+            item.obj = guarded(item.obj, seconds, lambda item=item: _setup_started.get(item))
+
+
+#: When each item's setup began: pytest-timeout counts the fixtures too.
+_setup_started: dict = {}
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item) -> None:
+    _setup_started[item] = time.monotonic()
+
+
+def pytest_runtest_teardown(item) -> None:
+    _setup_started.pop(item, None)

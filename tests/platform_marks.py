@@ -31,3 +31,6 @@ needs_sh = pytest.mark.skipif(WINDOWS, reason="a #!/bin/sh script is not an exec
 needs_singleton_symlink = pytest.mark.skipif(
     WINDOWS, reason="Chrome's SingletonLock is a symlink only on POSIX"
 )
+needs_tz_env = pytest.mark.skipif(
+    WINDOWS, reason="Chrome on Windows takes its time zone from Windows, not from TZ"
+)

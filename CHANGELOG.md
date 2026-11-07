@@ -76,9 +76,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   credential forwarder, WebRTC UDP only through the proxy, time zone and languages of the
   proxy's exit IP with `geoip=True`), with no stealth engine, extension or User-Agent
   rewrite, and always a temporary profile. The time zone (`timezone=` or the exit IP's)
-  reaches Chrome as `TZ` in its environment, so stock Chrome gets it too. `seed` is `None`
+  reaches Chrome as `TZ` in its environment, so stock Chrome gets it too (not on Windows,
+  where Chrome takes the system's time zone and ignores `TZ`). `seed` is `None`
   with stock Chrome, which takes none; a Chrome silent on the pipe for `READY_TIMEOUT`
-  (30 s) raises `asyncio.TimeoutError`. Launch waits for `Browser.getVersion` on the
+  (60 s) raises `asyncio.TimeoutError`. Launch waits for `Browser.getVersion` on the
   pipe; a failure or cancellation at any step releases Chrome, forwarder and profile.
 - `Slots.slot(timeout=None)` (the browser slots of `SessionPool`): *timeout* limits only the
   wait for a slot; past it `TimeoutError`, with no slot taken and no place left in the queue.
@@ -504,6 +505,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `RawChrome.kill()` ends Chrome at once through its process object (SIGKILL,
+  `TerminateProcess` on Windows); the multiplexer uses it. `RawChrome.launch` waits for
+  Chrome's first answer once, in the process start (`READY_TIMEOUT` is now that wait's 60 s,
+  no longer a second 30 s wait after it).
+
+- Session names are portable: `SessionPool` (and the MCP server's named sessions) refuse
+  on every system a name Windows cannot hold (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`,
+  `LPT1`-`LPT9`, with any extension, and a name ending with `.`), and one that differs
+  from an identity already in the pool only by case (`alice` beside `Alice`), with
+  `ValueError`. A session folder that is a symlink is refused with a `ValueError` that
+  says so.
+- The session lock is `<pool>/.<name>.lock` beside the folder (name case-folded), no longer
+  `session.lock` inside it: on Windows `SessionPool.delete()` now moves the folder away
+  with the lock held, so no other process can open a session half removed. A lock file of
+  an earlier version is ignored. `SessionLock.acquire()` creates the folder's parent only;
+  `Session.start()` creates the folder once it holds the lock.
+- `SessionPool.delete()` and the first call on a pool remove the `.<name>.deleted-*`
+  folders an interrupted delete left behind.
+
 - `Tab.keyboard_press` of a character typed with Shift on the US layout, pressed alone
   (`"!"`, `"?"`, `"+"`), is now pressed as a keyboard does it: Shift held (`shiftKey`
   true, modifier bit 8) on its physical key (`Digit1`, keycode 49), the same events as
@@ -656,6 +676,41 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Browser.launch` and `RawChrome.launch` start Chrome on `about:blank` when the arguments
+  name no page: Chrome's New Tab page, loading late, no longer replaces the document of the
+  first navigation or of a screenshot taken before it (the flags are otherwise unchanged).
+- Many launches looking up the proxy's location at once no longer starve the event loop:
+  the GeoIP lookups share one TLS context (making one reads the system's certificates, on
+  Windows from its certificate store, slowly and holding the GIL), and the search for a
+  Chrome executable runs off the loop.
+- `SessionPool.delete` that cannot remove the folder it moved aside (cookies included) says
+  so with a warning naming it (the next delete or pool tries again); `SessionPool.list`
+  warns about the folders it leaves out because their names are not portable (`CON`,
+  `a.`). `tellurium mcp` checks a session name against its twins by case again under the
+  session lock, so a twin another process creates meanwhile is refused too.
+- `tellurium login`: when the person closes both windows, the jar read while a window was
+  open is added to `cookies.json` after Chrome closes, instead of being put back into
+  Chrome, which ends its browsing session (dropping the cookies with no expiry) some time
+  after its last window has gone: on Windows a sign-in cookie could be lost that way.
+- macOS: `tellurium mcp` over stdio stops (saving its sessions) when the client closes
+  only its end of the reply pipe, as on Linux: the pipe is watched with kqueue, since
+  macOS's `poll()` does not report a pipe left without a reader.
+- Windows: `tellurium multiplex` and `tellurium mcp` stop cleanly, closing every browser
+  and exiting with 0, on Ctrl-C and on Ctrl-Break (`CTRL_BREAK_EVENT` to a process group of
+  their own, the way to stop them from a script or a service manager). `tellurium mcp`
+  now also ignores a stop signal that comes while it exits instead of dying with it.
+- macOS: a stale `SingletonLock` naming a PID the system gave to another process no longer
+  makes a session busy: the process's command line comes from `sysctl(KERN_PROCARGS2)`
+  (there is no `/proc`), and an exited process not yet reaped counts as gone.
+- Windows: a session start (and `SessionPool.delete()`) waits for the Chrome of a killed
+  holder to let go of the profile, as on Linux and macOS: Chrome's `lockfile`, held while
+  it runs, is the mark there (there is no `SingletonLock` symlink).
+- Windows: concurrent writes of `session.json` and `cookies.json` no longer fail with
+  `PermissionError` while another rename lands; reads try again for a moment too.
+- Windows: the CDP pipe holds Chrome up when its reader falls behind (at most 256 KiB
+  read ahead, as on POSIX), so the multiplexer's relay slows a flood down to its slow
+  client instead of queueing it all in memory. The Chrome process handle is closed once,
+  under a lock, when a poll from the event loop races a wait in a thread.
 - `Download.cancel()` (and closing a context or the browser with a download running) no
   longer returns while the partial `<guid>.crdownload` file is still in the folder: Chrome
   reports the cancel before its file thread deletes it, so the call now waits for the file
@@ -671,7 +726,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   in place with its mtime put back (the record used `st_ctime`, which on Windows is the
   creation time; it now uses the file's change time).
 - Windows launch: `launch_chrome_windows` (now in `tellurium.browser.launch_windows`) gives
-  Chrome a Unicode environment block (the launch's `env`, so `TZ` and the rest reach it;
+  Chrome a Unicode environment block (the launch's `env` reaches it, though Chrome there
+  reads no time zone from `TZ`;
   `TMP` and `TEMP` on a temporary folder of ours, removed at close) and standard handles
   (`STARTF_USESTDHANDLES`): `chrome_log=` now works on Windows (with
   `--enable-logging=stderr` added unless the arguments choose a logging mode), and without

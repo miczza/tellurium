@@ -5,12 +5,13 @@ from __future__ import annotations
 import os
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
 from tellurium import SessionBusyError
 from tellurium.session import SessionError
-from tellurium.session.lock import LOCK_FILE, SessionLock
+from tellurium.session.lock import SessionLock, lock_file
 
 
 def test_busy_error_is_exported_and_a_session_error():
@@ -47,7 +48,7 @@ def test_lock_file_holds_the_pid_and_is_private(tmp_path):
     lock = SessionLock(str(tmp_path))
     lock.acquire()
     try:
-        path = tmp_path / LOCK_FILE
+        path = Path(lock_file(str(tmp_path)))
         assert path.read_text().strip() == str(os.getpid())
         if sys.platform != "win32":
             assert path.stat().st_mode & 0o777 == 0o600
@@ -67,11 +68,23 @@ def test_holder_reports_the_pid_without_taking_the_lock(tmp_path):
     assert SessionLock.holder(str(tmp_path)) is None
 
 
-def test_acquire_creates_the_folder(tmp_path):
-    lock = SessionLock(str(tmp_path / "a" / "b"))
+def test_the_lock_is_beside_the_folder_and_acquire_makes_only_its_parent(tmp_path):
+    lock = SessionLock(str(tmp_path / "a" / "B"))
     lock.acquire()
     lock.release()
-    assert (tmp_path / "a" / "b" / LOCK_FILE).exists()
+    assert lock_file(str(tmp_path / "a" / "B")) == str(tmp_path / "a" / ".b.lock")
+    assert (tmp_path / "a" / ".b.lock").exists()
+    assert not (tmp_path / "a" / "B").exists()
+
+
+def test_a_lock_file_inside_the_folder_from_earlier_versions_is_ignored(tmp_path):
+    folder = tmp_path / "s"
+    folder.mkdir()
+    (folder / "session.lock").write_text("4242\n")
+    assert SessionLock.holder(str(folder)) is None
+    lock = SessionLock(str(folder))
+    lock.acquire()
+    lock.release()
 
 
 def test_acquire_twice_on_one_lock_is_an_error(tmp_path):
@@ -131,7 +144,7 @@ def _probed_for_a_moment(path, seconds=0.02):
     import fcntl
     import threading
 
-    fd = os.open(os.path.join(path, LOCK_FILE), os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(lock_file(path), os.O_RDWR | os.O_CREAT, 0o600)
     fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
 
     def let_go():
@@ -164,7 +177,7 @@ def fake_launch(monkeypatch):
 async def test_a_probe_does_not_make_a_start_busy(tmp_path, fake_launch):
     from tellurium import Session
 
-    (tmp_path / LOCK_FILE).write_text("4242\n")  # a holder long gone
+    Path(lock_file(str(tmp_path))).write_text("4242\n")  # a holder long gone
     timer = _probed_for_a_moment(str(tmp_path))
     try:
         async with Session("s", path=str(tmp_path)).start():
@@ -175,7 +188,7 @@ async def test_a_probe_does_not_make_a_start_busy(tmp_path, fake_launch):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="flock")
 def test_a_probe_does_not_make_another_probe_see_a_holder(tmp_path):
-    (tmp_path / LOCK_FILE).write_text("4242\n")
+    Path(lock_file(str(tmp_path))).write_text("4242\n")
     timer = _probed_for_a_moment(str(tmp_path))
     try:
         assert SessionLock.holder(str(tmp_path)) is None

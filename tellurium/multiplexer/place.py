@@ -288,9 +288,7 @@ class Place:
         finally:
             if chrome is not None:
                 if kill:
-                    # Through the process object, not the pid: portable, and
-                    # never a pid another process got after Chrome was reaped.
-                    chrome._proc.kill()
+                    chrome.kill()  # through the process object, never a stale pid
                 try:
                     await chrome.close()
                 finally:

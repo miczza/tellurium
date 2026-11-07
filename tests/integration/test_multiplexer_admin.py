@@ -22,6 +22,7 @@ from websockets.asyncio.client import connect  # noqa: E402
 
 from tellurium.browser.raw_chrome import RawChrome  # noqa: E402
 from tellurium.multiplexer import command  # noqa: E402
+from tests.console_signals import NEW_GROUP, interrupt  # noqa: E402
 from tests.integration.test_multiplexer import (  # noqa: E402, F401 - autouse fixtures
     _cdp,
     _client,
@@ -437,6 +438,63 @@ async def test_the_command_serves_then_a_signal_closes_everything(
     finally:
         if proc.returncode is None:
             os.killpg(proc.pid, signal.SIGKILL)
+            await proc.wait()
+
+
+async def test_ctrl_c_closes_the_command_with_0_on_every_system(
+    tmp_path,
+    private_tempdir,  # noqa: F811
+):
+    """Ctrl-C, or on Windows Ctrl-Break to a console group of its own (a real
+    console event, not ``TerminateProcess``): the client is told 1001, every
+    Chrome and profile goes, and the exit code is 0."""
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        _CLI,
+        "multiplex",
+        "--pool",
+        "1",
+        "--warm",
+        "1",
+        "--browser",
+        "stock",
+        "--listen",
+        "127.0.0.1:0",
+        env=_cli_env(tmp_path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        **NEW_GROUP,
+    )
+    try:
+        first = (await asyncio.wait_for(proc.stdout.readline(), 90)).decode()
+        url = re.search(r"http://127\.0\.0\.1:\d+", first)
+        assert url, first + (await proc.stderr.read()).decode()
+        port = int(url.group(0).rsplit(":", 1)[1])
+        # Where the token is: HOME on POSIX, the user profile on Windows.
+        second = (await proc.stdout.readline()).decode()
+        token = Path(second.split("token in ", 1)[1].strip()).read_text().strip()
+        try:
+            ws = await connect(
+                f"ws://127.0.0.1:{port}/devtools/browser/x",
+                additional_headers={"Authorization": f"Bearer {token}"},
+                open_timeout=60,
+            )
+        except TimeoutError:
+            proc.kill()
+            raise AssertionError((await proc.stderr.read()).decode()) from None
+        async with ws:
+            await _cdp(ws, 1, "Browser.getVersion")
+            interrupt(proc)
+            code, _ = await _closed(ws)
+            assert code == 1001
+        assert await asyncio.wait_for(proc.wait(), 60) == 0
+        rest = (await proc.stdout.read()).decode()
+        assert "stopped" in rest + (await proc.stderr.read()).decode()
+        assert await _wait_until(lambda: _profiles(private_tempdir) == [], 15)
+    finally:
+        if proc.returncode is None:
+            proc.kill()
             await proc.wait()
 
 

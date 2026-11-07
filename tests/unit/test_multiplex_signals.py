@@ -13,7 +13,7 @@ import types
 
 import pytest
 
-from tellurium.multiplexer import command
+from tellurium.multiplexer import command, stop_signals
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32" or not hasattr(os, "kill"),
@@ -26,7 +26,7 @@ def test_the_cli_imports_without_sighup_nor_pthread_sigmask():
     script = (
         "import signal; del signal.SIGHUP; del signal.pthread_sigmask; "
         "import tellurium.cli; from tellurium.multiplexer import command; "
-        "print(command._stop_signals())"
+        "from tellurium.multiplexer import stop_signals; print(stop_signals.stop_signals())"
     )
     done = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True, timeout=60
@@ -72,7 +72,7 @@ async def test_ctrl_c_closes_everything_without_add_signal_handler(monkeypatch):
             for name in ("SIGINT", "SIGTERM", "SIG_IGN", "signal", "getsignal")
         }
     )
-    monkeypatch.setattr(command, "signal", fake)
+    monkeypatch.setattr(stop_signals, "signal", fake)
     loop = asyncio.get_running_loop()
 
     def unsupported(*_args):
@@ -98,3 +98,9 @@ async def test_ctrl_c_closes_everything_without_add_signal_handler(monkeypatch):
     finally:
         for signum, handler in saved.items():
             signal.signal(signum, handler)
+
+
+def test_ctrl_break_is_a_stop_signal_where_it_exists(monkeypatch):
+    monkeypatch.setattr(signal, "SIGBREAK", signal.SIGUSR1, raising=False)
+    assert signal.SIGUSR1 in stop_signals.stop_signals()
+    assert stop_signals.stop_signals(("SIGTERM", "SIGBREAK")) == (signal.SIGTERM, signal.SIGUSR1)
