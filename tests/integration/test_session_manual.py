@@ -11,7 +11,8 @@ import pytest
 import tellurium
 from tellurium import Session
 from tellurium.session import SessionLoginFailedError, manual_login
-from tests.integration.test_wait_for_human import _click_node, _done_button
+from tests.integration import banner_probe
+from tests.integration.test_wait_for_human import _click_node, _closed_roots, _done_button
 from tests.platform_marks import LINUX, needs_display
 
 
@@ -76,11 +77,20 @@ async def test_a_hung_validator_hands_over_to_a_person(
         await tab.get(f"{local_server}/basic.html")
         await tab.eval("document.cookie = 'auth=1; path=/; max-age=3600'")
         await _click_node(tab, await _done_button(tab))
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 5
+        while await _closed_roots(tab) and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        if await _closed_roots(tab):  # still up: what the click met, for the failure
+            lost.append(await banner_probe.report(tab))
 
+    lost: list[str] = []
     helper = asyncio.create_task(person())
     try:
         async with session.start(headless=True, on_login_failure="manual", manual_timeout=60):
             await asyncio.wait_for(helper, 30)
+    except SessionLoginFailedError as exc:
+        raise AssertionError("\n".join(lost) or "no click lost") from exc
     finally:
         helper.cancel()
     assert launched[1][0]["headless"] is False

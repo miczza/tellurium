@@ -55,8 +55,12 @@ DONE_LABEL = "Done"
 # not in the document; (3) puts back its style and its place in the top layer
 # and, if its button is not what a click there would hit (hidden, covered,
 # inert under a modal dialog), moves it on top or into the modal dialog.
+# The button joins the banner only once the document has painted: before its
+# first frame a person sees nothing, and Chrome (on macOS) drops the press of
+# a click there, so the click would be lost.
 # "unbound": the binding is missing from this world; "nodoc": no document
-# yet; "blocked": the button cannot be made reachable this round.
+# yet; "unpainted": the document has not painted yet, no button; "blocked":
+# the button cannot be made reachable this round.
 _SHOW_JS = """
 (function (reason, done, label) {
   const call = function () {
@@ -114,9 +118,9 @@ _SHOW_JS = """
       // click(), requestSubmit() or a synthetic event do not.
       if (navigator.userActivation.isActive) call();
     });
-    form.append(text, button);
+    form.append(text);
     shadow.append(form);
-    return {host: host, shadow: shadow, button: button, css: null};
+    return {host: host, shadow: shadow, form: form, button: button, css: null};
   };
   const raise = function (host) {
     try {
@@ -146,6 +150,10 @@ _SHOW_JS = """
   if (b.host.getAttribute('popover') !== 'manual') b.host.setAttribute('popover', 'manual');
   if (b.host.inert) b.host.inert = false;
   if (!b.host.matches(':popover-open')) raise(b.host);
+  if (!b.button.isConnected) {
+    if (performance.getEntriesByType('paint').length === 0) return 'unpainted';
+    b.form.append(b.button);
+  }
   if (reachable(b)) return 'shown';
   // Inert under a modal dialog of the page: only the dialog's subtree is not.
   const places = [root].concat(Array.from(document.querySelectorAll('dialog:modal')).reverse());
@@ -169,8 +177,8 @@ async def wait_for_human(
 ) -> None:
     """Wait for a person to do something in *tab* (solve a captcha, sign in).
 
-    Headed: a banner shows *reason* and a "Done" button; the wait ends when
-    the person clicks it or *until* holds. Headless: no banner, *until* is
+    Headed: the tab is brought to the front and a banner shows *reason* and
+    a "Done" button; the wait ends when the person clicks it or *until* holds. Headless: no banner, *until* is
     required (``ValueError`` otherwise). *until* is a URL pattern (glob with
     ``*``/``?``, substring otherwise), matched against the main frame's URL
     without query and fragment (``**/dashboard`` does not match
@@ -191,6 +199,7 @@ async def wait_for_human(
     try:
         if banner is not None:
             banner.open()
+            await banner.bring_to_front()
         while True:
             frame = await _main_frame(tab, deadline)
             if banner is not None and banner.done.is_set():
@@ -277,14 +286,19 @@ async def _main_frame(tab: Tab, deadline: float) -> dict | None:
 async def _bounded(
     awaitable: Awaitable[bool], deadline: float, reason: str, timeout: float | None
 ) -> bool:
-    """*awaitable*'s result, or the wait's ``TimeoutError`` past *deadline*."""
-    left = deadline - asyncio.get_running_loop().time()
-    if left == math.inf:
+    """*awaitable*'s result, or the wait's ``TimeoutError`` once the limit at
+    *deadline* fires. Whether it fired is the limit's own say, not the clock's:
+    the loop runs a timer up to one clock tick early (~15.6 ms on Windows), so
+    ``loop.time()`` can still be short of *deadline* then. A ``TimeoutError``
+    of *awaitable* itself goes through as it is."""
+    if deadline == math.inf:
         return await awaitable
+    limit = asyncio.timeout_at(deadline)
     try:
-        return await asyncio.wait_for(awaitable, max(left, 0))
+        async with limit:
+            return await awaitable
     except TimeoutError:
-        if asyncio.get_running_loop().time() >= deadline:
+        if limit.expired():
             raise _timeout(reason, timeout) from None
         raise
 
@@ -354,6 +368,13 @@ class _Banner:
             )
         )
         _keep(self._adding, self._owner)
+
+    async def bring_to_front(self) -> None:
+        """Show the tab and give its window the focus: the person must see it."""
+        try:
+            await self._send("Page.bringToFront", {})
+        except (TimeoutError, CDPError):
+            pass  # a busy or closing page: the banner goes up all the same
 
     async def show(self, frame: dict) -> None:
         """Make sure the current document shows the banner."""

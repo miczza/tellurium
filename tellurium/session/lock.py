@@ -110,10 +110,11 @@ class SessionLock:
 
 def lock_file(path: str) -> str:
     """The lock file of the session folder *path*: ``.<name>.lock`` beside it,
-    *name* case-folded."""
+    *name* case-folded. The parent is resolved (links, and 8.3 short names on
+    Windows): the same folder by another path takes the same lock."""
     folder = os.path.normpath(os.path.abspath(path))
     parent, name = os.path.split(folder)
-    return os.path.join(parent, f".{name.casefold()}.lock")
+    return os.path.join(os.path.realpath(parent), f".{name.casefold()}.lock")
 
 
 def _try_lock(fd: int, shared: bool = False) -> bool:

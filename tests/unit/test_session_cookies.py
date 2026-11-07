@@ -49,6 +49,28 @@ def test_add_missing_keeps_the_file_and_adds_only_what_it_lacks(tmp_path):
     assert session_cookies.read(folder) == ([_KEPT, _SSO], True)
 
 
+def test_with_dropped_puts_back_only_the_cookies_with_no_expiry():
+    """Chrome drops those with its last window; one with an expiry missing at
+    the close was deleted by the site (a logout) and stays gone."""
+    other = Cookie(name="sso", value="new", domain="127.0.0.1")
+    assert session_cookies.with_dropped([_KEPT], [_SSO, _KEPT]) == [_KEPT, _SSO]
+    assert session_cookies.with_dropped([], [_SSO, _KEPT]) == [_SSO]
+    assert session_cookies.with_dropped([other], [_SSO]) == [other]
+
+
+def test_add_missing_that_cannot_write_warns_and_keeps_the_file(tmp_path, monkeypatch):
+    folder = str(tmp_path)
+    session_cookies.save(folder, [_KEPT])
+
+    def refuse(*args, **kwargs):
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(session_cookies, "save", refuse)
+    with pytest.warns(UserWarning, match="could not add cookies"):
+        session_cookies.add_missing(folder, [_SSO])
+    assert session_cookies.load(folder) == [_KEPT]
+
+
 def test_missing_file_is_no_cookies(tmp_path):
     assert session_cookies.load(str(tmp_path)) == []
 

@@ -676,6 +676,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `tellurium login`: the cookies of the sign-in that Chrome drops with its last window are
+  written to `cookies.json` by the session's close, still holding the session's lock. They
+  were added after the lock was let go: a process opening the session in that moment started
+  without them and overwrote them on closing, and a `delete` then saw the folder made again.
+  Only the cookies with no expiry are put back: one with an expiry that the site deleted in
+  the last 0.3 s before the windows closed (a logout) no longer comes back.
+- `tellurium login`: closing the sign-in window and then, an instant later, the minimized
+  keeper window no longer loses the cookies with no expiry. The login ended as soon as the
+  sign-in window had gone with the keeper still listed (on Windows a closing window can stay
+  in the targets for a moment), counted on the close to read Chrome's whole jar, and Chrome
+  had dropped them by then. The jar read while the sign-in window was open is now always
+  handed to the close.
+- `SessionLock` resolves the parent of the session folder: the same folder reached through a
+  symbolic link (or an 8.3 short name on Windows) takes the same lock instead of a second one.
+- `SessionPool.delete()` on Windows waits (up to 10 s) for the helper processes of a dead
+  holder's Chrome to close their files in the session folder: the rename that moves it out
+  of the way failed with `PermissionError` (WinError 5) just after that Chrome let go.
+- `SessionPool.list()` warns of a folder with a non-portable name once per pool, not at every
+  call.
+- `Tab.wait_for_human()` in headed Chrome brings its tab to the front, its window taking the
+  focus, so the person sees it when another window of Chrome or of another program had come
+  up after it.
+- `Tab.wait_for_human()`: the banner's "Done" button appears only once the page has painted.
+  A click on it before the page's first frame (a window just opened) was lost on macOS: Chrome
+  dropped the press, only the release reached the page.
+- `Tab.wait_for_human(until=...)`: a condition still running when the wait's time runs out
+  always ends in the `TimeoutError` that names the reason and the timeout; on Windows, whose
+  clock ticks every ~15.6 ms, it was sometimes a bare `TimeoutError`.
 - `Browser.launch` and `RawChrome.launch` start Chrome on `about:blank` when the arguments
   name no page: Chrome's New Tab page, loading late, no longer replaces the document of the
   first navigation or of a screenshot taken before it (the flags are otherwise unchanged).

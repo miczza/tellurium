@@ -6,12 +6,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 
 import pytest
 
 import tellurium
-from tellurium.session import login_command
+from tellurium.session import login_command, session_cookies
+from tests.integration import banner_probe
+from tests.integration.login_timeline import LoginTimeline
 from tests.integration.test_wait_for_human import _click_node, _done_button
 from tests.platform_marks import needs_display
 
@@ -66,22 +69,25 @@ async def _loaded(tab, page, timeout=15.0):
         await asyncio.sleep(0.1)
 
 
-async def _close_windows(browser) -> None:
+async def _close_windows(browser, timeline=None) -> None:
     """What the person does: close every window (Chrome stays up for the save)."""
     root = browser._router.root
     targets = (await root.send("Target.getTargets", {}, timeout=5))["targetInfos"]
     for t in targets:
         if t["type"] == "page":
+            if timeline is not None:
+                timeline.note(f"test closes {timeline._name(t['targetId'])}")
             await root.send("Target.closeTarget", {"targetId": t["targetId"]}, timeout=5)
 
 
 async def test_closing_the_window_saves_a_session_mcp_reopens_signed_in(
-    tmp_path, local_server, launched
+    tmp_path, local_server, launched, monkeypatch
 ):
     pytest.importorskip("mcp")
     from tellurium.mcp.config import ServerConfig
     from tellurium.mcp.sessions import SessionPool
 
+    timeline = LoginTimeline(monkeypatch, "http_sso")
     config = ServerConfig(home=tmp_path)
     task = asyncio.create_task(
         login_command.login(
@@ -92,7 +98,7 @@ async def test_closing_the_window_saves_a_session_mcp_reopens_signed_in(
         browser = await _first(launched)
         await _cookie(browser, "http_sso")
         await asyncio.sleep(4 * login_command.POLL)  # a cookie that old is never missed
-        await _close_windows(browser)
+        await _close_windows(browser, timeline)
         path = await asyncio.wait_for(task, 30)
     finally:
         task.cancel()
@@ -100,7 +106,7 @@ async def test_closing_the_window_saves_a_session_mcp_reopens_signed_in(
     assert path == str(folder)
     assert json.loads((folder / "session.json").read_text())["name"] == "acct"
     saved = json.loads((folder / "cookies.json").read_text())["cookies"]
-    assert any(c["name"] == "http_sso" and c["expires"] == -1 for c in saved)
+    assert any(c["name"] == "http_sso" and c["expires"] == -1 for c in saved), timeline
     if sys.platform != "win32":  # no POSIX modes there (an ACL would be needed)
         assert (folder / "cookies.json").stat().st_mode & 0o777 == 0o600
 
@@ -118,7 +124,9 @@ async def test_done_on_the_banner_ends_the_login_too(tmp_path, local_server, lau
         browser = await _first(launched)
         tab = browser.main_tab
         await _click_node(tab, await _done_button(tab))
-        await asyncio.wait_for(task, 30)
+        done, _ = await asyncio.wait({task}, timeout=30)
+        assert done, await banner_probe.report(tab)
+        await task
     finally:
         task.cancel()
     assert (tmp_path / "acct" / "session.json").exists()
@@ -177,3 +185,81 @@ async def test_session_cookies_chrome_drops_after_the_windows_went_are_saved(
         task.cancel()
     saved = json.loads((tmp_path / "acct" / "cookies.json").read_text())["cookies"]
     assert any(c["name"] == "http_sso" and c["expires"] == -1 for c in saved)
+
+
+async def test_the_login_cookies_are_written_under_the_session_lock(
+    tmp_path, local_server, launched, monkeypatch
+):
+    """The jar read while a window was open goes to cookies.json before the
+    session lets its lock go: another process opening the session (or a delete)
+    right after the login never sees the file without them, nor has it rewritten."""
+    from tellurium.session.lock import SessionLock
+
+    real_windows_closed = login_command._windows_closed
+
+    async def windows_closed_then_late_drop(browser, keeper):
+        kept = await real_windows_closed(browser, keeper)
+        await browser.clear_cookies()  # Chrome drops the cookies with no expiry, late
+        return kept
+
+    folder = str(tmp_path / "acct")
+    writes: list[tuple[bool, bool]] = []  # (has the login's cookie, lock held)
+    real_save = session_cookies.save
+
+    def watched_save(path, cookies, *, at_close=False):
+        if os.path.normpath(path) == os.path.normpath(folder):
+            has = any(c.name == "http_sso" for c in cookies)
+            writes.append((has, SessionLock.holder(folder) is not None))
+        real_save(path, cookies, at_close=at_close)
+
+    monkeypatch.setattr(login_command, "_windows_closed", windows_closed_then_late_drop)
+    monkeypatch.setattr(session_cookies, "save", watched_save)
+    task = asyncio.create_task(
+        login_command.login("acct", f"{local_server}/session-cookie", directory=str(tmp_path))
+    )
+    try:
+        browser = await _first(launched)
+        await _cookie(browser, "http_sso")
+        await asyncio.sleep(4 * login_command.POLL)  # a cookie that old is never missed
+        await _close_windows(browser)
+        await asyncio.wait_for(task, 30)
+    finally:
+        task.cancel()
+    assert writes and writes[-1][0]  # the last write has the login's cookie
+    assert all(held for _, held in writes)
+    saved = json.loads((tmp_path / "acct" / "cookies.json").read_text())["cookies"]
+    assert any(c["name"] == "http_sso" and c["expires"] == -1 for c in saved)
+
+
+async def test_the_keeper_closing_just_after_the_sign_in_window_keeps_the_cookies(
+    tmp_path, local_server, launched, monkeypatch
+):
+    """The person closes both windows; on Windows the keeper's can still be
+    listed when the other has gone, so the login ends with the keeper "open",
+    and Chrome drops the cookies with no expiry before the session's close
+    reads its jar. The jar read while the sign-in window was open saves them."""
+    timeline = LoginTimeline(monkeypatch, "http_sso")
+    watch = login_command._windows_closed  # the timeline's
+
+    async def keeper_closed_then_dropped(browser, keeper):
+        kept = await watch(browser, keeper)
+        root = browser._router.root
+        await root.send("Target.closeTarget", {"targetId": keeper}, timeout=5)
+        await browser.clear_cookies()  # Chrome ends its browsing session
+        timeline.note("keeper closed, jar dropped")
+        return kept
+
+    monkeypatch.setattr(login_command, "_windows_closed", keeper_closed_then_dropped)
+    task = asyncio.create_task(
+        login_command.login("acct", f"{local_server}/session-cookie", directory=str(tmp_path))
+    )
+    try:
+        browser = await _first(launched)
+        await _cookie(browser, "http_sso")
+        await asyncio.sleep(4 * login_command.POLL)  # a cookie that old is never missed
+        await browser.main_tab.close()  # the sign-in window; the keeper stays listed
+        await asyncio.wait_for(task, 30)
+    finally:
+        task.cancel()
+    saved = json.loads((tmp_path / "acct" / "cookies.json").read_text())["cookies"]
+    assert any(c["name"] == "http_sso" and c["expires"] == -1 for c in saved), timeline

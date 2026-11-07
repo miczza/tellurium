@@ -9,6 +9,7 @@ import sys
 
 import pytest
 
+from tests.integration import banner_probe
 from tests.platform_marks import HAS_DISPLAY, needs_display
 
 HEADED = HAS_DISPLAY
@@ -55,7 +56,7 @@ async def _click_node(tab, node_id: int) -> None:
     quad = (await tab.send_cdp("DOM.getBoxModel", {"nodeId": node_id}))["model"]["content"]
     x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4
     y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4
-    await tab.mouse_click(x, y)
+    await banner_probe.probed_click(tab, x, y)
 
 
 async def _until_settled(task, seconds: float) -> bool:
@@ -78,7 +79,7 @@ async def test_a_real_click_on_done_returns_and_leaves_no_node(headed, local_ser
         globals_during = await tab.eval("Object.getOwnPropertyNames(window).sort().join(',')")
         assert globals_during == globals_before  # no binding in the page's world
         await _click_node(tab, button)
-        assert await _until_settled(task, 5)
+        assert await _until_settled(task, 5), await banner_probe.report(tab)
         await task
     finally:
         task.cancel()
@@ -142,7 +143,7 @@ async def test_done_works_after_a_cross_process_navigation_as_the_wait_starts(lo
             try:
                 await tab.get(f"{local_server}/basic.html")
                 await _click_node(tab, await _done_button(tab))
-                assert await _until_settled(task, 5)
+                assert await _until_settled(task, 5), await banner_probe.report(tab)
                 await task
             finally:
                 task.cancel()

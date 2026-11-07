@@ -237,3 +237,48 @@ def test_a_procargs2_buffer_is_parsed():
         + b"Chrome\0--user-data-dir=/tmp/a b\0--headless\0PATH=/usr/bin\0HOME=/x\0"
     )
     assert process_args.parse_procargs2(raw) == b"Chrome\0--user-data-dir=/tmp/a b\0--headless\0"
+
+
+async def test_a_move_refused_while_the_chrome_winds_down_waits_for_it(tmp_path, monkeypatch):
+    """Windows: the dead holder's Chrome let go of ``lockfile``, but a helper
+    process of it still has a file open in the folder for a moment, and the
+    folder cannot be renamed until it is gone (WinError 5)."""
+    calls = []
+    real = os.rename
+
+    def refused_twice(src, dst):
+        calls.append(src)
+        if len(calls) <= 2:
+            raise PermissionError(13, "Access is denied")
+        real(src, dst)
+
+    monkeypatch.setattr(profile_release, "_MOVE_WAITS", True)
+    monkeypatch.setattr(profile_release.os, "rename", refused_twice)
+    (tmp_path / "s").mkdir()
+    await profile_release.move(str(tmp_path / "s"), str(tmp_path / "grave"), timeout=5)
+    assert len(calls) == 3
+    assert (tmp_path / "grave").is_dir()
+
+
+async def test_a_move_still_refused_at_the_timeout_raises(tmp_path, monkeypatch):
+    def refused(src, dst):
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(profile_release, "_MOVE_WAITS", True)
+    monkeypatch.setattr(profile_release.os, "rename", refused)
+    with pytest.raises(PermissionError):
+        await profile_release.move(str(tmp_path / "s"), str(tmp_path / "grave"), timeout=0.2)
+
+
+async def test_a_move_refused_on_posix_is_not_waited_for(tmp_path, monkeypatch):
+    calls = []
+
+    def refused(src, dst):
+        calls.append(src)
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(profile_release, "_MOVE_WAITS", False)
+    monkeypatch.setattr(profile_release.os, "rename", refused)
+    with pytest.raises(PermissionError):
+        await profile_release.move(str(tmp_path / "s"), str(tmp_path / "grave"), timeout=5)
+    assert len(calls) == 1
