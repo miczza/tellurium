@@ -8,18 +8,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import signal
-import sys
 from pathlib import Path
 
 import pytest
 
 from tellurium.session import SessionBusyError, SessionPool
-from tests.integration.session_child import child_env
-from tests.platform_marks import needs_posix_signals, needs_proc
+from tests.integration.session_child import kill_holder, start_holder
+from tests.platform_marks import needs_proc
 from tests.private_temp import FAILING_EXECUTABLE
-
-_CHILD = str(Path(__file__).with_name("session_child.py"))
 
 
 def _running(directory: str) -> set[str]:
@@ -101,22 +97,13 @@ async def test_six_identities_two_browsers_at_a_time(tmp_path, local_server):
     assert await pool.list() == names
 
 
-@needs_posix_signals
 async def test_a_session_open_in_another_process(tmp_path):
+    """E2 on every system: another process holds the session, so open and
+    delete get SessionBusyError and the folder stays where it is."""
     pool = SessionPool(tmp_path, max_browsers=1, headless=True)
     path = pool.path("shared")
-    holder = await asyncio.create_subprocess_exec(
-        sys.executable,
-        _CHILD,
-        "hold",
-        path,
-        env=child_env(path),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    holder = await start_holder(path)
     try:
-        assert (await asyncio.wait_for(holder.stdout.readline(), 60)).strip() == b"ready"
         with pytest.raises(SessionBusyError) as info:
             async with pool.open("shared"):
                 pass
@@ -125,13 +112,11 @@ async def test_a_session_open_in_another_process(tmp_path):
             await pool.delete("shared")
         assert info.value.pid == holder.pid
         assert os.path.isdir(os.path.join(path, "chrome"))
+        assert not [n for n in os.listdir(tmp_path) if ".deleted-" in n]  # nothing renamed
         async with pool.open("other") as browser:  # the refusals took no slot
             assert await browser.main_tab.eval("1 + 1") == 2
     finally:
-        try:
-            os.killpg(holder.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        kill_holder(holder)
         await holder.wait()
     await pool.delete("shared")  # its holder gone, the folder goes too
     assert await pool.list() == ["other"]

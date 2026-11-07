@@ -5,50 +5,15 @@ from __future__ import annotations
 
 import asyncio
 import os
-import signal
-import sys
-from pathlib import Path
 
 import pytest
 
 from tellurium import Session, SessionBusyError
 from tellurium.session.lock import SessionLock
-from tests.integration.session_child import child_env
+from tests.integration.session_child import kill_holder, start_holder
 
-_CHILD = str(Path(__file__).with_name("session_child.py"))
-
-
-async def _hold(path: str) -> asyncio.subprocess.Process:
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        _CHILD,
-        "hold",
-        path,
-        env=child_env(path),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-        # Its Chrome too can be killed as a group (POSIX; on Windows that
-        # Chrome exits by itself once the holder's end of its pipe is gone).
-        start_new_session=sys.platform != "win32",
-    )
-    try:
-        line = await asyncio.wait_for(proc.stdout.readline(), 60)
-    except BaseException:
-        _kill_group(proc)
-        await proc.wait()
-        raise
-    assert line.strip() == b"ready"
-    return proc
-
-
-def _kill_group(proc: asyncio.subprocess.Process) -> None:
-    try:
-        if sys.platform == "win32":
-            proc.kill()  # TerminateProcess: no group to kill
-        else:
-            os.killpg(proc.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):  # gone already
-        pass
+_hold = start_holder
+_kill_group = kill_holder
 
 
 async def test_second_process_gets_busy_error_then_takes_the_lock_of_a_killed_one(tmp_path):
