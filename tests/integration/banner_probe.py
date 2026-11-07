@@ -35,9 +35,19 @@ _LISTEN_JS = """
 """
 
 _STATE_JS = """
-(function (x, y) {
+(async function (x, y) {
   const hit = document.elementFromPoint(x, y);
+  // Whether the page renders: a frame within 500 ms, and its paint entries.
+  const t = performance.now();
+  const frame = await Promise.race([
+    new Promise(function (r) { requestAnimationFrame(function () { r(performance.now() - t); }); }),
+    new Promise(function (r) { setTimeout(function () { r('none in 500ms'); }, 500); }),
+  ]);
   return JSON.stringify({
+    frame: frame, now: Math.round(performance.now()),
+    paints: performance.getEntriesByType('paint').map(function (e) {
+      return e.name + '@' + Math.round(e.startTime);
+    }),
     vis: document.visibilityState, focus: document.hasFocus(), ready: document.readyState,
     url: location.href, inner: [innerWidth, innerHeight], outer: [outerWidth, outerHeight],
     screen: [screenX, screenY], dpr: devicePixelRatio,
@@ -113,7 +123,7 @@ class BannerProbe:
         return json.dumps(parts, default=str)
 
     async def _eval(self, expression: str):
-        params = {"expression": expression, "returnByValue": True}
+        params = {"expression": expression, "returnByValue": True, "awaitPromise": True}
         if self.context is not None:
             params["contextId"] = self.context
         reply = await self.tab.send_cdp("Runtime.evaluate", params)
