@@ -14,6 +14,7 @@ import pytest
 import tellurium
 from tellurium.session import login_command, session_cookies
 from tests.integration import banner_probe
+from tests.integration.login_timeline import LoginTimeline
 from tests.integration.test_wait_for_human import _click_node, _done_button
 from tests.platform_marks import needs_display
 
@@ -68,22 +69,25 @@ async def _loaded(tab, page, timeout=15.0):
         await asyncio.sleep(0.1)
 
 
-async def _close_windows(browser) -> None:
+async def _close_windows(browser, timeline=None) -> None:
     """What the person does: close every window (Chrome stays up for the save)."""
     root = browser._router.root
     targets = (await root.send("Target.getTargets", {}, timeout=5))["targetInfos"]
     for t in targets:
         if t["type"] == "page":
+            if timeline is not None:
+                timeline.note(f"test closes {timeline._name(t['targetId'])}")
             await root.send("Target.closeTarget", {"targetId": t["targetId"]}, timeout=5)
 
 
 async def test_closing_the_window_saves_a_session_mcp_reopens_signed_in(
-    tmp_path, local_server, launched
+    tmp_path, local_server, launched, monkeypatch
 ):
     pytest.importorskip("mcp")
     from tellurium.mcp.config import ServerConfig
     from tellurium.mcp.sessions import SessionPool
 
+    timeline = LoginTimeline(monkeypatch, "http_sso")
     config = ServerConfig(home=tmp_path)
     task = asyncio.create_task(
         login_command.login(
@@ -94,7 +98,7 @@ async def test_closing_the_window_saves_a_session_mcp_reopens_signed_in(
         browser = await _first(launched)
         await _cookie(browser, "http_sso")
         await asyncio.sleep(4 * login_command.POLL)  # a cookie that old is never missed
-        await _close_windows(browser)
+        await _close_windows(browser, timeline)
         path = await asyncio.wait_for(task, 30)
     finally:
         task.cancel()
@@ -102,7 +106,7 @@ async def test_closing_the_window_saves_a_session_mcp_reopens_signed_in(
     assert path == str(folder)
     assert json.loads((folder / "session.json").read_text())["name"] == "acct"
     saved = json.loads((folder / "cookies.json").read_text())["cookies"]
-    assert any(c["name"] == "http_sso" and c["expires"] == -1 for c in saved)
+    assert any(c["name"] == "http_sso" and c["expires"] == -1 for c in saved), timeline
     if sys.platform != "win32":  # no POSIX modes there (an ACL would be needed)
         assert (folder / "cookies.json").stat().st_mode & 0o777 == 0o600
 
