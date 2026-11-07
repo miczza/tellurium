@@ -690,6 +690,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   handed to the close.
 - `SessionLock` resolves the parent of the session folder: the same folder reached through a
   symbolic link (or an 8.3 short name on Windows) takes the same lock instead of a second one.
+- `SessionPool.delete()` on Windows waits (up to 10 s) for the helper processes of a dead
+  holder's Chrome to close their files in the session folder: the rename that moves it out
+  of the way failed with `PermissionError` (WinError 5) just after that Chrome let go.
 - `SessionPool.list()` warns of a folder with a non-portable name once per pool, not at every
   call.
 - `Tab.wait_for_human()` in headed Chrome brings its tab to the front, its window taking the

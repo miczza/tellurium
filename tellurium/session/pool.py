@@ -115,7 +115,7 @@ class SessionPool:
                 # renames it too): whoever comes next finds no session there,
                 # never one half removed.
                 grave = os.path.join(self.directory, names.grave_name(name, uuid.uuid4().hex))
-                await asyncio.to_thread(os.rename, path, grave)
+                await profile_release.move(path, grave)
             finally:
                 lock.release()
             await asyncio.to_thread(_remove_graves, self.directory)

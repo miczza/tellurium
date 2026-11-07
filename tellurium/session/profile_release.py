@@ -23,6 +23,10 @@ from tellurium.session import process_args
 #: How long a start waits for a dead holder's Chrome to exit.
 TIMEOUT = 10.0
 _POLL = 0.05
+#: Whether a refused rename of the session folder is waited for: on Windows
+#: the helper processes of a Chrome that let go of ``lockfile`` may still hold
+#: files in it for a moment, and a folder with an open file cannot be renamed.
+_MOVE_WAITS = sys.platform == "win32"
 
 
 async def wait(chrome_dir: str, timeout: float = TIMEOUT) -> int | None:
@@ -33,6 +37,20 @@ async def wait(chrome_dir: str, timeout: float = TIMEOUT) -> int | None:
         pid = _holder(chrome_dir)
         if pid is None or time.monotonic() >= deadline:
             return pid
+        await asyncio.sleep(_POLL)
+
+
+async def move(src: str, dst: str, timeout: float = TIMEOUT) -> None:
+    """Rename the session folder *src* to *dst* once its Chrome is gone: on
+    Windows a ``PermissionError`` (a helper process of that Chrome still has
+    a file open in it) is retried until *timeout*, then raised."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            return await asyncio.to_thread(os.rename, src, dst)
+        except PermissionError:
+            if not _MOVE_WAITS or time.monotonic() >= deadline:
+                raise
         await asyncio.sleep(_POLL)
 
 
