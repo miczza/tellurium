@@ -9,9 +9,6 @@ import json
 import time
 
 _WORLD = "__tl_banner_probe"
-#: Whether the state taken before the click waits for the page's next frame
-#: (``tests.integration.experiment_click_unpainted`` turns it off).
-WAIT_FOR_FRAME = True
 
 _LISTEN_JS = """
 (function () {
@@ -89,7 +86,9 @@ class BannerProbe:
             await self._eval(_LISTEN_JS)
         except Exception as exc:  # noqa: BLE001 - a probe never fails the test itself
             self.notes.append(f"listen: {exc!r}")
-        self.notes.append("before: " + await self._state(wait=WAIT_FOR_FRAME))
+        # The state before the click does not wait for a frame: the click
+        # comes when the test would send it without the probe.
+        self.notes.append("before: " + await self._state(wait=False))
 
     def sent(self, kind: str, reply) -> None:
         self.notes.append(f"{time.monotonic() - self.t0:.3f}s {kind} -> {reply!r}")
