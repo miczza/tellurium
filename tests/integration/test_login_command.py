@@ -13,6 +13,7 @@ import pytest
 
 import tellurium
 from tellurium.session import login_command, session_cookies
+from tests.integration import banner_probe
 from tests.integration.test_wait_for_human import _click_node, _done_button
 from tests.platform_marks import needs_display
 
@@ -119,7 +120,9 @@ async def test_done_on_the_banner_ends_the_login_too(tmp_path, local_server, lau
         browser = await _first(launched)
         tab = browser.main_tab
         await _click_node(tab, await _done_button(tab))
-        await asyncio.wait_for(task, 30)
+        done, _ = await asyncio.wait({task}, timeout=30)
+        assert done, await banner_probe.report(tab)
+        await task
     finally:
         task.cancel()
     assert (tmp_path / "acct" / "session.json").exists()
