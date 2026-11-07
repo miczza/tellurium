@@ -9,6 +9,9 @@ import json
 import time
 
 _WORLD = "__tl_banner_probe"
+#: Whether the state taken before the click waits for the page's next frame
+#: (``tests.integration.experiment_click_unpainted`` turns it off).
+WAIT_FOR_FRAME = True
 
 _LISTEN_JS = """
 (function () {
@@ -35,13 +38,20 @@ _LISTEN_JS = """
 """
 
 _STATE_JS = """
-(async function (x, y) {
+(async function (x, y, wait) {
   const hit = document.elementFromPoint(x, y);
-  // Whether the page renders: a frame within 500 ms, and its paint entries.
+  // Whether the page renders: a frame within 500 ms (or, not waited for,
+  // when the next one comes, in the log), and its paint entries.
   const t = performance.now();
-  const frame = await Promise.race([
-    new Promise(function (r) { requestAnimationFrame(function () { r(performance.now() - t); }); }),
-    new Promise(function (r) { setTimeout(function () { r('none in 500ms'); }, 500); }),
+  const next = new Promise(function (r) {
+    requestAnimationFrame(function () {
+      const log = globalThis.__probe;
+      if (log) log.push('frame after ' + Math.round(performance.now() - t) + 'ms');
+      r(performance.now() - t);
+    });
+  });
+  const frame = !wait ? 'not waited for' : await Promise.race([
+    next, new Promise(function (r) { setTimeout(function () { r('none in 500ms'); }, 500); }),
   ]);
   return JSON.stringify({
     frame: frame, now: Math.round(performance.now()),
@@ -54,7 +64,7 @@ _STATE_JS = """
     hit: hit && hit.nodeName, popovers: document.querySelectorAll(':popover-open').length,
     log: globalThis.__probe || null,
   });
-})(%s, %s)
+})(%s, %s, %s)
 """
 
 
@@ -69,7 +79,6 @@ class BannerProbe:
         self.t0 = time.monotonic()
 
     async def attach(self) -> None:
-        self.notes.append("before: " + await self._state())
         try:
             tree = await self.tab.send_cdp("Page.getFrameTree", {})
             world = await self.tab.send_cdp(
@@ -80,6 +89,7 @@ class BannerProbe:
             await self._eval(_LISTEN_JS)
         except Exception as exc:  # noqa: BLE001 - a probe never fails the test itself
             self.notes.append(f"listen: {exc!r}")
+        self.notes.append("before: " + await self._state(wait=WAIT_FOR_FRAME))
 
     def sent(self, kind: str, reply) -> None:
         self.notes.append(f"{time.monotonic() - self.t0:.3f}s {kind} -> {reply!r}")
@@ -90,10 +100,11 @@ class BannerProbe:
         notes = "\n  ".join(self.notes)
         return f"lost click on the banner at ({self.x:.1f}, {self.y:.1f}):\n  {notes}"
 
-    async def _state(self) -> str:
+    async def _state(self, *, wait: bool = True) -> str:
         parts: dict = {}
         try:
-            parts["page"] = json.loads(await self._eval(_STATE_JS % (self.x, self.y)))
+            js = _STATE_JS % (self.x, self.y, "true" if wait else "false")
+            parts["page"] = json.loads(await self._eval(js))
         except Exception as exc:  # noqa: BLE001
             parts["page"] = repr(exc)
         try:
