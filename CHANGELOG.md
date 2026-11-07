@@ -679,6 +679,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `Browser.launch` and `RawChrome.launch` start Chrome on `about:blank` when the arguments
   name no page: Chrome's New Tab page, loading late, no longer replaces the document of the
   first navigation or of a screenshot taken before it (the flags are otherwise unchanged).
+- Many launches looking up the proxy's location at once no longer starve the event loop:
+  the GeoIP lookups share one TLS context (making one reads the system's certificates, on
+  Windows from its certificate store, slowly and holding the GIL), and the search for a
+  Chrome executable runs off the loop.
 - `tellurium login`: when the person closes both windows, the jar read while a window was
   open is added to `cookies.json` after Chrome closes, instead of being put back into
   Chrome, which ends its browsing session (dropping the cookies with no expiry) some time

@@ -245,7 +245,7 @@ async def find_chrome(stealth: bool = False) -> str:
     FileNotFoundError
         When no Chrome is found and the CfT download fails.
     """
-    for path, kind in _find_chrome_candidates():
+    for path, kind in await asyncio.to_thread(_find_chrome_candidates):  # stat calls: off the loop
         logger.debug("Checking Chrome candidate: %s (%s)", path, kind)
         if stealth and kind == "chrome":
             version = await asyncio.to_thread(detect_chrome_version, path)

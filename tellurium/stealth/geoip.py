@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import threading
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -139,6 +140,23 @@ _LOOKUP_TIMEOUT = 10.0
 _MAX_BODY = 4096
 
 
+_TLS_LOCK = threading.Lock()
+_TLS: list[Any] = []  # the one context, once made
+
+
+def _tls_context() -> Any:
+    """The TLS context of every lookup, made once: making one reads the
+    system's certificates (on Windows the certificate store, slow and holding
+    the GIL), and many launches looking up at once would each make theirs
+    before their first connection, starving the event loop."""
+    with _TLS_LOCK:
+        if not _TLS:
+            import ssl
+
+            _TLS.append(ssl.create_default_context())
+        return _TLS[0]
+
+
 @dataclass(frozen=True)
 class _HttpProxy:
     """The HTTP proxy every online lookup is tunnelled through (``CONNECT``)."""
@@ -182,14 +200,12 @@ class _HttpProxy:
         """
         import http.client
         import socket
-        import ssl
-        import threading
         from urllib.parse import urlsplit
 
         target = urlsplit(url)
         if target.scheme == "https":
             conn: http.client.HTTPConnection = http.client.HTTPSConnection(
-                self.host, self.port, timeout=timeout, context=ssl.create_default_context()
+                self.host, self.port, timeout=timeout, context=_tls_context()
             )
         else:
             conn = http.client.HTTPConnection(self.host, self.port, timeout=timeout)
