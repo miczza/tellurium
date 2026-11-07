@@ -229,3 +229,37 @@ async def test_the_login_cookies_are_written_under_the_session_lock(
     assert all(held for _, held in writes)
     saved = json.loads((tmp_path / "acct" / "cookies.json").read_text())["cookies"]
     assert any(c["name"] == "http_sso" and c["expires"] == -1 for c in saved)
+
+
+async def test_the_keeper_closing_just_after_the_sign_in_window_keeps_the_cookies(
+    tmp_path, local_server, launched, monkeypatch
+):
+    """The person closes both windows; on Windows the keeper's can still be
+    listed when the other has gone, so the login ends with the keeper "open",
+    and Chrome drops the cookies with no expiry before the session's close
+    reads its jar. The jar read while the sign-in window was open saves them."""
+    timeline = LoginTimeline(monkeypatch, "http_sso")
+    watch = login_command._windows_closed  # the timeline's
+
+    async def keeper_closed_then_dropped(browser, keeper):
+        kept = await watch(browser, keeper)
+        root = browser._router.root
+        await root.send("Target.closeTarget", {"targetId": keeper}, timeout=5)
+        await browser.clear_cookies()  # Chrome ends its browsing session
+        timeline.note("keeper closed, jar dropped")
+        return kept
+
+    monkeypatch.setattr(login_command, "_windows_closed", keeper_closed_then_dropped)
+    task = asyncio.create_task(
+        login_command.login("acct", f"{local_server}/session-cookie", directory=str(tmp_path))
+    )
+    try:
+        browser = await _first(launched)
+        await _cookie(browser, "http_sso")
+        await asyncio.sleep(4 * login_command.POLL)  # a cookie that old is never missed
+        await browser.main_tab.close()  # the sign-in window; the keeper stays listed
+        await asyncio.wait_for(task, 30)
+    finally:
+        task.cancel()
+    saved = json.loads((tmp_path / "acct" / "cookies.json").read_text())["cookies"]
+    assert any(c["name"] == "http_sso" and c["expires"] == -1 for c in saved), timeline

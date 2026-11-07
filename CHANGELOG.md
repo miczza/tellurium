@@ -682,6 +682,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   without them and overwrote them on closing, and a `delete` then saw the folder made again.
   Only the cookies with no expiry are put back: one with an expiry that the site deleted in
   the last 0.3 s before the windows closed (a logout) no longer comes back.
+- `tellurium login`: closing the sign-in window and then, an instant later, the minimized
+  keeper window no longer loses the cookies with no expiry. The login ended as soon as the
+  sign-in window had gone with the keeper still listed (on Windows a closing window can stay
+  in the targets for a moment), counted on the close to read Chrome's whole jar, and Chrome
+  had dropped them by then. The jar read while the sign-in window was open is now always
+  handed to the close.
 - `SessionLock` resolves the parent of the session folder: the same folder reached through a
   symbolic link (or an 8.3 short name on Windows) takes the same lock instead of a second one.
 - `SessionPool.list()` warns of a folder with a non-portable name once per pool, not at every

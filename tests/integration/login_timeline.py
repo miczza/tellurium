@@ -59,3 +59,5 @@ class LoginTimeline:
 
     def __str__(self) -> str:
         return "login timeline:\n" + "\n".join(self._events[-40:])
+
+    __repr__ = __str__  # what pytest shows of an assertion's message

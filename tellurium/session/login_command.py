@@ -11,13 +11,14 @@ Chrome drops the cookies with no expiry (a sign-in's) when its last window
 closes, so a second window of its own, minimized, keeps its browsing session
 open while the person works in the first: closing that one ends the login with
 the whole jar, a cookie written an instant before included. If the person
-closes both, Chrome stays up anyway (:data:`KEEP_ALIVE`) and the session's
-close, still under its lock, adds to ``cookies.json`` the cookies with no
-expiry Chrome dropped of the jar read while a window was open (a cookie of its
-last :data:`POLL` seconds can then be missed, and one with no expiry the site
-deleted in them comes back). Not put back into Chrome: it ends its browsing session some time after the last window has gone
-from its targets (long enough to be seen on Windows), so a cookie put back
-too early would be dropped again.
+closes both (or the keeper an instant after the other), Chrome stays up anyway
+(:data:`KEEP_ALIVE`), and the session's close, still under its lock, adds to
+``cookies.json`` the cookies with no expiry Chrome lacks of the jar read while
+the sign-in window was open (a cookie of its last :data:`POLL` seconds can then
+be missed, and one with no expiry the site deleted in them comes back). Not put
+back into Chrome: it ends its browsing session some time after the last window
+has gone from its targets (long enough to be seen on Windows), so a cookie put
+back too early would be dropped again.
 """
 
 from __future__ import annotations
@@ -166,13 +167,13 @@ async def _done_clicked(tab: Any) -> None:
         await asyncio.Event().wait()  # its tab is gone: the windows decide
 
 
-async def _windows_closed(browser: Any, keeper: str | None) -> list | None:
-    """Until no window but the *keeper* is left. With the keeper still open
-    Chrome's jar is whole and the session's close reads it: ``None``. If the
-    keeper is gone too (or Chrome is), Chrome ends its browsing session,
-    dropping the cookies with no expiry: the jar read while a window was
-    open, for ``cookies.json``; a cookie set in the last :data:`POLL` seconds
-    before can then be missed."""
+async def _windows_closed(browser: Any, keeper: str | None) -> list:
+    """Until no window but the *keeper* is left; the jar read while another
+    window was open, for the session's close. Even with the keeper still
+    listed: the person may be closing it too (on Windows it can outlive the
+    other in the targets by a moment), and Chrome then ends its browsing
+    session, dropping the cookies with no expiry, before the close reads its
+    jar. A cookie set in the last :data:`POLL` seconds before can be missed."""
     root = browser._router.root
     jar: list = []
     try:
@@ -183,7 +184,7 @@ async def _windows_closed(browser: Any, keeper: str | None) -> list | None:
                 candidate = None
             pages = await _pages(root)
             if not pages - {keeper}:
-                return None if keeper in pages else jar
+                return jar
             if candidate is not None:
                 jar = candidate  # read with a window still open: the whole jar
             await asyncio.sleep(POLL)
