@@ -686,6 +686,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   symbolic link (or an 8.3 short name on Windows) takes the same lock instead of a second one.
 - `SessionPool.list()` warns of a folder with a non-portable name once per pool, not at every
   call.
+- `Tab.wait_for_human()` in headed Chrome brings its tab to the front, its window taking the
+  focus: a click on "Done" in a window that did not have it was lost on macOS (the press went
+  to focusing the window, only the release reached the page), as when another window of
+  Chrome or of another program had come up after it.
 - `Tab.wait_for_human(until=...)`: a condition still running when the wait's time runs out
   always ends in the `TimeoutError` that names the reason and the timeout; on Windows, whose
   clock ticks every ~15.6 ms, it was sometimes a bare `TimeoutError`.

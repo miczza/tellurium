@@ -169,8 +169,8 @@ async def wait_for_human(
 ) -> None:
     """Wait for a person to do something in *tab* (solve a captcha, sign in).
 
-    Headed: a banner shows *reason* and a "Done" button; the wait ends when
-    the person clicks it or *until* holds. Headless: no banner, *until* is
+    Headed: the tab is brought to the front and a banner shows *reason* and
+    a "Done" button; the wait ends when the person clicks it or *until* holds. Headless: no banner, *until* is
     required (``ValueError`` otherwise). *until* is a URL pattern (glob with
     ``*``/``?``, substring otherwise), matched against the main frame's URL
     without query and fragment (``**/dashboard`` does not match
@@ -191,6 +191,7 @@ async def wait_for_human(
     try:
         if banner is not None:
             banner.open()
+            await banner.bring_to_front()
         while True:
             frame = await _main_frame(tab, deadline)
             if banner is not None and banner.done.is_set():
@@ -359,6 +360,15 @@ class _Banner:
             )
         )
         _keep(self._adding, self._owner)
+
+    async def bring_to_front(self) -> None:
+        """Show the tab and give its window the focus: the person must see it,
+        and a window without the focus may spend the first press of a click
+        on taking it (macOS), so "Done" would not see it."""
+        try:
+            await self._send("Page.bringToFront", {})
+        except (TimeoutError, CDPError):
+            pass  # a busy or closing page: the banner goes up all the same
 
     async def show(self, frame: dict) -> None:
         """Make sure the current document shows the banner."""
