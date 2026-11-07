@@ -44,6 +44,9 @@ PROXIED_WEBRTC_FLAG = "--force-webrtc-ip-handling-policy=disable_non_proxied_udp
 GEOIP_TIMEOUT = 10.0
 #: Seconds ``webrtc_ip='auto'`` may take to resolve the proxy's host name.
 DNS_TIMEOUT = 10.0
+#: Chrome's first page when the arguments name none. Without it Chrome opens
+#: its New Tab page, whose late document replaces one already in the tab.
+FIRST_PAGE = "about:blank"
 
 _T = TypeVar("_T")
 
@@ -196,13 +199,16 @@ class LaunchPlan:
         engine_args: list[str],
         found: tuple[int, ...] | None,
     ) -> list[str]:
-        return build_chrome_flags(
+        flags = build_chrome_flags(
             headless=self.headless,
             user_data_dir=self.profile_dir,
             proxy=proxy_flag,
             extra_args=(self.args or []) + self._identity_flags(geo, found),
             engine_args=engine_args,
         )
+        if not any(not arg.startswith("-") for arg in self.args or []):
+            flags.append(FIRST_PAGE)
+        return flags
 
     def _flags_for_product(self, product: str) -> list[str] | None:
         """The command line again, with the ``--user-agent`` of the version in

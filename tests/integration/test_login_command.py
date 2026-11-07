@@ -147,3 +147,33 @@ async def test_a_cookie_set_just_before_the_window_closes_is_saved(
         task.cancel()
     saved = json.loads((tmp_path / "acct" / "cookies.json").read_text())["cookies"]
     assert any(c["name"] == "late" and c["expires"] == -1 for c in saved)
+
+
+async def test_session_cookies_chrome_drops_after_the_windows_went_are_saved(
+    tmp_path, local_server, launched, monkeypatch
+):
+    """Chrome ends its browsing session a moment after its last window has
+    gone from the targets (on Windows, long enough to be seen): the cookies
+    with no expiry vanish from the jar later than that. The jar read while a
+    window was open still reaches cookies.json."""
+    real_windows_closed = login_command._windows_closed
+
+    async def windows_closed_then_late_drop(browser, keeper):
+        kept = await real_windows_closed(browser, keeper)
+        await browser.clear_cookies()  # what Chrome does, late
+        return kept
+
+    monkeypatch.setattr(login_command, "_windows_closed", windows_closed_then_late_drop)
+    task = asyncio.create_task(
+        login_command.login("acct", f"{local_server}/session-cookie", directory=str(tmp_path))
+    )
+    try:
+        browser = await _first(launched)
+        await _cookie(browser, "http_sso")
+        await asyncio.sleep(4 * login_command.POLL)  # a cookie that old is never missed
+        await _close_windows(browser)
+        await asyncio.wait_for(task, 30)
+    finally:
+        task.cancel()
+    saved = json.loads((tmp_path / "acct" / "cookies.json").read_text())["cookies"]
+    assert any(c["name"] == "http_sso" and c["expires"] == -1 for c in saved)

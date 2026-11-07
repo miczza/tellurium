@@ -12,8 +12,11 @@ closes, so a second window of its own, minimized, keeps its browsing session
 open while the person works in the first: closing that one ends the login with
 the whole jar, a cookie written an instant before included. If the person
 closes both, Chrome stays up anyway (:data:`KEEP_ALIVE`) and the jar read
-while a window was open is put back (a cookie of its last :data:`POLL`
-seconds can then be missed).
+while a window was open is added to ``cookies.json`` after the close (a cookie
+of its last :data:`POLL` seconds can then be missed). Not put back into
+Chrome: it ends its browsing session some time after the last window has gone
+from its targets (long enough to be seen on Windows), so a cookie put back
+too early would be dropped again.
 """
 
 from __future__ import annotations
@@ -101,17 +104,19 @@ async def login(name: str, url: str | None = None, *, directory: str, enter: boo
                 await tab.get(url, wait_until="commit", timeout=NAVIGATION_TIMEOUT)
             except (TimeoutError, NavigationError) as exc:
                 print(f"Warning: could not open {url}: {exc}", file=sys.stderr)
-        await _until_done(browser, tab, sys.stdin if enter else None, keeper)
+        jar = await _until_done(browser, tab, sys.stdin if enter else None, keeper)
     await session.save_now()
+    if jar:
+        await asyncio.to_thread(session_cookies.add_missing, session.path, jar)
     return session.path
 
 
 async def _until_done(
     browser: Any, tab: Any, stdin: IO[str] | None, keeper: str | None = None
-) -> None:
+) -> list | None:
     """Until "Done", Enter on *stdin* (if given) or no window but the
-    *keeper* is left."""
-    waiters = [_done_clicked(tab), _windows_closed(browser, keeper)]
+    *keeper* is left; the jar of :func:`_windows_closed` if it ended the login."""
+    waiters = [_windows_closed(browser, keeper), _done_clicked(tab)]
     if stdin is not None:
         waiters.append(enter_pressed(stdin))
     tasks = [asyncio.ensure_future(w) for w in waiters]
@@ -119,6 +124,7 @@ async def _until_done(
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
             task.result()  # a watcher that failed fails the login
+        return tasks[0].result() if tasks[0] in done else None
     finally:
         for task in tasks:
             task.cancel()
@@ -160,13 +166,13 @@ async def _done_clicked(tab: Any) -> None:
         await asyncio.Event().wait()  # its tab is gone: the windows decide
 
 
-async def _windows_closed(browser: Any, keeper: str | None) -> None:
+async def _windows_closed(browser: Any, keeper: str | None) -> list | None:
     """Until no window but the *keeper* is left. With the keeper still open
-    Chrome's jar is whole and the session's close reads it. If the keeper is
-    gone too, Chrome has ended its browsing session with its last window,
-    dropping the cookies with no expiry: the jar read while a window was open
-    is put back (so the session's close finds it); a cookie set in the last
-    :data:`POLL` seconds before can then be missed."""
+    Chrome's jar is whole and the session's close reads it: ``None``. If the
+    keeper is gone too (or Chrome is), Chrome ends its browsing session,
+    dropping the cookies with no expiry: the jar read while a window was
+    open, for ``cookies.json``; a cookie set in the last :data:`POLL` seconds
+    before can then be missed."""
     root = browser._router.root
     jar: list = []
     try:
@@ -177,19 +183,12 @@ async def _windows_closed(browser: Any, keeper: str | None) -> None:
                 candidate = None
             pages = await _pages(root)
             if not pages - {keeper}:
-                if keeper in pages:
-                    return
-                break
+                return None if keeper in pages else jar
             if candidate is not None:
                 jar = candidate  # read with a window still open: the whole jar
             await asyncio.sleep(POLL)
-        reinjection = session_cookies.Reinjection(jar)
-        try:
-            await reinjection.run(browser)
-        finally:
-            reinjection.drop()
     except ConnectionError:
-        return  # Chrome is gone: the session keeps what it had
+        return jar  # Chrome is gone: what it had while a window was open
 
 
 async def _pages(root: Any) -> set[str]:

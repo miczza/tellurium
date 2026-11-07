@@ -676,6 +676,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Browser.launch` and `RawChrome.launch` start Chrome on `about:blank` when the arguments
+  name no page: Chrome's New Tab page, loading late, no longer replaces the document of the
+  first navigation or of a screenshot taken before it (the flags are otherwise unchanged).
+- `tellurium login`: when the person closes both windows, the jar read while a window was
+  open is added to `cookies.json` after Chrome closes, instead of being put back into
+  Chrome, which ends its browsing session (dropping the cookies with no expiry) some time
+  after its last window has gone: on Windows a sign-in cookie could be lost that way.
 - macOS: `tellurium mcp` over stdio stops (saving its sessions) when the client closes
   only its end of the reply pipe, as on Linux: the pipe is watched with kqueue, since
   macOS's `poll()` does not report a pipe left without a reader.
