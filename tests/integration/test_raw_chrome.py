@@ -99,7 +99,7 @@ async def _call(
             if answer.get("id") == id:
                 return answer
 
-    return await asyncio.wait_for(reply(), 15)
+    return await asyncio.wait_for(reply(), scaled(15))
 
 
 @needs_proc
