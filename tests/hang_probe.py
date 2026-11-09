@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import collections
-import contextlib
 import subprocess
 import sys
 import time
@@ -26,6 +25,14 @@ _procs: weakref.WeakSet = weakref.WeakSet()
 _T0 = time.monotonic()
 _REAL_SEND = Session.send  # the probes' own sends are not probed
 _MIN_LIMIT = 8.0
+_WATCH = 7.0  # seconds a command may wait before the report, under the 10 s limits
+_reports: set = set()
+_events: collections.deque = collections.deque(maxlen=60)
+
+
+def note(what: str) -> None:
+    """Something a test fixture saw (a proxy's connection, a request), for the report."""
+    _events.append((time.monotonic(), what))
 
 
 def _note(router, msg: dict) -> None:
@@ -72,7 +79,7 @@ async def _report(session: Session, method: str, sent_at: float, limit: float) -
     now = time.monotonic()
     out = [
         f"=== HANG PROBE: {method} (session {(session._session_id or 'root')[:6]}) "
-        f"no reply in {limit:g}s; run clock {now - _T0:.1f}s",
+        f"pending for {now - sent_at:.1f}s (limit {limit:g}s); run clock {now - _T0:.1f}s",
     ]
     reader = getattr(router, "_probe_task", None)
     out.append(f"  dispatch loop done: {reader.done() if reader else '?'}")
@@ -81,6 +88,10 @@ async def _report(session: Session, method: str, sent_at: float, limit: float) -
     out.append(f"  messages from Chrome since the send: {len(during)}")
     for t, what, sid in q[-25:]:
         out.append(f"    {t - sent_at:+8.2f}s {what} {sid}")
+    seen = [e for e in _events if e[0] >= sent_at - 5]
+    if seen:
+        out.append("  fixture events around the send:")
+        out.extend(f"    {t - sent_at:+8.2f}s {what}" for t, what in seen)
     root = router.root
     await _probe("root Browser.getVersion", _REAL_SEND(root, "Browser.getVersion", {}, 5), out)
     if session._session_id:
@@ -91,7 +102,7 @@ async def _report(session: Session, method: str, sent_at: float, limit: float) -
         await _probe(
             "session Runtime.evaluate", _REAL_SEND(session, "Runtime.evaluate", ev, 5), out
         )
-    for proc in list(_procs):
+    for proc in [p for p in _procs if p.process is not None and p.process.poll() is None]:
         tail = proc._output.text()[-3000:] if proc._output is not None else "(log file)"
         pid = getattr(proc.process, "pid", "?")
         out.append(f"  --- chrome {pid} output tail ---\n{tail}")
@@ -99,23 +110,46 @@ async def _report(session: Session, method: str, sent_at: float, limit: float) -
     print("\n".join(out), flush=True)
 
 
+async def _safe_report(session: Session, method: str, sent_at: float, limit: float) -> None:
+    try:
+        await _report(session, method, sent_at, limit)
+    except Exception as e:  # noqa: BLE001
+        print(f"=== HANG PROBE failed: {e!r}", flush=True)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def hang_probe():
     real_send, real_handle, real_spawn = Session.send, Session._handle_message, BrowserProcess.spawn
-    real_run = SessionRouter.run
+    real_run, real_start = SessionRouter.run, BrowserProcess._start
 
     async def send(self, method, params=None, timeout=None):
         sent_at = time.monotonic()
+        limit = self._router.default_timeout if timeout is None else timeout
+        # Short limits are the tests' own frozen pages: probing them only delays those
+        # tests past their bounds. The hangs looked for wait 10 s or 30 s; the report is
+        # made while the command is still pending, whoever gives up on it later.
+        watch, fired, outcome = None, [], "answered"
+        if limit >= _MIN_LIMIT:
+            loop = asyncio.get_running_loop()
+
+            def fire():
+                fired.append(True)
+                task = loop.create_task(_safe_report(self, method, sent_at, limit))
+                _reports.add(task)
+                task.add_done_callback(_reports.discard)
+
+            watch = loop.call_later(_WATCH, fire)
         try:
             return await real_send(self, method, params, timeout)
-        except TimeoutError as e:
-            limit = self._router.default_timeout if timeout is None else timeout
-            # Short limits are the tests' own frozen pages: probing them only delays those
-            # tests past their bounds. The hangs looked for wait 10 s or 30 s.
-            if "got no reply" in str(e) and limit >= _MIN_LIMIT:
-                with contextlib.suppress(Exception):
-                    await _report(self, method, sent_at, limit)
+        except BaseException as e:
+            outcome = type(e).__name__
             raise
+        finally:
+            if watch is not None:
+                watch.cancel()
+            if fired:
+                took = time.monotonic() - sent_at
+                print(f"=== HANG PROBE end: {method} {outcome} after {took:.1f}s", flush=True)
 
     async def handle(self, msg):
         _note(self._router, msg)
@@ -125,15 +159,20 @@ def hang_probe():
         _procs.add(self)
         return await real_spawn(self, *a, **kw)
 
+    async def start(self, chrome_path, flags, env):
+        if sys.platform == "win32" and not any(f.startswith("--enable-logging") for f in flags):
+            flags = [*flags, "--enable-logging=stderr"]  # else a release build says nothing
+        return await real_start(self, chrome_path, flags, env)
+
     async def run(self):
         self._probe_task = asyncio.current_task()
         return await real_run(self)
 
     Session.send, Session._handle_message, BrowserProcess.spawn = send, handle, spawn
-    SessionRouter.run = run
+    SessionRouter.run, BrowserProcess._start = run, start
     yield
     Session.send, Session._handle_message, BrowserProcess.spawn = real_send, real_handle, real_spawn
-    SessionRouter.run = real_run
+    SessionRouter.run, BrowserProcess._start = real_run, real_start
 
 
 __all__ = ["hang_probe"]
