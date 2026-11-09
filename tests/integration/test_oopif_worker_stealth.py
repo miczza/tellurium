@@ -153,7 +153,7 @@ FREEZE_COST = 1.3
 
 #: The clock timing each new_tab+get. A sample is ~50 ms and the margin 30 %,
 #: so the clock must resolve far below a millisecond.
-MEASURING_CLOCK = "monotonic"
+MEASURING_CLOCK = "perf_counter"
 
 
 @pytest.mark.asyncio
