@@ -11,6 +11,8 @@ import time
 
 import pytest
 
+from tests.timeout_scale import scaled
+
 pytestmark = pytest.mark.asyncio
 
 SLOW = "() => new Promise(r => setTimeout(() => r('done'), 1500))"
@@ -19,9 +21,10 @@ SLOW = "() => new Promise(r => setTimeout(() => r('done'), 1500))"
 @pytest.fixture
 async def page(browser, local_server):
     tab = await browser.get(local_server + "/basic.html")
+    default = browser._router.default_timeout  # scaled on the slow runners
     browser._router.default_timeout = 0.5
     yield tab
-    browser._router.default_timeout = 30.0
+    browser._router.default_timeout = default
 
 
 async def test_eval_on_is_cut_at_the_session_default(page):
@@ -34,7 +37,7 @@ async def test_eval_on_timeout_extends_one_call(page):
 
 
 async def test_eval_on_timeout_can_also_shorten_it(page):
-    page._browser._router.default_timeout = 30.0
+    page._browser._router.default_timeout = scaled(30.0)
     start = time.monotonic()
     with pytest.raises(asyncio.TimeoutError):
         await page.eval_on("body", SLOW, timeout=0.3)
