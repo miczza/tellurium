@@ -146,3 +146,6 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "slow" in item.keywords:
             item.add_marker(skip)
+
+
+from tests.hang_probe import hang_probe  # noqa: E402,F401 - R3-B diagnosis, temporary
