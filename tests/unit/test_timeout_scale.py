@@ -5,7 +5,8 @@ import json
 
 import pytest
 
-from tellurium.browser import robots
+from tellurium.browser import process as process_module
+from tellurium.browser import raw_chrome, robots
 from tellurium.cdp.transport._base import CDPTransport
 from tellurium.cdp.transport._session import SessionRouter
 from tests import timeout_scale
@@ -97,3 +98,15 @@ def test_the_scaled_and_the_unscaled(monkeypatch):
         assert robots.FETCH_TIMEOUT == 30.0
         assert robots._OPEN_TIMEOUT == 15.0
         assert robots._CLOSE_TIMEOUT == 2.0
+
+
+def test_the_close_grace_is_scaled(monkeypatch):
+    """Chrome's own exit after Browser.close is an answer too: a runner stall
+    past the 5 s grace ended in the signals (on Windows TerminateProcess with
+    exit code 1, red 8 of R3)."""
+    monkeypatch.setenv(timeout_scale.ENV, "3")
+    with pytest.MonkeyPatch.context() as mp:
+        timeout_scale.stretch(mp)
+        assert process_module.CLOSE_GRACE == 15.0
+        assert raw_chrome.CLOSE_GRACE == 15.0
+    assert process_module.CLOSE_GRACE == raw_chrome.CLOSE_GRACE == 5.0  # given back

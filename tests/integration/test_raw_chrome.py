@@ -14,12 +14,14 @@ from pathlib import Path
 
 import pytest
 
+from tellurium.browser import raw_chrome
 from tellurium.browser.launcher import LaunchError
 from tellurium.browser.process import BrowserProcess
 from tellurium.browser.raw_chrome import RawChrome
 from tests.integration.test_authenticated_proxy import GOOD_AUTH, PASSWORD, USER, FakeProxy
 from tests.platform_marks import needs_proc, needs_sh, needs_tz_env
 from tests.private_temp import private_temp
+from tests.timeout_scale import scaled
 
 
 @pytest.fixture(autouse=True)
@@ -151,16 +153,27 @@ async def test_close_asks_chrome_first(private_tempdir):
 
     raw.transport.send = spy
     process = raw._proc.process
-    await asyncio.wait_for(raw.close(), 30)
+    signals: list[str] = []
+    for name in ("terminate", "kill"):
+        real = getattr(process, name)
+        setattr(process, name, lambda name=name, real=real: (signals.append(name), real())[1])
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    await asyncio.wait_for(raw.close(), scaled(30))
+    took = loop.time() - start
     assert [json.loads(d[:-1])["method"] for d in sent] == ["Browser.close"]
-    assert process.returncode == 0
+    # Chrome exits by itself, with 0, on Windows too (in 0.75-1.5 s there).
+    # A runner stall past the grace brings the signals: on Windows
+    # TerminateProcess, exit code 1 (red 8 of R3); on Linux Chrome takes
+    # SIGTERM as an orderly exit, 0 again. Hence the signals are watched too,
+    # and the grace is scaled like the other waits for Chrome.
+    assert not signals, f"{signals} after {took:.1f} s (grace {raw_chrome.CLOSE_GRACE:g} s)"
+    assert process.returncode == 0, f"exit code {process.returncode} after {took:.1f} s"
 
 
 @needs_proc
 async def test_close_of_a_chrome_that_ignores_browser_close_escalates(private_tempdir, monkeypatch):
     import signal
-
-    from tellurium.browser import raw_chrome
 
     monkeypatch.setattr(raw_chrome, "CLOSE_GRACE", 0.5)
     raw = await RawChrome.launch(headless=True)
