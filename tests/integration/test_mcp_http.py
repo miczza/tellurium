@@ -15,6 +15,7 @@ import contextlib
 import json
 import os
 import re
+import socket
 import stat
 import sys
 import time
@@ -203,7 +204,7 @@ async def test_any_origin_is_refused(tmp_path):
 
 async def test_a_connection_that_never_finishes_its_headers_is_closed(tmp_path):
     """Slowloris: unauthenticated connections cannot be held open by dribbling."""
-    from tellurium.mcp.http_transport import HEADER_TIMEOUT
+    from tellurium.mcp.http_connection import HEADER_TIMEOUT
 
     async with _server(tmp_path / "home") as server:
         host, port = server.url.removeprefix("http://").removesuffix("/mcp").rsplit(":", 1)
@@ -268,7 +269,7 @@ async def _dribbler(server: _Server, headers: str, count: int):
     """*count* connections that send a request head promising a huge body, then
     one byte of it every 2 s. Returns, per connection, what the server sent and
     when it closed (None: still open at the end)."""
-    from tellurium.mcp.http_transport import BODY_TIMEOUT
+    from tellurium.mcp.http_connection import BODY_TIMEOUT
 
     host, port = server.url.removeprefix("http://").removesuffix("/mcp").rsplit(":", 1)
     head = (
@@ -317,13 +318,61 @@ async def test_refused_connections_are_closed_and_cannot_starve_the_server(tmp_p
 
 
 async def test_a_body_that_never_ends_is_cut_at_the_deadline(tmp_path):
-    from tellurium.mcp.http_transport import BODY_TIMEOUT
+    from tellurium.mcp.http_connection import BODY_TIMEOUT
 
     async with _server(tmp_path / "home") as server:
         auth = f"Authorization: Bearer {server.token}\r\n"
         ((got, closed_after),) = await _dribbler(server, auth, 1)
         assert closed_after is not None and closed_after < BODY_TIMEOUT + 3
         assert not got.startswith(b"HTTP/1.1 2")
+
+
+def _address(server: _Server) -> tuple[str, int]:
+    host, port = server.url.removeprefix("http://").removesuffix("/mcp").rsplit(":", 1)
+    return host, int(port)
+
+
+def _refused_then_late_body(host: str, port: int, size: int) -> tuple[bytes, OSError | None]:
+    """A tokenless request head promising *size* bytes of body; the body is sent
+    only once the refusal has been read to its end, then one more byte after a
+    pause. Returns the refusal and the error the late writes met: a reset means
+    the server closed while the body was still coming, which on Windows and
+    macOS can discard a refusal the client has not read yet."""
+    head = (
+        f"POST /mcp HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: application/json\r\n"
+        f"Content-Length: {size}\r\n\r\n"
+    ).encode()
+    with socket.create_connection((host, port), timeout=10) as sock:
+        sock.sendall(head)
+        reply = b""
+        while chunk := sock.recv(65536):
+            reply += chunk
+        try:
+            sock.sendall(b" " * size)
+            time.sleep(0.3)
+            sock.sendall(b" ")
+        except OSError as exc:
+            return reply, exc
+    return reply, None
+
+
+async def test_a_refused_body_still_coming_is_drained_not_reset(tmp_path):
+    async with _server(tmp_path / "home") as server:
+        reply, error = await asyncio.to_thread(_refused_then_late_body, *_address(server), 4096)
+        assert reply.startswith(b"HTTP/1.1 401"), reply[:80]
+        assert reply.endswith(b"}")  # the JSON-RPC error, whole
+        assert error is None, f"the server reset the connection: {error!r}"
+
+
+async def test_a_refused_request_with_a_body_gets_the_whole_401(tmp_path):
+    """What an MCP client without the token sees, again and again: the refusal
+    is read whole, never a reset (macOS and Windows dropped it, see gotchas)."""
+    body = {**_INIT, "params": {**_INIT["params"], "padding": "x" * 4096}}
+    async with _server(tmp_path / "home") as server, httpx2.AsyncClient() as http:
+        for attempt in range(50):
+            reply = await http.post(server.url, json=body, headers=_ACCEPT)
+            assert reply.status_code == 401, attempt
+            assert "Authorization: Bearer" in reply.json()["error"]["message"], attempt
 
 
 async def test_mute_sockets_reopened_in_a_loop_do_not_lock_out_the_token(tmp_path):
