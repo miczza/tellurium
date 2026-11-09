@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.timeout_scale import chrome_answer_deadlines_scaled  # noqa: F401 (autouse)
+
 FIXTURES_DIR = str(Path(__file__).parent / "fixtures")
 DOWNLOAD_BODY = b"id,name\n1,tellurium\n"
 

@@ -146,6 +146,12 @@ jobs:
       run:
         shell: bash
     steps:
+      - name: Spotlight off (macOS)
+        # A fresh macOS runner starts at load 30-40 with Spotlight indexing the
+        # disk (mds_stores, a dozen mdworker_shared waiting on I/O), and indexes
+        # every new Chrome profile too: Chrome went mute for 30 s once there.
+        if: runner.os == 'macOS'
+        run: sudo mdutil -a -i off
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -171,6 +177,12 @@ jobs:
       github.event_name != 'workflow_dispatch' || inputs.os != 'ubuntu-latest'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
+    env:
+      # Chrome's answer deadlines x3 in the tests (tests/timeout_scale.py): these
+      # runners stall up to 27 s (Windows, once even Get-Process) with nothing
+      # wrong in tellurium, against waits of 10 s. The longest, the session
+      # default (30 s -> 90 s), stays under --timeout=120.
+      TELLURIUM_TEST_TIMEOUT_SCALE: "3"
     strategy:
       fail-fast: false
       matrix:
@@ -183,6 +195,12 @@ jobs:
       run:
         shell: bash
     steps:
+      - name: Spotlight off (macOS)
+        # A fresh macOS runner starts at load 30-40 with Spotlight indexing the
+        # disk (mds_stores, a dozen mdworker_shared waiting on I/O), and indexes
+        # every new Chrome profile too: Chrome went mute for 30 s once there.
+        if: runner.os == 'macOS'
+        run: sudo mdutil -a -i off
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
