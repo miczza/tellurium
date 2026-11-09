@@ -101,7 +101,10 @@ def _stuck(pid: int) -> str:
             "sh",
             "-c",
             "ps -A -o pid,ppid,state,pcpu,etime,comm | grep -i chrom | cut -c1-140;"
-            f" sample {pid} 2 -mayDie 2>&1 | sed -n '/^Call graph:/,/^$/p' | head -90 | cut -c1-200",
+            f" sample {pid} 2 -mayDie 2>&1 | sed -n '/^Call graph:/,/^$/p' | head -90 | cut -c1-200;"
+            " echo '--- fs_usage 3s (Chrome, Spotlight) ---';"
+            " sudo -n fs_usage -w -t 3 -f filesys 2>/dev/null"
+            " | grep -iE 'chrom|mdworker|mds|tellurium' | head -60 | cut -c1-220",
         ]
     else:
         cmd = ["ps", "-L", "-o", "tid,state,pcpu,wchan:32,comm", "-p", str(pid)]
@@ -109,6 +112,28 @@ def _stuck(pid: int) -> str:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout
     except Exception as e:  # noqa: BLE001
         return f"(no stack: {e!r})"
+
+
+def _machine() -> str:
+    """Once per session: what the machine is doing besides the tests."""
+    if sys.platform == "win32":
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "Get-MpComputerStatus | Select-Object AMRunningMode,RealTimeProtectionEnabled,"
+            "OnAccessProtectionEnabled,IoavProtectionEnabled,BehaviorMonitorEnabled | Format-List"
+            " | Out-String; (Get-MpPreference).ExclusionPath -join ';'",
+        ]
+    elif sys.platform == "darwin":
+        cmd = ["sh", "-c", "uptime; mdutil -as 2>&1 | head -20; echo TMPDIR=$TMPDIR"]
+    else:
+        cmd = ["uptime"]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=60).stdout
+    except Exception as e:  # noqa: BLE001
+        out = f"(no machine info: {e!r})"
+    return "=== HANG PROBE machine\n" + out
 
 
 async def _probe(label: str, coro, out: list[str]) -> bool:
@@ -177,6 +202,7 @@ async def _safe_report(session: Session, method: str, sent_at: float, limit: flo
 @pytest.fixture(scope="session", autouse=True)
 def hang_probe(pytestconfig):
     _config.append(pytestconfig)
+    _emit(_machine())
     real_send, real_handle, real_spawn = Session.send, Session._handle_message, BrowserProcess.spawn
     real_run, real_start = SessionRouter.run, BrowserProcess._start
 
