@@ -14,7 +14,10 @@ call time), and the tests' own answer bounds that go through :func:`scaled`.
 Not scaled: every deadline a test makes expire on purpose and asserts on
 (``test_navigation_timeout.py``, explicit short ``timeout=`` in tests,
 ``_bounded``, the MCP's deadlines), and defaults of arguments, which are fixed
-when the function is defined.
+when the function is defined. Except where Chrome must answer before the
+deadline expires for the expiry to mean something: the load-phase timeout of
+``test_navigation_timeout.py`` needs the commit inside it, so it is scaled and
+its page never finishes loading.
 """
 
 from __future__ import annotations

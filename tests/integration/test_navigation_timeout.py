@@ -17,6 +17,7 @@ from urllib.parse import quote
 import pytest
 
 from tellurium.browser.navigation import NavigationError, NavigationTimeoutError
+from tests.timeout_scale import scaled
 
 GUARD = 20
 FIXTURES = str(Path(__file__).parent / "fixtures")
@@ -33,6 +34,14 @@ def server():
         def do_GET(self):
             if self.path == "/hang":
                 release.wait(60)
+                return
+            if self.path == "/held_image.html":
+                body = b"<p>x</p><img src='/hang'>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
                 return
             if self.path == "/204":
                 self.send_response(204)
@@ -88,11 +97,23 @@ async def test_tab_is_usable_after_a_navigation_timeout(browser, server):
     assert tab.title == "Basic Test Page"
 
 
-async def test_timeout_while_waiting_for_load_names_the_phase(browser, local_server):
+async def test_timeout_while_waiting_for_load_names_the_phase(browser, server):
+    """The document commits, its image never comes: the deadline runs out in
+    the load phase, whatever it is.
+
+    The commit must fit in the deadline: on the Windows runner the first
+    request of a fresh Chrome reaches the server ~1 s after Page.navigate, and
+    the runner stalls for seconds on top of that (a commit past 4.5 s gave
+    phase "commit", docs/gotchas.md R3-C). Hence a deadline scaled like the
+    other waits for Chrome, and an image held until the module ends.
+    """
     tab = browser.main_tab
+    deadline = scaled(5)
     with pytest.raises(NavigationTimeoutError) as info:
-        # 5 s: the commit fits even on a slow runner, the 12 s image does not
-        await _guard(tab.get(f"{local_server}/slower_load.html", wait_until="load", timeout=5))
+        await asyncio.wait_for(
+            tab.get(f"{server}/held_image.html", wait_until="load", timeout=deadline),
+            deadline + GUARD,
+        )
     assert info.value.phase == "load"
     assert "load" in str(info.value)
 
