@@ -239,14 +239,6 @@ jobs:
         env:
           STOCK_CHROME: ${{ steps.chrome.outputs.chrome-path }}
         run: python -m tests.ci_chrome
-      - name: Defender real-time scanning off (R3-B experiment, push runs only)
-        # Temporary A/B: the push run scans nothing, a manual run on the same commit
-        # keeps Defender on; the hang probe's stalls are counted in both.
-        if: runner.os == 'Windows' && github.event_name == 'push'
-        shell: pwsh
-        run: |
-          Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Continue
-          Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled,OnAccessProtectionEnabled | Format-List
       - name: Run integration tests
         # No xvfb-run: Windows and macOS have a display. tests/stealth stays on Linux.
         env:
