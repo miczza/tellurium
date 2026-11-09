@@ -11,8 +11,10 @@ integration tests; the library's defaults stay what users get.
 Scaled: :attr:`SessionRouter.default_timeout` (read at each send),
 ``robots.FETCH_TIMEOUT`` and ``robots._OPEN_TIMEOUT``, the ``CLOSE_GRACE`` of
 ``process`` and ``raw_chrome`` (how long Chrome gets to exit on its own after
-``Browser.close``; module globals read at call time), and the tests' own
-answer bounds that go through :func:`scaled`.
+``Browser.close``), the cookie calls of a session (``session_cookies.TIMEOUT``,
+``session.LIVE_SAVE_TIMEOUT``) and the login's CDP calls
+(``login_command.CALL_TIMEOUT``), all module globals read at call time; and
+the tests' own answer bounds that go through :func:`scaled`.
 Not scaled: every deadline a test makes expire on purpose and asserts on
 (``test_navigation_timeout.py``, explicit short ``timeout=`` in tests,
 ``_bounded``, the MCP's deadlines), and defaults of arguments, which are fixed
@@ -32,6 +34,7 @@ import pytest
 from tellurium.browser import process as process_module
 from tellurium.browser import raw_chrome, robots
 from tellurium.cdp.transport._session import SessionRouter
+from tellurium.session import login_command, session, session_cookies
 
 ENV = "TELLURIUM_TEST_TIMEOUT_SCALE"
 
@@ -42,6 +45,9 @@ SCALED: tuple[tuple[object, str], ...] = (
     (robots, "_OPEN_TIMEOUT"),
     (process_module, "CLOSE_GRACE"),
     (raw_chrome, "CLOSE_GRACE"),
+    (session_cookies, "TIMEOUT"),
+    (session, "LIVE_SAVE_TIMEOUT"),
+    (login_command, "CALL_TIMEOUT"),
 )
 
 

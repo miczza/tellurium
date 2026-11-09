@@ -110,3 +110,19 @@ def test_the_close_grace_is_scaled(monkeypatch):
         assert process_module.CLOSE_GRACE == 15.0
         assert raw_chrome.CLOSE_GRACE == 15.0
     assert process_module.CLOSE_GRACE == raw_chrome.CLOSE_GRACE == 5.0  # given back
+
+
+def test_the_session_cookie_calls_are_scaled(monkeypatch):
+    """The login's jar reads and its CDP calls wait for Chrome: a stall of the
+    Windows runner expired the 5 s cookie read and the test's 15 s wait
+    for the login's cookie (run 42671685949)."""
+    from tellurium.session import login_command, session, session_cookies
+
+    monkeypatch.setenv(timeout_scale.ENV, "3")
+    with pytest.MonkeyPatch.context() as mp:
+        timeout_scale.stretch(mp)
+        assert session_cookies.TIMEOUT == 15.0
+        assert session.LIVE_SAVE_TIMEOUT == 30.0
+        assert login_command.CALL_TIMEOUT == 15.0
+    assert session_cookies.TIMEOUT == login_command.CALL_TIMEOUT == 5.0  # given back
+    assert session.LIVE_SAVE_TIMEOUT == 10.0
