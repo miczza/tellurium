@@ -30,6 +30,22 @@ _reports: set = set()
 _events: collections.deque = collections.deque(maxlen=60)
 
 
+_config: list = []  # pytest's config, to write past the output capture
+
+
+def _emit(text: str) -> None:
+    """To the terminal at once, even under a passing test (whose output pytest drops)."""
+    if _config:
+        capman = _config[0].pluginmanager.getplugin("capturemanager")
+        reporter = _config[0].pluginmanager.getplugin("terminalreporter")
+        if capman is not None and reporter is not None:
+            with capman.global_and_fixture_disabled():
+                reporter.write_line("")
+                reporter.write_line(text)
+            return
+    print(text, flush=True)
+
+
 def note(what: str) -> None:
     """Something a test fixture saw (a proxy's connection, a request), for the report."""
     _events.append((time.monotonic(), what))
@@ -107,18 +123,19 @@ async def _report(session: Session, method: str, sent_at: float, limit: float) -
         pid = getattr(proc.process, "pid", "?")
         out.append(f"  --- chrome {pid} output tail ---\n{tail}")
     out.append("  --- processes ---\n" + await asyncio.to_thread(_snapshot))
-    print("\n".join(out), flush=True)
+    _emit("\n".join(out))
 
 
 async def _safe_report(session: Session, method: str, sent_at: float, limit: float) -> None:
     try:
         await _report(session, method, sent_at, limit)
     except Exception as e:  # noqa: BLE001
-        print(f"=== HANG PROBE failed: {e!r}", flush=True)
+        _emit(f"=== HANG PROBE failed: {e!r}")
 
 
 @pytest.fixture(scope="session", autouse=True)
-def hang_probe():
+def hang_probe(pytestconfig):
+    _config.append(pytestconfig)
     real_send, real_handle, real_spawn = Session.send, Session._handle_message, BrowserProcess.spawn
     real_run, real_start = SessionRouter.run, BrowserProcess._start
 
@@ -149,7 +166,7 @@ def hang_probe():
                 watch.cancel()
             if fired:
                 took = time.monotonic() - sent_at
-                print(f"=== HANG PROBE end: {method} {outcome} after {took:.1f}s", flush=True)
+                _emit(f"=== HANG PROBE end: {method} {outcome} after {took:.1f}s")
 
     async def handle(self, msg):
         _note(self._router, msg)
