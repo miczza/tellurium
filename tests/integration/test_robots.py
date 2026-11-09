@@ -15,7 +15,6 @@ import pytest
 
 import tellurium
 from tellurium import Browser, NavigationError, RobotsDisallowedError
-from tests.hang_probe import note
 
 pytestmark = pytest.mark.asyncio
 
@@ -57,12 +56,9 @@ class SiteProxy:
         return sum(fragment in line.split(" ")[1] for line, _ in self.seen)
 
     async def _serve(self, reader, writer) -> None:
-        peer = writer.get_extra_info("peername")[1]
-        note(f"proxy: connection from :{peer}")
         try:
             while request := await reader.readuntil(b"\r\n\r\n"):
                 lines = request.decode().split("\r\n")
-                note(f"proxy :{peer} {lines[0]}")
                 headers = {
                     k.lower(): v for k, v in (ln.split(": ", 1) for ln in lines[1:] if ": " in ln)
                 }
@@ -79,9 +75,8 @@ class SiteProxy:
                 head += "".join(f"{k}: {v}\r\n" for k, v in extra.items())
                 writer.write(head.encode() + b"\r\n" + body)
                 await writer.drain()
-                note(f"proxy :{peer} answered {status}")
-        except (asyncio.IncompleteReadError, ConnectionError) as e:
-            note(f"proxy :{peer} ends: {type(e).__name__}")
+        except (asyncio.IncompleteReadError, ConnectionError):
+            pass
         finally:
             writer.close()
 
