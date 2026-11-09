@@ -676,6 +676,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `tellurium mcp --http`: a client sending a body without the token (or with a refused
+  header) reads the whole 401/400/403 on Windows and macOS too. The server closed the socket
+  right after the refusal while the body was still coming; the kernel answered those bytes
+  with a reset, and Windows and macOS discarded the refusal the client had not read yet
+  (`ReadError`, `WinError 64`). Now, when a connection ends with a request body still being
+  sent (a refusal, or a body cut at its 10 s deadline), the server half-closes, reads and
+  drops what still comes (up to 1 MiB, for at most 2 s, not counted as a request being
+  served), then closes.
 - `tellurium login`: the cookies of the sign-in that Chrome drops with its last window are
   written to `cookies.json` by the session's close, still holding the session's lock. They
   were added after the lock was let go: a process opening the session in that moment started
