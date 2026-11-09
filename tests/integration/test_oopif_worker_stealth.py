@@ -151,6 +151,10 @@ async def test_oopif_and_worker_are_patched(oopif_site):
 #: How many times new_tab+get without the freeze it may take with it.
 FREEZE_COST = 1.3
 
+#: The clock timing each new_tab+get. A sample is ~50 ms and the margin 30 %,
+#: so the clock must resolve far below a millisecond.
+MEASURING_CLOCK = "monotonic"
+
 
 @pytest.mark.asyncio
 async def test_freezing_targets_does_not_slow_navigation(oopif_site, monkeypatch):
@@ -205,13 +209,16 @@ async def test_freezing_targets_does_not_slow_navigation(oopif_site, monkeypatch
                 headless=True, stealth=True, args=[RESOLVER_FLAG]
             )
             await (await browsers[freeze].new_tab(oopif_site)).close()  # warm-up
+        clock = time.get_clock_info(MEASURING_CLOCK)
+        assert clock.resolution < 1e-3, f"{MEASURING_CLOCK} too coarse: {clock}"
+        now = getattr(time, MEASURING_CLOCK)
         samples: dict[bool, list[float]] = {False: [], True: []}
         for n in range(60):
             order = (False, True) if n % 2 == 0 else (True, False)
             for freeze in order:
-                start = time.monotonic()
+                start = now()
                 tab = await browsers[freeze].new_tab(oopif_site)
-                samples[freeze].append(time.monotonic() - start)
+                samples[freeze].append(now() - start)
                 await tab.close()
     finally:
         for browser in browsers.values():
