@@ -204,7 +204,7 @@ async def test_any_origin_is_refused(tmp_path):
 
 async def test_a_connection_that_never_finishes_its_headers_is_closed(tmp_path):
     """Slowloris: unauthenticated connections cannot be held open by dribbling."""
-    from tellurium.mcp.http_transport import HEADER_TIMEOUT
+    from tellurium.mcp.http_connection import HEADER_TIMEOUT
 
     async with _server(tmp_path / "home") as server:
         host, port = server.url.removeprefix("http://").removesuffix("/mcp").rsplit(":", 1)
@@ -269,7 +269,7 @@ async def _dribbler(server: _Server, headers: str, count: int):
     """*count* connections that send a request head promising a huge body, then
     one byte of it every 2 s. Returns, per connection, what the server sent and
     when it closed (None: still open at the end)."""
-    from tellurium.mcp.http_transport import BODY_TIMEOUT
+    from tellurium.mcp.http_connection import BODY_TIMEOUT
 
     host, port = server.url.removeprefix("http://").removesuffix("/mcp").rsplit(":", 1)
     head = (
@@ -318,7 +318,7 @@ async def test_refused_connections_are_closed_and_cannot_starve_the_server(tmp_p
 
 
 async def test_a_body_that_never_ends_is_cut_at_the_deadline(tmp_path):
-    from tellurium.mcp.http_transport import BODY_TIMEOUT
+    from tellurium.mcp.http_connection import BODY_TIMEOUT
 
     async with _server(tmp_path / "home") as server:
         auth = f"Authorization: Bearer {server.token}\r\n"

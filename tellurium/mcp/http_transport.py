@@ -18,28 +18,23 @@ import sys
 from collections.abc import Iterator
 from typing import Any
 
-import h11
 import uvicorn
 from mcp.server.streamable_http import MCP_SESSION_ID_HEADER
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp_types import INVALID_REQUEST, UNSUPPORTED_PROTOCOL_VERSION, ErrorData, JSONRPCError
 from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
 from starlette.datastructures import Headers
-from uvicorn.protocols.http.h11_impl import H11Protocol
 
 from tellurium.mcp import auth
 from tellurium.mcp.clients import ClientPools
 from tellurium.mcp.config import HTTP_CALL_MAX, HttpConfig, ServerConfig
+from tellurium.mcp.http_connection import GuardedConnection
 from tellurium.mcp.server import StartupError, build_server, build_tools
 
 logger = logging.getLogger(__name__)
 
 # How long open connections (a client's event stream) get to finish at shutdown.
 SHUTDOWN_GRACE = 3.0
-# A request head (line and headers) must arrive whole within this many seconds.
-HEADER_TIMEOUT = 5.0
-# Once the head is in, the body must follow whole within this many seconds.
-BODY_TIMEOUT = 10.0
 # Requests that passed the guard served at once; more get 503 (MCP clients keep
 # a few each). Connections without a request yet are bounded by the deadlines.
 CONCURRENCY = 100
@@ -133,48 +128,13 @@ async def _reply(
             "headers": [
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(payload)).encode()),
-                # Refused: close now, without reading a body the client may dribble.
+                # Refused: the connection ends (a body still coming is drained).
                 (b"connection", b"close"),
                 *headers,
             ],
         }
     )
     await send({"type": "http.response.body", "body": payload})
-
-
-class _RequestDeadlines(H11Protocol):
-    """uvicorn's h11 protocol with deadlines on each request: the head within
-    HEADER_TIMEOUT, then the body within BODY_TIMEOUT. uvicorn's own keep-alive
-    timer stops at the first byte, so a client dribbling headers or a body
-    (slowloris) would otherwise hold a connection forever, token or not."""
-
-    def connection_made(self, transport: Any) -> None:
-        super().connection_made(transport)
-        self._timer = self.loop.call_later(HEADER_TIMEOUT, self._overdue, h11.IDLE)
-        self._body_timed = False
-
-    def handle_events(self) -> None:
-        super().handle_events()
-        if self.conn.their_state is h11.SEND_BODY and not self._body_timed:
-            self._body_timed = True
-            self._timer.cancel()
-            self._timer = self.loop.call_later(BODY_TIMEOUT, self._overdue, h11.SEND_BODY)
-
-    def on_response_complete(self) -> None:
-        super().on_response_complete()
-        self._timer.cancel()
-        self._body_timed = False
-        if not self.transport.is_closing():
-            self._timer = self.loop.call_later(HEADER_TIMEOUT, self._overdue, h11.IDLE)
-
-    def connection_lost(self, exc: Exception | None) -> None:
-        self._timer.cancel()
-        super().connection_lost(exc)
-
-    def _overdue(self, waiting: type) -> None:
-        # Still waiting for the same part of the request: the client is too slow.
-        if self.conn.their_state is waiting and not self.transport.is_closing():
-            self.transport.close()
 
 
 class _Uvicorn(uvicorn.Server):
@@ -256,7 +216,7 @@ async def serve(config: ServerConfig, stop: asyncio.Event) -> bool:
                     access_log=False,
                     server_header=False,
                     timeout_graceful_shutdown=SHUTDOWN_GRACE,
-                    http=_RequestDeadlines,
+                    http=GuardedConnection,
                 )
             )
             return await _run(web, manager, sock, stop, lambda: _announce(config, http, port))
