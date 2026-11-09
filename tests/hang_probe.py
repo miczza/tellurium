@@ -25,6 +25,7 @@ _traffic: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _procs: weakref.WeakSet = weakref.WeakSet()
 _T0 = time.monotonic()
 _REAL_SEND = Session.send  # the probes' own sends are not probed
+_MIN_LIMIT = 8.0
 
 
 def _note(router, msg: dict) -> None:
@@ -108,8 +109,10 @@ def hang_probe():
         try:
             return await real_send(self, method, params, timeout)
         except TimeoutError as e:
-            if "got no reply" in str(e):
-                limit = self._router.default_timeout if timeout is None else timeout
+            limit = self._router.default_timeout if timeout is None else timeout
+            # Short limits are the tests' own frozen pages: probing them only delays those
+            # tests past their bounds. The hangs looked for wait 10 s or 30 s.
+            if "got no reply" in str(e) and limit >= _MIN_LIMIT:
                 with contextlib.suppress(Exception):
                     await _report(self, method, sent_at, limit)
             raise
