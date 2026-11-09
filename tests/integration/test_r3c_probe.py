@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import http.server
 import json
+import sys
 import threading
 import time
 
@@ -21,7 +22,7 @@ from tellurium.browser.navigation import NavigationTimeoutError
 from tellurium.browser.raw_chrome import RawChrome
 from tests.private_temp import private_temp
 
-RUNS = 15
+RUNS = 5
 
 
 @pytest.fixture(scope="module")
@@ -133,3 +134,60 @@ async def test_probe_close(monkeypatch, tmp_path_factory, tmp_path, i):
         }
         print("PROBE8", json.dumps(record))
         assert process.returncode == 0
+
+
+@pytest.mark.parametrize("i", range(5))
+async def test_probe_second_navigation(browser, probe_server, i):
+    """Is the ~1 s before the request reaches the server only the first one's?"""
+    base, arrivals = probe_server
+    tab = browser.main_tab
+    times = []
+    for n in range(2):
+        start = time.monotonic()
+        await asyncio.wait_for(tab.get(f"{base}/doc?s{i}n{n}", wait_until="commit"), 30)
+        got = [t for p, t in arrivals if p == f"/doc?s{i}n{n}"]
+        times.append((round(got[0] - start, 3), round(time.monotonic() - start, 3)))
+    print("PROBE7B", json.dumps({"i": i, "first": times[0], "second": times[1]}))
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="NtSuspendProcess")
+@pytest.mark.parametrize("grace", [5.0, 15.0])
+async def test_probe_close_with_a_stall(monkeypatch, tmp_path_factory, grace):
+    """Chrome suspended 6 s right after Browser.close: past a 5 s grace the
+    signals end it; what exit code does that give on Windows?"""
+    import ctypes
+
+    from tellurium.browser import raw_chrome
+
+    tmp_path_factory.getbasetemp()
+    monkeypatch.setattr(raw_chrome, "CLOSE_GRACE", grace)
+    ntdll = ctypes.WinDLL("ntdll")
+    with private_temp(monkeypatch):
+        raw = await RawChrome.launch(headless=True)
+        process = raw._proc.process
+        handle = process._handle
+        signals: list[float] = []
+        start = time.monotonic()
+        real_terminate = process.terminate
+
+        def terminate():
+            signals.append(round(time.monotonic() - start, 3))
+            real_terminate()
+
+        process.terminate = terminate
+        process.kill = terminate
+        send = raw.transport.send
+
+        async def stalled(data):
+            await send(data)
+            ntdll.NtSuspendProcess(ctypes.c_void_p(handle))
+            asyncio.get_running_loop().call_later(
+                6, lambda: ntdll.NtResumeProcess(ctypes.c_void_p(handle))
+            )
+
+        raw.transport.send = stalled
+        await asyncio.wait_for(raw.close(), 60)
+        print(
+            "PROBE8S",
+            json.dumps({"grace": grace, "code": process.returncode, "signals": signals}),
+        )
