@@ -67,6 +67,9 @@ def _snapshot() -> str:
             "-Command",
             "Get-Process | Sort-Object CPU -Descending | Select-Object -First 25 "
             "Id,ProcessName,CPU,WS,StartTime,Responding | Format-Table -AutoSize | Out-String -Width 200;"
+            "(Get-Counter '\\Process(*)\\% Processor Time' -ErrorAction SilentlyContinue).CounterSamples"
+            " | Sort-Object CookedValue -Descending | Select-Object -First 15 InstanceName,CookedValue"
+            " | Format-Table -AutoSize | Out-String -Width 200;"
             "'chrome: ' + (Get-Process chrome -ErrorAction SilentlyContinue).Count;"
             "Get-CimInstance Win32_Processor | Select LoadPercentage | Out-String",
         ]
@@ -83,13 +86,40 @@ def _snapshot() -> str:
         return f"(no snapshot: {e!r})"
 
 
-async def _probe(label: str, coro, out: list[str]) -> None:
+def _stuck(pid: int) -> str:
+    """Where Chrome's browser process is: its threads' states, its main thread's stack."""
+    if sys.platform == "win32":
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            f"(Get-Process -Id {pid}).Threads | Group-Object ThreadState,WaitReason"
+            " | Select-Object Count,Name | Format-Table -AutoSize | Out-String -Width 200",
+        ]
+    elif sys.platform == "darwin":
+        cmd = [
+            "sh",
+            "-c",
+            "ps -A -o pid,ppid,state,pcpu,etime,comm | grep -i chrom | cut -c1-140;"
+            f" sample {pid} 2 -mayDie 2>&1 | sed -n '/^Call graph:/,/^$/p' | head -90 | cut -c1-200",
+        ]
+    else:
+        cmd = ["ps", "-L", "-o", "tid,state,pcpu,wchan:32,comm", "-p", str(pid)]
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout
+    except Exception as e:  # noqa: BLE001
+        return f"(no stack: {e!r})"
+
+
+async def _probe(label: str, coro, out: list[str]) -> bool:
     t = time.monotonic()
     try:
         res = await coro
         out.append(f"  probe {label}: ok in {time.monotonic() - t:.2f}s {str(res)[:200]}")
+        return True
     except BaseException as e:  # noqa: BLE001
         out.append(f"  probe {label}: {type(e).__name__} {e} after {time.monotonic() - t:.2f}s")
+        return False
 
 
 async def _report(session: Session, method: str, sent_at: float, limit: float) -> None:
@@ -111,7 +141,9 @@ async def _report(session: Session, method: str, sent_at: float, limit: float) -
         out.append("  fixture events around the send:")
         out.extend(f"    {t - sent_at:+8.2f}s {what}" for t, what in seen)
     root = router.root
-    await _probe("root Browser.getVersion", _REAL_SEND(root, "Browser.getVersion", {}, 5), out)
+    alive = await _probe(
+        "root Browser.getVersion", _REAL_SEND(root, "Browser.getVersion", {}, 5), out
+    )
     if session._session_id:
         ev = {
             "expression": "[document.visibilityState, location.href, document.readyState]",
@@ -120,6 +152,11 @@ async def _report(session: Session, method: str, sent_at: float, limit: float) -
         await _probe(
             "session Runtime.evaluate", _REAL_SEND(session, "Runtime.evaluate", ev, 5), out
         )
+    for proc in [p for p in _procs if not alive and p.transport is router._transport]:
+        pid = getattr(proc.process, "pid", None)
+        if pid is not None:
+            out.append(f"  --- chrome {pid} (this router) threads ---")
+            out.append(await asyncio.to_thread(_stuck, pid))
     for proc in [p for p in _procs if p.process is not None and p.process.poll() is None]:
         tail = proc._output.text()[-3000:] if proc._output is not None else "(log file)"
         pid = getattr(proc.process, "pid", "?")
