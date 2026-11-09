@@ -25,7 +25,9 @@ _procs: weakref.WeakSet = weakref.WeakSet()
 _T0 = time.monotonic()
 _REAL_SEND = Session.send  # the probes' own sends are not probed
 _MIN_LIMIT = 8.0
-_WATCH = 7.0  # seconds a command may wait before the report, under the 10 s limits
+_WATCH = 3.0  # seconds a command may wait before the report: Chrome answers in ms
+_SNAPSHOT_EVERY = 30.0  # the process listing costs a PowerShell: not on every report
+_last_snapshot = [-_SNAPSHOT_EVERY]
 _reports: set = set()
 _events: collections.deque = collections.deque(maxlen=60)
 
@@ -122,7 +124,9 @@ async def _report(session: Session, method: str, sent_at: float, limit: float) -
         tail = proc._output.text()[-3000:] if proc._output is not None else "(log file)"
         pid = getattr(proc.process, "pid", "?")
         out.append(f"  --- chrome {pid} output tail ---\n{tail}")
-    out.append("  --- processes ---\n" + await asyncio.to_thread(_snapshot))
+    if time.monotonic() - _last_snapshot[0] >= _SNAPSHOT_EVERY:
+        _last_snapshot[0] = time.monotonic()
+        out.append("  --- processes ---\n" + await asyncio.to_thread(_snapshot))
     _emit("\n".join(out))
 
 
