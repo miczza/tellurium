@@ -24,13 +24,13 @@ def _fd_is_open(fd: int) -> bool:
     return True
 
 
-async def _recv_time(size: int) -> float:
-    """Seconds spent receiving one *size*-byte message written in one go."""
+async def _recv_time(sizes: list[int]) -> float:
+    """Seconds spent receiving messages of *sizes*, written back to back in one go."""
     child_read, parent_write = os.pipe()
     parent_read, child_write = os.pipe()
     transport = PipePosixTransport(parent_read, parent_write)
     await transport.start()
-    payload = b'{"id": 1, "result": {"data": "' + b"x" * size + b'"}}\0'
+    payload = b"".join(b'{"id": 1, "result": {"data": "' + b"x" * size + b'"}}\0' for size in sizes)
 
     def write() -> None:
         view = memoryview(payload)
@@ -41,10 +41,10 @@ async def _recv_time(size: int) -> float:
     try:
         start = time.perf_counter()
         writer.start()
-        msg = await asyncio.wait_for(transport.recv(), timeout=60)
-        elapsed = time.perf_counter() - start
-        assert len(msg["result"]["data"]) == size
-        return elapsed
+        for size in sizes:
+            msg = await asyncio.wait_for(transport.recv(), timeout=60)
+            assert len(msg["result"]["data"]) == size
+        return time.perf_counter() - start
     finally:
         writer.join()
         await transport.close()
@@ -53,12 +53,24 @@ async def _recv_time(size: int) -> float:
 
 
 async def test_large_message_cost_grows_linearly():
-    """A 64 MB reply must not re-scan the buffer on every chunk (quadratic)."""
-    await _recv_time(1 << 20)  # warm-up
-    small = min([await _recv_time(8 << 20) for _ in range(3)])
-    large = min([await _recv_time(64 << 20) for _ in range(3)])
-    # Linear: ~8x. Quadratic: ~64x. 20x leaves room for noise either way.
-    assert large < small * 20, f"8 MB: {small:.3f}s, 64 MB: {large:.3f}s"
+    """A 64 MB reply must not re-scan the buffer on every chunk (quadratic).
+
+    The reference is the same 64 MB as eight 8 MB replies, measured right
+    next to it: the two last about as long, so a loaded machine slows both
+    alike (an 8 MB reply alone, ten times shorter, often slipped between the
+    bursts that hit every 64 MB one: ratios up to 16 against a linear 8 under
+    load). Linear: ~1x (1.0-2.0 idle and at load 60). Quadratic: ~8x (10-12
+    measured with the scan restarting at every chunk).
+    """
+    await _recv_time([1 << 20])  # warm-up
+    reference: list[float] = []
+    large: list[float] = []
+    for _ in range(3):
+        reference.append(await _recv_time([8 << 20] * 8))
+        large.append(await _recv_time([64 << 20]))
+    assert min(large) < min(reference) * 4, (
+        f"8 x 8 MB: {min(reference):.3f}s, 64 MB: {min(large):.3f}s"
+    )
 
 
 async def test_close_releases_the_read_fd_too():
