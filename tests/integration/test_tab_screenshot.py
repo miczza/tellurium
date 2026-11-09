@@ -8,6 +8,7 @@ import struct
 import pytest
 
 from tests.platform_marks import needs_display
+from tests.timeout_scale import scaled
 
 pytestmark = pytest.mark.asyncio
 
@@ -36,7 +37,7 @@ async def _pixel(tab, png: bytes, x: int, y: int) -> list[int]:
             ctx.drawImage(img, 0, 0);
             return Array.from(ctx.getImageData({x}, {y}, 1, 1).data);
         }})()""",
-        timeout=10,
+        timeout=scaled(10),
     )
     return rgba[:3]
 
@@ -51,7 +52,7 @@ async def _emulate(tab, ratio):
 async def _check_full_page(tab):
     """A full page capture: CSS size, bottom and right edge in it, page unchanged."""
     before = await tab.eval(_LAYOUT)
-    png = await tab.screenshot(full_page=True, timeout=10)
+    png = await tab.screenshot(full_page=True, timeout=scaled(10))
     assert await tab.eval(_LAYOUT) == before  # the scrollbar is back, nothing moved
     width, height = _png_size(png)
     # the capture lays the page out at its full height: no vertical scrollbar
@@ -109,7 +110,7 @@ async def scrolled_body_scroller(tab, server):
     scrolled = (
         "new Promise(r => { addEventListener('scroll', r, {once: true}); scrollTo(0, 1000) })"
     )
-    await tab.eval(scrolled, timeout=10)
+    await tab.eval(scrolled, timeout=scaled(10))
     await tab.eval(_FRAMES)
     await tab.eval("window.scrolls = 0")
     return await tab.eval(_LAYOUT)
@@ -126,7 +127,7 @@ async def test_full_page_leaves_a_scrolled_body_scroller_alone(any_browser, loca
     before = await scrolled_body_scroller(tab, local_server)
     assert before[3] == 1000 and before[0] < before[1]  # the premise
     for _ in range(2):
-        png = await tab.screenshot(full_page=True, timeout=10)
+        png = await tab.screenshot(full_page=True, timeout=scaled(10))
         assert _png_size(png)[1] == 4000
         await check_left_alone(tab, before)
 
@@ -146,13 +147,13 @@ async def test_full_page_of_a_quirks_mode_page_gives_the_scrollbar_back(any_brow
     scrolled = (
         "new Promise(r => { addEventListener('scroll', r, {once: true}); scrollTo(0, 1000) })"
     )
-    await tab.eval(scrolled, timeout=10)
+    await tab.eval(scrolled, timeout=scaled(10))
     await tab.eval(_FRAMES)
     await tab.eval("window.scrolls = 0")
     before = await tab.eval(_QUIRKS_LAYOUT)
     assert before[5] == "BackCompat" and before[0] < before[1] and before[4] == 1000
     for _ in range(2):
-        png = await tab.screenshot(full_page=True, timeout=10)
+        png = await tab.screenshot(full_page=True, timeout=scaled(10))
         assert _png_size(png)[1] == 4000
         await tab.eval(_FRAMES)
         assert await tab.eval(_QUIRKS_LAYOUT) == before

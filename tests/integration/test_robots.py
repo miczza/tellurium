@@ -15,6 +15,7 @@ import pytest
 
 import tellurium
 from tellurium import Browser, NavigationError, RobotsDisallowedError
+from tests.timeout_scale import scaled
 
 pytestmark = pytest.mark.asyncio
 
@@ -90,18 +91,18 @@ async def _load(tab, url: str) -> dict:
             "url": url,
             "options": {"disableCache": False, "includeCredentials": False},
         },
-        timeout=10,
+        timeout=scaled(10),
     )
     resource = res["resource"]
     body = b""
     if stream := resource.get("stream"):
         while True:
-            chunk = await tab._session.send("IO.read", {"handle": stream}, timeout=10)
+            chunk = await tab._session.send("IO.read", {"handle": stream}, timeout=scaled(10))
             data = chunk.get("data", "")
             body += base64.b64decode(data) if chunk.get("base64Encoded") else data.encode()
             if chunk.get("eof"):
                 break
-        await tab._session.send("IO.close", {"handle": stream}, timeout=10)
+        await tab._session.send("IO.close", {"handle": stream}, timeout=scaled(10))
     return {**resource, "body": body}
 
 
