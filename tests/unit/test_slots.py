@@ -316,7 +316,10 @@ async def test_three_opens_in_a_loop_each_get_a_turn_quickly():
                 await asyncio.sleep(0.05)
 
     await asyncio.gather(*(opener(name) for name in ("a", "b", "c")))
-    assert max(first_entry.values()) < 0.2
+    # ~0.1 s expected; the order below is the proof of fairness. The bound only
+    # catches the polling case (over a second): a macOS runner stalled ~115 ms
+    # past a 0.2 s bound (run 42849172838).
+    assert max(first_entry.values()) < 1.0
     assert turns == ["a", "b", "c"] * 3
     assert slots.held == 0
 
