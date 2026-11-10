@@ -6,7 +6,9 @@ included) went mute up to 27 s; macOS runners start at load 30-40 while
 Spotlight indexes the fresh VM. A deadline sized for a Chrome that answers in
 milliseconds expires there. ``TELLURIUM_TEST_TIMEOUT_SCALE``, set by the CI on
 those jobs only, multiplies the waits for Chrome's answer during the
-integration tests; the library's defaults stay what users get.
+integration tests; the library's defaults stay what users get. The stalls
+are absolute, not proportional to the wait: with a factor above 1 a scaled
+wait is at least :data:`FLOOR` seconds, past the longest stall measured.
 
 Scaled: :attr:`SessionRouter.default_timeout` (read at each send),
 ``robots.FETCH_TIMEOUT`` and ``robots._OPEN_TIMEOUT``, the ``CLOSE_GRACE`` of
@@ -37,6 +39,9 @@ from tellurium.cdp.transport._session import SessionRouter
 from tellurium.session import login_command, session, session_cookies
 
 ENV = "TELLURIUM_TEST_TIMEOUT_SCALE"
+#: Least scaled wait when the factor is above 1: the longest stall measured on
+#: the runners is 27 s (Windows, R3-B), a 5 s wait x 3 is still short of it.
+FLOOR = 30.0
 
 #: Owner and attribute of each deadline on an answer from Chrome that is scaled.
 SCALED: tuple[tuple[object, str], ...] = (
@@ -67,17 +72,25 @@ def factor() -> float:
 
 
 def scaled(seconds: float) -> float:
-    """*seconds* times the factor: a test's own bound on an answer from Chrome."""
-    return seconds * factor()
+    """*seconds* times the factor, and at least :data:`FLOOR` when the factor
+    is above 1: a test's own bound on an answer from Chrome."""
+    return _stretched(seconds, factor())
+
+
+def _stretched(seconds: float, times: float) -> float:
+    if times > 1.0:
+        return max(seconds * times, FLOOR)
+    return seconds * times
 
 
 def stretch(mp: pytest.MonkeyPatch) -> None:
-    """Multiply every deadline in :data:`SCALED` through *mp*, which gives them back."""
+    """Stretch every deadline in :data:`SCALED` like :func:`scaled` through *mp*,
+    which gives them back."""
     times = factor()
     if times == 1.0:
         return
     for owner, name in SCALED:
-        mp.setattr(owner, name, getattr(owner, name) * times)
+        mp.setattr(owner, name, _stretched(getattr(owner, name), times))
 
 
 @pytest.fixture(autouse=True)

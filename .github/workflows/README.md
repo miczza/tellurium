@@ -64,8 +64,10 @@ run, and a manual run does not cancel it. Every job installs the `geoip`,
   weights in `tests/integration/durations.json`, the slowest system of a run;
   refresh it from the JUnit reports when the suite changes), because the
   whole suite takes about 55 min on a hosted runner; each shard ends near
-  14 min. `pytest-timeout` (120 s per test)
-  bounds a hang: on macOS (signal method) it fails that test and the run goes
+  14 min. `pytest-timeout` (120 s per test for unit, 300 s for
+  `integration-os`, whose waits for Chrome are x3 and at least 30 s, see
+  `tests/timeout_scale.py`; a failing test adding a few of them up must fail
+  with its own error) bounds a hang: on macOS (signal method) it fails that test and the run goes
   on; on Windows only the thread method exists, which dumps the stacks and
   ends the whole pytest process, so the rest of that shard does not run and
   there is no JUnit report for it. `-v` names the test that was running in
