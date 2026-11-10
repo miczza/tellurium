@@ -74,9 +74,10 @@ def _profiles(root: Path) -> list[Path]:
     return sorted(root.glob("tellurium_*"))
 
 
-async def _wait_until(predicate, timeout: float = 15.0) -> bool:
+async def _wait_until(predicate, timeout: float | None = None) -> bool:
+    """Whether *predicate* holds within *timeout* (default ``scaled(15)``)."""
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
+    deadline = loop.time() + (scaled(15) if timeout is None else timeout)
     while loop.time() < deadline:
         if predicate():
             return True
@@ -140,10 +141,12 @@ async def test_close_leaves_no_process_and_no_profile(private_tempdir):
     await asyncio.wait_for(raw.close(), 5)  # idempotent
 
 
-async def test_close_asks_chrome_first(private_tempdir):
-    """close() sends Browser.close on the pipe and Chrome exits on its own
-    (status 0, its orderly exit), before any signal."""
-    raw = await RawChrome.launch(headless=True)
+#: The grace the library gives Chrome to exit on its own, before the factor.
+_LIBRARY_GRACE = 5.0
+
+
+async def _close_watched(raw: RawChrome) -> tuple[list[str], list[str], float]:
+    """Close *raw*: the CDP methods it sent, the signals, the seconds it took."""
     sent: list[bytes] = []
     send = raw.transport.send
 
@@ -160,15 +163,34 @@ async def test_close_asks_chrome_first(private_tempdir):
     loop = asyncio.get_running_loop()
     start = loop.time()
     await asyncio.wait_for(raw.close(), scaled(30))
-    took = loop.time() - start
-    assert [json.loads(d[:-1])["method"] for d in sent] == ["Browser.close"]
-    # Chrome exits by itself, with 0, on Windows too (in 0.75-1.5 s there).
-    # A runner stall past the grace brings the signals: on Windows
-    # TerminateProcess, exit code 1 (red 8 of R3); on Linux Chrome takes
-    # SIGTERM as an orderly exit, 0 again. Hence the signals are watched too,
-    # and the grace is scaled like the other waits for Chrome.
-    assert not signals, f"{signals} after {took:.1f} s (grace {raw_chrome.CLOSE_GRACE:g} s)"
-    assert process.returncode == 0, f"exit code {process.returncode} after {took:.1f} s"
+    methods = [json.loads(d[:-1])["method"] for d in sent]
+    return methods, signals, loop.time() - start
+
+
+async def test_close_asks_chrome_first(private_tempdir):
+    """close() sends Browser.close on the pipe and Chrome exits on its own
+    (status 0, its orderly exit), before any signal, within the library's grace.
+
+    Chrome exits by itself, with 0, on Windows too (in 0.75-1.5 s there). A
+    runner stall past the grace brings the signals: on Windows
+    TerminateProcess, exit code 1 (red 8 of R3); on Linux Chrome takes SIGTERM
+    as an orderly exit, 0 again. Hence the signals are watched too, and the
+    grace is scaled like the other waits for Chrome. A scaled grace alone would
+    let a close that is slow every time pass on the slow runners: two Chromes
+    are closed, a stall (about one per shard) slows one at most, a slow close
+    slows both past the library's own grace.
+    """
+    took = []
+    for _ in range(2):
+        raw = await RawChrome.launch(headless=True)
+        methods, signals, seconds = await _close_watched(raw)
+        took.append(seconds)
+        grace = raw_chrome.CLOSE_GRACE
+        assert methods == ["Browser.close"]
+        assert not signals, f"{signals} after {seconds:.1f} s (grace {grace:g} s)"
+        code = raw._proc.process.returncode
+        assert code == 0, f"exit code {code} after {seconds:.1f} s"
+    assert min(took) < _LIBRARY_GRACE, f"both closes slow: {took}"
 
 
 @needs_proc
@@ -210,7 +232,7 @@ async def test_close_releases_everything_when_asking_fails_unexpectedly(
 async def test_alive_turns_false_when_chrome_dies(private_tempdir):
     async with RawChrome.launch(headless=True) as raw:
         os.kill(raw.pid, 9)
-        assert await _wait_until(lambda: not raw.alive, 10)
+        assert await _wait_until(lambda: not raw.alive, scaled(10))
     assert not _profiles(private_tempdir)
 
 
@@ -305,7 +327,7 @@ class _PipeSession:
                 for handler in list(self._handlers.get(message["method"], [])):
                     handler(message.get("params", {}))
 
-    async def call(self, method: str, params=None, timeout=10.0, session: str = "") -> dict:
+    async def call(self, method: str, params=None, timeout=None, session: str = "") -> dict:
         self._next += 1
         future = asyncio.get_running_loop().create_future()
         self._waiting[self._next] = future
@@ -313,7 +335,7 @@ class _PipeSession:
         if session:
             message["sessionId"] = session
         await self._raw.transport.send(json.dumps(message).encode() + b"\0")
-        reply = await asyncio.wait_for(future, timeout)
+        reply = await asyncio.wait_for(future, scaled(10) if timeout is None else timeout)
         assert "error" not in reply, reply
         return reply["result"]
 
@@ -321,7 +343,7 @@ class _PipeSession:
         self.id = (await self.call("Target.attachToBrowserTarget"))["sessionId"]
         return self
 
-    async def send(self, method: str, params=None, timeout=10.0) -> dict:
+    async def send(self, method: str, params=None, timeout=None) -> dict:
         return await self.call(method, params, timeout, session=self.id)
 
     def on(self, event: str, handler) -> None:
@@ -357,7 +379,7 @@ async def test_credentials_stay_in_the_forwarder(private_tempdir):
             try:
                 await raw.answer_proxy_auth(session)
                 await session.call("Target.createTarget", {"url": "http://site.test/"})
-                assert await _wait_until(lambda: proxy.requests, 15), "nothing reached the proxy"
+                assert await _wait_until(lambda: proxy.requests), "nothing reached the proxy"
             finally:
                 await session.close()
             assert proxy.requests[0] == ("GET http://site.test/ HTTP/1.1", GOOD_AUTH)
@@ -396,7 +418,7 @@ async def test_cancelled_geoip_lookups_do_not_starve_close(private_tempdir):
         # The lookups given up on run on, but not on the executor close() needs.
         await asyncio.wait_for(asyncio.to_thread(lambda: None), 1)
 
-        raw = await asyncio.wait_for(RawChrome.launch(headless=True), 30)
+        raw = await asyncio.wait_for(RawChrome.launch(headless=True), scaled(30))
         started = asyncio.get_running_loop().time()
         await raw.close()
         assert asyncio.get_running_loop().time() - started < 10
