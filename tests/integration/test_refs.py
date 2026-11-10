@@ -8,6 +8,7 @@ import re
 import pytest
 
 from tellurium import Element, SnapshotNode, SnapshotTooLargeError, StaleElementError
+from tests.timeout_scale import scaled
 
 
 def _ref_of(text: str, line_start: str) -> str:
@@ -102,7 +103,7 @@ async def test_refs_are_stale_after_going_back(browser, local_server):
     await tab.get(f"{local_server}/snapshot_form.html")
     ref = _ref_of(await tab.snapshot(), '- textbox "Email"')
     await tab.get(f"{local_server}/basic.html")
-    back = asyncio.create_task(tab.wait_for_navigation(timeout=10))
+    back = asyncio.create_task(tab.wait_for_navigation(timeout=scaled(10)))
     await asyncio.sleep(0)  # the wait listens before the navigation starts
     await tab.back()
     await back
@@ -162,7 +163,7 @@ async def test_snapshot_limits_reach_the_tab(browser, local_server):
     await tab.get(f"{local_server}/snapshot_list.html")
     with pytest.raises(SnapshotTooLargeError, match="max_nodes=100"):
         await tab.snapshot(max_nodes=100)
-    assert "- button" in await tab.snapshot(max_nodes=None, snapshot_timeout=10)
+    assert "- button" in await tab.snapshot(max_nodes=None, snapshot_timeout=scaled(10))
 
 
 async def test_css_selectors_still_work(browser, local_server):

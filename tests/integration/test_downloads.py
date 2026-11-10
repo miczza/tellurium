@@ -11,6 +11,7 @@ from tellurium import Browser
 from tellurium.browser.download import DownloadError
 from tests.integration.conftest import DOWNLOAD_BODY
 from tests.private_temp import FAILING_EXECUTABLE, private_temp
+from tests.timeout_scale import scaled
 
 pytestmark = pytest.mark.asyncio
 
@@ -24,9 +25,9 @@ def private_tempdir(monkeypatch, tmp_path_factory):
         yield root
 
 
-def expect_download(tab, timeout=30):
-    """Wait for a download of this tab."""
-    return tab.expect_download(timeout=timeout)
+def expect_download(tab, timeout: float | None = None):
+    """Wait for a download of this tab (30 s, scaled, by default)."""
+    return tab.expect_download(timeout=scaled(30) if timeout is None else timeout)
 
 
 async def _click(tab, selector):
@@ -204,10 +205,10 @@ async def test_failed_launch_removes_the_owned_folder(monkeypatch):
     assert made and not os.path.exists(made[0])
 
 
-async def _started(download, timeout=5.0):
-    """Wait until Chrome has written part of *download*."""
+async def _started(download, timeout: float | None = None):
+    """Wait until Chrome has written part of *download* (5 s, scaled, by default)."""
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
+    deadline = loop.time() + (scaled(5) if timeout is None else timeout)
     while download.received_bytes == 0 and loop.time() < deadline:
         await asyncio.sleep(0.05)
     assert download.received_bytes > 0
@@ -265,7 +266,7 @@ async def test_a_raising_filter_fails_only_its_waiter(local_server):
         tab = await browser.get(local_server + "/download.html")
         broken = browser.downloads.expect(lambda frame_id: 1 / 0)
         await broken.__aenter__()
-        async with expect_download(tab, timeout=10) as info:
+        async with expect_download(tab, timeout=scaled(10)) as info:
             await _click(tab, "#report")
         assert (await info.value).suggested_filename == "report.csv"
         with pytest.raises(ZeroDivisionError):
@@ -332,7 +333,7 @@ async def test_a_download_nobody_waits_for_lands_in_the_folder(local_server, tmp
     try:
         tab = await browser.get(local_server + "/download.html")
         await _click(tab, "#report")
-        for _ in range(100):
+        for _ in range(int(scaled(5) / 0.05)):
             files = [p for p in tmp_path.iterdir() if p.is_file()]
             if files and files[0].read_bytes() == DOWNLOAD_BODY:
                 break

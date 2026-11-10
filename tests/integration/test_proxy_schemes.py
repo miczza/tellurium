@@ -16,6 +16,7 @@ import subprocess
 import pytest
 
 from tellurium import Browser
+from tests.timeout_scale import scaled
 
 pytestmark = pytest.mark.asyncio
 
@@ -136,7 +137,7 @@ async def test_socks5_proxy_carries_the_page():
     async with Socks5Proxy() as proxy:
         browser = await Browser.launch(headless=True, proxy=f"socks5://127.0.0.1:{proxy.port}")
         try:
-            tab = await browser.get("http://site.test/", timeout=15)
+            tab = await browser.get("http://site.test/", timeout=scaled(15))
             assert await tab.eval("document.title") == "via socks5"
         finally:
             await browser.close()
@@ -152,7 +153,7 @@ async def test_https_proxy_is_spoken_to_over_tls(server_context):
             args=["--ignore-certificate-errors"],  # the test proxy's own certificate
         )
         try:
-            tab = await browser.get("http://site.test/", timeout=15)
+            tab = await browser.get("http://site.test/", timeout=scaled(15))
             assert await tab.eval("document.title") == "via https proxy"
         finally:
             await browser.close()
@@ -172,7 +173,7 @@ async def test_authenticated_https_proxy_through_the_forwarder(
             headless=True, proxy=f"https://{USER}:{PASSWORD}@127.0.0.1:{proxy.port}"
         )
         try:
-            tab = await browser.get("http://site.test/", timeout=15)
+            tab = await browser.get("http://site.test/", timeout=scaled(15))
             assert await tab.eval("document.title") == "via https proxy"
         finally:
             await browser.close()

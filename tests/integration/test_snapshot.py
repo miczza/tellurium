@@ -20,6 +20,7 @@ from tellurium.browser.snapshot import (
     take_snapshot,
     take_snapshot_nodes,
 )
+from tests.timeout_scale import scaled
 
 # The gate reads metrics the tests leave here (build/ is not versioned).
 METRICS = Path(__file__).parents[2] / "build" / "metrics"
@@ -419,7 +420,7 @@ async def test_max_nodes_lifts_the_limit_and_the_error_says_how(browser, local_s
     await tab.get(f"{local_server}/snapshot_huge.html")
     with pytest.raises(SnapshotTooLargeError, match=r"60\d\d\d DOM nodes.*max_nodes="):
         await take_snapshot(tab._session, RefMap())
-    limits = {"max_nodes": 100_000, "snapshot_timeout": 30}
+    limits = {"max_nodes": 100_000, "snapshot_timeout": scaled(30)}
     text = await take_snapshot(tab._session, RefMap(), **limits, max_chars=500)
     assert '- button "Row 0" [ref=' in text
 
@@ -487,7 +488,7 @@ async def test_tree_too_slow_to_fetch_is_refused_in_time(browser, local_server):
     # fetches the whole 120k-node AX tree (shadow DOM), ~4-5 s, and after the eval a
     # new one: the abandoned request is not reused once the tab sent something else.
     assert await tab.eval("document.title") is not None
-    text = await take_snapshot(tab._session, RefMap(), selector="h1", snapshot_timeout=60)
+    text = await take_snapshot(tab._session, RefMap(), selector="h1", snapshot_timeout=scaled(60))
     assert text.startswith('- heading "Web component"')
 
 

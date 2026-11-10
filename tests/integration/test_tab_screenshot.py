@@ -183,14 +183,14 @@ async def test_cancelled_mid_capture_the_scrollbar_still_comes_back(browser, loc
 
     tab._session.send = spy
     shot = asyncio.ensure_future(tab.screenshot(full_page=True, timeout=60))
-    await asyncio.wait_for(started.wait(), 10)
+    await asyncio.wait_for(started.wait(), scaled(10))
     await asyncio.sleep(0.05)
     shot.cancel()
     with pytest.raises(asyncio.CancelledError):
         await shot
     pending = set(tab._background)
     assert pending  # Chrome is still capturing: the tab restores once it answers
-    await asyncio.wait_for(asyncio.gather(*pending), 60)
+    await asyncio.wait_for(asyncio.gather(*pending), scaled(60))
     await tab.eval(_FRAMES)
     assert await tab.eval(_LAYOUT) == before
     assert tab._background == set()

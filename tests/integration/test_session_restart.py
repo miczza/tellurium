@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from tests.integration.session_child import child_env
+from tests.timeout_scale import scaled
 
 _CHILD = str(Path(__file__).with_name("session_child.py"))
 _TIMEOUT = 90.0
@@ -26,7 +27,7 @@ async def _run_child(*args: str) -> str:
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), _TIMEOUT)
+        out, err = await asyncio.wait_for(proc.communicate(), scaled(_TIMEOUT))
     except BaseException:
         proc.kill()
         await proc.wait()

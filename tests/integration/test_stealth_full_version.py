@@ -13,6 +13,7 @@ import pytest
 
 from tellurium import Browser
 from tests.integration.test_robots import SiteProxy
+from tests.timeout_scale import scaled
 
 pytestmark = pytest.mark.asyncio
 
@@ -43,8 +44,8 @@ async def test_the_full_version_is_the_same_everywhere(headless):
         browser = await Browser.launch(headless=headless, stealth=True)
         try:
             tab = await browser.new_tab()
-            await tab.get(site.url + "/page", timeout=15)
-            await tab.get(site.url + "/page2", timeout=15)  # Accept-CH now remembered
+            await tab.get(site.url + "/page", timeout=scaled(15))
+            await tab.get(site.url + "/page2", timeout=scaled(15))  # Accept-CH now remembered
             page = json.loads(
                 await tab.eval(
                     f"navigator.userAgentData.getHighEntropyValues({HIGH}).then(JSON.stringify)"

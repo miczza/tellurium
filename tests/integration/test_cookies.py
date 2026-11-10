@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from tellurium.browser.cookie import Cookie
+from tests.timeout_scale import scaled
 
 pytestmark = pytest.mark.asyncio
 
@@ -46,7 +47,7 @@ async def test_cookies_are_cleared_in_a_page(browser, local_server):
     await tab.eval("document.cookie = 'seen=1; path=/'")
     # A cookie written by the renderer reaches the browser's store asynchronously:
     # under load Storage.getCookies can run before it lands.
-    async with asyncio.timeout(5):
+    async with asyncio.timeout(scaled(5)):
         while not (names := [c.name for c in await browser.get_cookies("127.0.0.1")]):
             await asyncio.sleep(0.05)
     assert names == ["seen"]

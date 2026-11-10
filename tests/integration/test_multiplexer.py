@@ -43,6 +43,7 @@ from tests.integration.test_raw_chrome import (  # noqa: E402, F401 - private_te
     private_tempdir,
 )
 from tests.platform_marks import needs_posix_signals, needs_proc, needs_sh  # noqa: E402
+from tests.timeout_scale import scaled  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -57,7 +58,7 @@ async def serving(size: int = 1, **options):
     mux = Multiplexer(size, **{"geoip": False, **options})
     task = asyncio.ensure_future(mux.serve("127.0.0.1", 0))
     try:
-        await _wait_until(lambda: mux.url is not None or task.done(), 30)
+        await _wait_until(lambda: mux.url is not None or task.done(), scaled(30))
         if task.done():
             task.result()
         yield mux
@@ -75,7 +76,7 @@ def _client(mux: Multiplexer, path: str = "/devtools/browser/any", **kw):
         f"ws://127.0.0.1:{_port(mux)}{path}",
         additional_headers={"Authorization": f"Bearer {mux.token}"},
         max_size=None,
-        open_timeout=90,
+        open_timeout=scaled(90),
         **kw,
     )
 
@@ -93,11 +94,11 @@ async def _cdp(ws, id: int, method: str, params: dict | None = None, session: st
             if answer.get("id") == id:
                 return answer
 
-    return await asyncio.wait_for(reply(), 20)
+    return await asyncio.wait_for(reply(), scaled(20))
 
 
-async def _closed(ws, timeout: float = 30.0) -> tuple[int | None, str]:
-    """Read until the server closes *ws*: its close code and reason."""
+async def _closed(ws, timeout: float | None = None) -> tuple[int | None, str]:
+    """Read until the server closes *ws* (30 s, scaled, by default): its close code and reason."""
 
     async def drain() -> ConnectionClosed:
         try:
@@ -106,7 +107,7 @@ async def _closed(ws, timeout: float = 30.0) -> tuple[int | None, str]:
         except ConnectionClosed as exc:
             return exc
 
-    closed = await asyncio.wait_for(drain(), timeout)
+    closed = await asyncio.wait_for(drain(), scaled(30) if timeout is None else timeout)
     if closed.rcvd is None:
         return None, ""
     return closed.rcvd.code, closed.rcvd.reason
@@ -122,7 +123,7 @@ async def _http(
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     try:
         writer.write(_request(target, headers, upgrade))
-        status = await asyncio.wait_for(reader.readline(), 90)
+        status = await asyncio.wait_for(reader.readline(), scaled(90))
         found = {}
         while (line := await reader.readline()) not in (b"\r\n", b""):
             name, _, value = line.decode().partition(":")
@@ -185,6 +186,7 @@ async def test_json_version_and_a_cdp_round_trip_on_a_flat_session(local_server)
             version["webSocketDebuggerUrl"],
             additional_headers={"Authorization": f"Bearer {mux.token}"},
             max_size=None,
+            open_timeout=scaled(10),
         ) as ws:
             created = await _cdp(ws, 1, "Target.createTarget", {"url": "about:blank"})
             target = created["result"]["targetId"]
@@ -203,7 +205,7 @@ async def test_json_version_and_a_cdp_round_trip_on_a_flat_session(local_server)
                     if event.get("method") == "Page.loadEventFired":
                         return event
 
-            event = await asyncio.wait_for(loaded(), 20)
+            event = await asyncio.wait_for(loaded(), scaled(20))
             assert event["sessionId"] == session  # events pass with their sessionId
             title = await _cdp(
                 ws, 5, "Runtime.evaluate", {"expression": "document.title"}, session=session
@@ -221,7 +223,7 @@ async def test_client_ids_are_remapped_and_probes_stay_invisible(monkeypatch):
             await ws.send(json.dumps({"id": id, "method": "Browser.getVersion"}))
         got = []
         while len(got) < len(sent):
-            message = json.loads(await asyncio.wait_for(ws.recv(), 10))
+            message = json.loads(await asyncio.wait_for(ws.recv(), scaled(10)))
             assert "id" in message, message
             got.append(message["id"])
             assert "product" in message["result"]
@@ -251,7 +253,7 @@ async def test_a_message_without_an_integer_id_closes_with_1007(message):
 async def test_four_clients_four_chromes_the_fifth_waits_then_503():
     # The fifth waits for the first Chrome to close and a new one to start: on a
     # slow runner (macOS, Windows) that takes more than a few seconds.
-    async with serving(4, acquire_timeout=60) as mux:
+    async with serving(4, acquire_timeout=scaled(60)) as mux:
         async with contextlib.AsyncExitStack() as stack:
             clients = await asyncio.gather(
                 *(stack.enter_async_context(_client(mux)) for _ in range(4))
@@ -265,7 +267,7 @@ async def test_four_clients_four_chromes_the_fifth_waits_then_503():
             await asyncio.sleep(0.5)
             assert not fifth.done()
             await clients[0].close()
-            ws5 = await asyncio.wait_for(fifth, 30)
+            ws5 = await asyncio.wait_for(fifth, scaled(30))
             assert (await _cdp(ws5, 1, "Browser.getVersion"))["result"]
             # The fifth has a Chrome of its own, launched for it (counted: Windows
             # may give it the pid of the one that closed).
@@ -542,7 +544,7 @@ async def test_clients_that_hang_up_in_the_queue_leave_it_at_once():
             assert await _wait_until(lambda: mux.status()["queue"] == 0, 5)
             real = asyncio.ensure_future(_client(mux).__aenter__())
             assert await _wait_until(lambda: mux.status()["queue"] == 1, 5)
-        ws = await asyncio.wait_for(real, 30)
+        ws = await asyncio.wait_for(real, scaled(30))
         try:
             assert (await _cdp(ws, 1, "Browser.getVersion"))["result"]
         finally:
@@ -556,7 +558,7 @@ async def test_a_client_that_hangs_up_during_its_launch_leaves_the_chrome_to_the
     """The launch a client was waiting for is not thrown away when it hangs
     up: the next client in the queue gets that Chrome (one launch, one
     proxy), with no close and relaunch in between."""
-    async with serving(1, acquire_timeout=60) as mux:
+    async with serving(1, acquire_timeout=scaled(60)) as mux:
         port = _port(mux)
         _, ghost = await asyncio.open_connection("127.0.0.1", port)
         ghost.write(_request("/devtools/browser/x", _good(mux), upgrade=True))
@@ -564,7 +566,7 @@ async def test_a_client_that_hangs_up_during_its_launch_leaves_the_chrome_to_the
         real = asyncio.ensure_future(_client(mux).__aenter__())
         assert await _wait_until(lambda: mux.status()["queue"] == 1, 5)
         ghost.close()
-        ws = await asyncio.wait_for(real, 60)
+        ws = await asyncio.wait_for(real, scaled(60))
         try:
             assert (await _cdp(ws, 1, "Browser.getVersion"))["result"]
             status = mux.status()
@@ -587,7 +589,7 @@ async def test_a_launch_nobody_wants_any_more_is_closed():
                 mux.status()["slots"][0]["launches"] == 1
                 and mux.status()["slots"][0]["state"] == "idle"
             ),
-            60,
+            scaled(60),
         ), json.dumps(mux.status())
         assert _pids(mux) == []
 
@@ -611,7 +613,7 @@ async def test_silent_sockets_are_dropped_and_do_not_crowd_out_a_client(monkeypa
 
 
 async def test_waiting_clients_are_served_first_come_first_served():
-    async with serving(1, acquire_timeout=60) as mux:
+    async with serving(1, acquire_timeout=scaled(60)) as mux:
         order: list[int] = []
         first = await _client(mux).__aenter__()
         waiting = []
@@ -627,14 +629,14 @@ async def test_waiting_clients_are_served_first_come_first_served():
         current = first
         for n in range(3):
             await current.close()
-            current = await asyncio.wait_for(waiting[n], 30)
+            current = await asyncio.wait_for(waiting[n], scaled(30))
             assert order == list(range(n + 1))
         await current.close()
 
 
 async def test_a_warm_chrome_takes_the_client_at_once_and_is_replaced():
     async with serving(1, warm=1) as mux:
-        assert await _wait_until(lambda: mux.status()["slots"][0]["state"] == "ready", 30)
+        assert await _wait_until(lambda: mux.status()["slots"][0]["state"] == "ready", scaled(30))
         (warm_pid,) = _pids(mux)
         loop = asyncio.get_running_loop()
         start = loop.time()
@@ -642,7 +644,7 @@ async def test_a_warm_chrome_takes_the_client_at_once_and_is_replaced():
             assert loop.time() - start < 0.5
             assert _pids(mux) == [warm_pid] and mux.status()["slots"][0]["launches"] == 1
             assert (await _cdp(ws, 1, "Browser.getVersion"))["result"]
-        ready = await _wait_until(lambda: mux.status()["slots"][0]["state"] == "ready", 30)
+        ready = await _wait_until(lambda: mux.status()["slots"][0]["state"] == "ready", scaled(30))
         assert ready, json.dumps(mux.status())
         assert _pids(mux) != [warm_pid]
         await asyncio.sleep(1)  # and it stays: no launch loop
@@ -656,7 +658,7 @@ async def test_a_burst_of_events_slows_a_slow_client_down_without_closing_it(mon
 
     monkeypatch.setattr(relay_module, "HIGH_WATER", 256 * 1024)
     monkeypatch.setattr(health, "INTERVAL", 0.2)
-    monkeypatch.setattr(health, "TIMEOUT", 2.0)  # a reply may sit behind a burst
+    monkeypatch.setattr(health, "TIMEOUT", scaled(2.0))  # a reply may sit behind a burst
     total = 100_000
     async with serving() as mux, _client(mux) as ws:
         created = await _cdp(ws, 1, "Target.createTarget", {"url": "about:blank"})
@@ -685,12 +687,12 @@ async def test_a_burst_of_events_slows_a_slow_client_down_without_closing_it(mon
         start = loop.time()
         # The client stops reading until the relay holds the pipe up: how fast Chrome
         # logs (a loaded runner, Windows) must not decide whether it ever falls behind.
-        while relay.pauses == 0 and loop.time() - start < 30:
+        while relay.pauses == 0 and loop.time() - start < scaled(30):
             await asyncio.sleep(0.05)
             if relay._client is not None:
                 peak = max(peak, relay._client.queued)
         while logs < total:
-            message = json.loads(await asyncio.wait_for(ws.recv(), 30))
+            message = json.loads(await asyncio.wait_for(ws.recv(), scaled(30)))
             if message.get("method") == "Runtime.consoleAPICalled":
                 assert message["params"]["args"][0]["value"] == logs
                 logs += 1
@@ -796,6 +798,7 @@ async def test_a_client_pausing_just_short_of_the_stall_does_not_get_chrome_kill
             additional_headers={"Authorization": f"Bearer {mux.token}"},
             max_queue=1,  # not reading stops the socket at once; reading is fast
             max_size=None,
+            open_timeout=scaled(10),
         ) as ws:
             created = await _cdp(ws, 1, "Target.createTarget", {"url": "about:blank"})
             target = created["result"]["targetId"]
@@ -812,7 +815,7 @@ async def test_a_client_pausing_just_short_of_the_stall_does_not_get_chrome_kill
             async def read_for(seconds: float) -> int:
                 count, end = 0, loop.time() + seconds
                 while loop.time() < end:
-                    await asyncio.wait_for(ws.recv(), 10)
+                    await asyncio.wait_for(ws.recv(), scaled(10))
                     count += 1
                 return count
 
@@ -826,7 +829,7 @@ async def test_a_client_pausing_just_short_of_the_stall_does_not_get_chrome_kill
 
             os.kill(pid, signal.SIGSTOP)  # now a real hang
             try:
-                code, reason = await _closed(ws, 20)
+                code, reason = await _closed(ws, scaled(20))
             finally:
                 with contextlib.suppress(ProcessLookupError):
                     os.kill(pid, signal.SIGCONT)
@@ -860,7 +863,9 @@ async def test_the_relay_answers_the_proxy_and_its_session_never_reaches_the_cli
         options = {"proxies": [url], "args": ["--ignore-certificate-errors"]}
         async with serving(1, warm=1, **options) as mux:
             # A warm Chrome answers the proxy before any client takes it.
-            assert await _wait_until(lambda: mux.status()["slots"][0]["state"] == "ready", 60)
+            assert await _wait_until(
+                lambda: mux.status()["slots"][0]["state"] == "ready", scaled(60)
+            )
             (place,) = mux._pool.places
             assert place.chrome._proc.proxy_auth is not None
             (own,) = _own_sessions(mux)
@@ -882,21 +887,21 @@ async def test_the_relay_answers_the_proxy_and_its_session_never_reaches_the_cli
                     "autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True}}))  # fmt: skip
                 await ws.send(json.dumps({"id": 3, "method": "Target.createTarget",
                                           "params": {"url": "about:blank"}}))  # fmt: skip
-                target = (await asyncio.wait_for(until_reply(ws, 3, seen), 20))["result"]
+                target = (await asyncio.wait_for(until_reply(ws, 3, seen), scaled(20)))["result"]
                 await ws.send(json.dumps({"id": 9, "method": "Target.attachToTarget",
                                           "params": {**target, "flatten": True}}))  # fmt: skip
-                page = (await asyncio.wait_for(until_reply(ws, 9, seen), 20))["result"]
+                page = (await asyncio.wait_for(until_reply(ws, 9, seen), scaled(20)))["result"]
                 page = page["sessionId"]
                 for n, method in enumerate(("Page.enable", "Network.enable"), 4):
                     await ws.send(json.dumps({"id": n, "method": method, "sessionId": page}))
                     # Chrome may answer Page.enable after a navigation sent behind it
                     # has loaded: its load event would then never be reported.
-                    await asyncio.wait_for(until_reply(ws, n, seen), 20)
+                    await asyncio.wait_for(until_reply(ws, n, seen), scaled(20))
                 for n, target in enumerate(("http://site.test/", "https://secure.test/"), 6):
                     await ws.send(json.dumps({"id": n, "method": "Page.navigate",
                                               "params": {"url": target}, "sessionId": page}))  # fmt: skip
                     try:
-                        await asyncio.wait_for(until("Page.loadEventFired", page), 20)
+                        await asyncio.wait_for(until("Page.loadEventFired", page), scaled(20))
                     except TimeoutError:
                         last = [m.get("method") or m.get("id") for m in seen[-20:]]
                         raise AssertionError(
@@ -906,7 +911,7 @@ async def test_the_relay_answers_the_proxy_and_its_session_never_reaches_the_cli
                 await ws.send(json.dumps({"id": 8, "method": "Runtime.evaluate",
                                           "params": {"expression": "document.title"},
                                           "sessionId": page}))  # fmt: skip
-                title = await asyncio.wait_for(until_reply(ws, 8, seen), 20)
+                title = await asyncio.wait_for(until_reply(ws, 8, seen), scaled(20))
                 assert title["result"]["result"]["value"] == "proxied"
             assert ("GET http://site.test/ HTTP/1.1", GOOD_AUTH) in proxy.requests
             assert ("CONNECT secure.test:443 HTTP/1.1", GOOD_AUTH) in proxy.requests
@@ -915,7 +920,7 @@ async def test_the_relay_answers_the_proxy_and_its_session_never_reaches_the_cli
             assert not [m for m in seen if str(m.get("method", "")).startswith("Fetch.")]
             assert own not in json.dumps(seen)
             # The Chrome the client left is gone, with its answer to the proxy.
-            assert await _wait_until(lambda: own not in _own_sessions(mux), 30)
+            assert await _wait_until(lambda: own not in _own_sessions(mux), scaled(30))
         assert not _proxy_auth_tasks()
 
 
@@ -940,11 +945,11 @@ async def test_a_lost_chrome_takes_its_answer_to_the_proxy_with_it():
                 code, _ = await _closed(ws)
                 assert code == 1011
             # The client is told first; then the Chrome is closed, with its answer.
-            assert await _wait_until(lambda: not auth._active and not auth._tasks, 30)
+            assert await _wait_until(lambda: not auth._active and not auth._tasks, scaled(30))
             async with _client(mux) as ws:  # the new Chrome answers again
                 created = await _cdp(ws, 1, "Target.createTarget", {"url": "http://site.test/"})
                 assert created["result"]["targetId"]
-                assert await _wait_until(lambda: proxy.requests, 20)
+                assert await _wait_until(lambda: proxy.requests, scaled(20))
                 assert proxy.requests[0] == ("GET http://site.test/ HTTP/1.1", GOOD_AUTH)
         assert not _proxy_auth_tasks()
 
@@ -974,9 +979,9 @@ async def test_the_client_cannot_detach_the_own_session():
             for n, flag in enumerate((True, False), 8):
                 await _cdp(ws, n, "Target.setAutoAttach",
                            {"autoAttach": flag, "waitForDebuggerOnStart": False, "flatten": True})  # fmt: skip
-            assert await place.relay.call("Browser.getVersion", timeout=10, session_id=own)
+            assert await place.relay.call("Browser.getVersion", timeout=scaled(10), session_id=own)
             await _cdp(ws, 10, "Target.createTarget", {"url": "http://site.test/"})
-            assert await _wait_until(lambda: proxy.requests, 20)
+            assert await _wait_until(lambda: proxy.requests, scaled(20))
             assert proxy.requests[0] == ("GET http://site.test/ HTTP/1.1", GOOD_AUTH)
 
 
@@ -989,12 +994,12 @@ async def test_chrome_detaches_a_browser_session_by_its_target_id():
         relay = Relay(raw.transport)
         relay.start()
         try:
-            attached = await relay.call("Target.attachToBrowserTarget", timeout=10)
+            attached = await relay.call("Target.attachToBrowserTarget", timeout=scaled(10))
             session = attached["sessionId"]
-            info = await relay.call("Target.getTargetInfo", timeout=10, session_id=session)
+            info = await relay.call("Target.getTargetInfo", timeout=scaled(10), session_id=session)
             target = info["targetInfo"]["targetId"]
-            await relay.call("Target.detachFromTarget", {"targetId": target}, timeout=10)
+            await relay.call("Target.detachFromTarget", {"targetId": target}, timeout=scaled(10))
             with pytest.raises(CommandError, match="Session with given id not found"):
-                await relay.call("Browser.getVersion", timeout=10, session_id=session)
+                await relay.call("Browser.getVersion", timeout=scaled(10), session_id=session)
         finally:
             await relay.close()

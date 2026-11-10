@@ -137,7 +137,7 @@ async def _user_agents(stealth: bool) -> tuple[str | None, str | None]:
         try:
             tab = await browser.new_tab()
             await _load(tab, "http://site.test/robots.txt")
-            await tab.get("http://site.test/page", timeout=15)
+            await tab.get("http://site.test/page", timeout=scaled(15))
         finally:
             await browser.close()
     agent = {line.split(" ")[1]: h.get("user-agent") for line, h in proxy.seen}
@@ -167,7 +167,7 @@ async def test_robots_txt_has_the_stealth_user_agent_of_the_page(headless):
         try:
             tab = await browser.new_tab()
             assert await tab.is_allowed(site.url + "/public")
-            await tab.get(site.url + "/page", timeout=15)
+            await tab.get(site.url + "/page", timeout=scaled(15))
             main = await tab.eval("navigator.userAgent")
             brands = await tab.eval("navigator.userAgentData.brands.map(b => b.brand)")
             worker = await tab.eval(_WORKER_UA)
@@ -205,7 +205,7 @@ async def test_load_network_resource_sends_no_client_hints_even_with_an_override
                 "bitness": "64",
             }
             override = {"userAgent": "probe/1.0", "userAgentMetadata": metadata}
-            await frame.session.send("Network.setUserAgentOverride", override, timeout=5)
+            await frame.session.send("Network.setUserAgentOverride", override, timeout=scaled(5))
             await robots_module._load(frame, site.url + "/robots.txt")
         finally:
             await browser.close()
@@ -233,10 +233,10 @@ async def test_a_disallowed_path_is_not_requested(site):
     proxy, browser = site
     tab = await browser.new_tab()
     with pytest.raises(RobotsDisallowedError) as caught:
-        await tab.get("http://site.test/private/page?x=1", timeout=15)
+        await tab.get("http://site.test/private/page?x=1", timeout=scaled(15))
     assert str(caught.value) == "robots.txt of http://site.test disallows /private/page?x=1"
     assert isinstance(caught.value, NavigationError)
-    await tab.get("http://site.test/public", timeout=15)
+    await tab.get("http://site.test/public", timeout=scaled(15))
     assert await tab.eval("document.title") == "/public"
     assert proxy.hits("/private") == 0
     assert proxy.hits("/robots.txt") == 1
@@ -268,7 +268,7 @@ async def test_clicks_and_redirects_are_not_blocked(site):
     proxy, browser = site
     proxy.routes["/hop"] = (302, {"Location": "/private/landing"}, b"")
     tab = await browser.new_tab()
-    await tab.get("http://site.test/hop", timeout=15)
+    await tab.get("http://site.test/hop", timeout=scaled(15))
     assert await tab.eval("document.title") == "/private/landing"
     assert not await tab.is_allowed("http://site.test/private/landing")
 
@@ -277,7 +277,9 @@ async def test_a_hundred_concurrent_gets_download_robots_txt_once(site):
     proxy, browser = site
     proxy.delays["/robots.txt"] = 0.5
     tabs = [await browser.new_tab() for _ in range(10)]
-    gets = [tabs[i % 10].get(f"http://site.test/private/{i}", timeout=20) for i in range(100)]
+    gets = [
+        tabs[i % 10].get(f"http://site.test/private/{i}", timeout=scaled(20)) for i in range(100)
+    ]
     results = await asyncio.gather(*gets, return_exceptions=True)
     assert all(isinstance(r, RobotsDisallowedError) for r in results), results
     assert proxy.paths("/robots.txt") == ["GET http://site.test/robots.txt HTTP/1.1"]
@@ -291,10 +293,10 @@ async def test_status_of_robots_txt(site, status, allowed):
     tab = await browser.new_tab()
     assert await tab.is_allowed("http://other.test/page") is allowed
     if allowed:
-        await tab.get("http://other.test/page", timeout=15)
+        await tab.get("http://other.test/page", timeout=scaled(15))
     else:
         with pytest.raises(RobotsDisallowedError):
-            await tab.get("http://other.test/page", timeout=15)
+            await tab.get("http://other.test/page", timeout=scaled(15))
     assert proxy.hits("other.test/page") == int(allowed)
     assert proxy.hits("other.test/robots.txt") == 1
 
@@ -306,15 +308,16 @@ async def test_an_unreachable_robots_txt_disallows_everything():
         tab = await browser.new_tab()
         assert not await tab.is_allowed("http://site.test/x")
         with pytest.raises(RobotsDisallowedError):
-            await tab.get("http://site.test/x", timeout=15)
+            await tab.get("http://site.test/x", timeout=scaled(15))
     finally:
         await browser.close()
 
 
 async def _hidden_targets_after_a_while(browser) -> list[str]:
-    for _ in range(30):
+    for _ in range(int(scaled(3) / 0.1)):
         await asyncio.sleep(0.1)
-        infos = (await browser._router.root.send("Target.getTargets", {}, timeout=5))["targetInfos"]
+        infos = await browser._router.root.send("Target.getTargets", {}, timeout=scaled(5))
+        infos = infos["targetInfos"]
         if not (hidden := [i["targetId"] for i in infos if i["type"] == "other"]):
             break
     return hidden
@@ -329,13 +332,13 @@ async def test_a_hidden_target_that_cannot_open_fails_the_get(site, monkeypatch)
     tab = await browser.new_tab()
     monkeypatch.setattr(robots, "_OPEN_TIMEOUT", 1e-6)
     with pytest.raises(NavigationError, match="robots.txt for http://site.test/page") as caught:
-        await tab.get("http://site.test/page", timeout=15)
+        await tab.get("http://site.test/page", timeout=scaled(15))
     assert isinstance(caught.value.__cause__, TimeoutError)
     assert not isinstance(caught.value, RobotsDisallowedError)
     assert proxy.hits("/page") == 0
     assert await _hidden_targets_after_a_while(browser) == []  # created late: closed
     monkeypatch.undo()
-    await tab.get("http://site.test/page", timeout=15)  # not cached: opened again
+    await tab.get("http://site.test/page", timeout=scaled(15))  # not cached: opened again
     assert proxy.hits("/page") == 1
 
 
@@ -378,7 +381,7 @@ async def test_is_allowed_takes_a_timeout(site):
         await tab.is_allowed("http://wait.test/yes", timeout=0.3)
     assert loop.time() - start < 1
     assert caught.value.phase == "robots.txt"
-    assert not await tab.is_allowed("http://wait.test/no", timeout=10)
+    assert not await tab.is_allowed("http://wait.test/no", timeout=scaled(10))
     assert proxy.hits("wait.test/robots.txt") == 1
 
 
@@ -399,10 +402,10 @@ async def test_robots_agent_picks_its_group():
             headless=True, proxy=proxy.url, respect_robots=True, robots_agent="mybot"
         )
         try:
-            tab = await browser.get("http://site.test/page", timeout=15)
+            tab = await browser.get("http://site.test/page", timeout=scaled(15))
             assert await tab.eval("document.title") == "/page"
             with pytest.raises(RobotsDisallowedError):
-                await tab.get("http://site.test/secret", timeout=15)
+                await tab.get("http://site.test/secret", timeout=scaled(15))
         finally:
             await browser.close()
 
@@ -411,9 +414,9 @@ async def test_without_the_flag_no_robots_txt_is_requested():
     async with SiteProxy({"/robots.txt": (200, TEXT, ROBOTS)}) as proxy:
         browser = await Browser.launch(headless=True, proxy=proxy.url)
         try:
-            tab = await browser.get("http://site.test/private", timeout=15)
+            tab = await browser.get("http://site.test/private", timeout=scaled(15))
             await browser.new_tab("http://site.test/private/2")
-            await tab.get("http://site.test/x", timeout=15)
+            await tab.get("http://site.test/x", timeout=scaled(15))
             assert proxy.hits("/robots.txt") == 0
             # is_allowed answers without the flag: it downloads the file, once
             assert not await tab.is_allowed("http://site.test/private")
@@ -427,7 +430,7 @@ async def test_view_source_is_checked_as_the_page_it_shows(site):
     proxy, browser = site
     tab = await browser.new_tab()
     with pytest.raises(RobotsDisallowedError):
-        await tab.get("VIEW-SOURCE:http://site.test/private", timeout=15)
+        await tab.get("VIEW-SOURCE:http://site.test/private", timeout=scaled(15))
     assert proxy.hits("/private") == 0
     assert await tab.is_allowed("view-source:http://site.test/public")
 
@@ -435,8 +438,8 @@ async def test_view_source_is_checked_as_the_page_it_shows(site):
 async def test_non_web_urls_are_never_checked(site):
     proxy, browser = site
     tab = await browser.new_tab()
-    await tab.get("about:blank", timeout=15)
-    await tab.get("data:text/html,<title>d</title>", timeout=15)
+    await tab.get("about:blank", timeout=scaled(15))
+    await tab.get("data:text/html,<title>d</title>", timeout=scaled(15))
     assert await tab.is_allowed("about:blank")
     assert proxy.hits("robots.txt") == 0
 
@@ -447,7 +450,7 @@ async def test_closing_the_browser_mid_download(site):
     tab = await browser.new_tab()
     waiting = asyncio.ensure_future(tab.get("http://site.test/private", timeout=30))
     await asyncio.sleep(0.5)
-    await asyncio.wait_for(browser.close(), 10)
+    await asyncio.wait_for(browser.close(), scaled(10))
     with pytest.raises(ConnectionError):
         await waiting
     package = str(Path(tellurium.__file__).parent)
@@ -458,7 +461,7 @@ async def test_closing_the_browser_mid_download(site):
             t for t, c in coros if getattr(c, "cr_code", None) and package in c.cr_code.co_filename
         ]
 
-    for _ in range(200):  # nothing of the browser left running
+    for _ in range(int(scaled(2) / 0.01)):  # nothing of the browser left running
         if not of_tellurium():
             break
         await asyncio.sleep(0.01)
@@ -472,9 +475,9 @@ async def test_a_page_with_a_strict_csp_does_not_block_the_download(site):
     proxy.routes["csp.test/page"] = (200, strict, b"<title>csp</title>")
     proxy.routes["csp.test/robots.txt"] = (200, TEXT, b"")
     tab = await browser.new_tab("http://csp.test/page")
-    await tab.get("http://site.test/public", timeout=15)
+    await tab.get("http://site.test/public", timeout=scaled(15))
     with pytest.raises(RobotsDisallowedError):
-        await tab.get("http://site.test/private", timeout=15)
+        await tab.get("http://site.test/private", timeout=scaled(15))
 
 
 async def test_the_first_tab_on_the_new_tab_page_is_checked():
@@ -485,10 +488,10 @@ async def test_the_first_tab_on_the_new_tab_page_is_checked():
             headless=True, proxy=proxy.url, respect_robots=True, args=["chrome://newtab"]
         )
         try:
-            tab = await browser.get("http://site.test/public", timeout=15)
+            tab = await browser.get("http://site.test/public", timeout=scaled(15))
             assert await tab.eval("document.title") == "/public"
             with pytest.raises(RobotsDisallowedError):
-                await browser.get("http://site.test/private", timeout=15)
+                await browser.get("http://site.test/private", timeout=scaled(15))
         finally:
             await browser.close()
 
@@ -533,7 +536,7 @@ async def test_the_hidden_target_stays_out_of_the_window_when_headed():
     async with SiteProxy({"/robots.txt": (200, TEXT, ROBOTS)}) as proxy:
         browser = await Browser.launch(headless=False, proxy=proxy.url, respect_robots=True)
         try:
-            tab = await browser.get("http://site.test/public", timeout=15)
+            tab = await browser.get("http://site.test/public", timeout=scaled(15))
             assert not await tab.is_allowed("http://site.test/private")
             infos = (await browser._router.root.send("Target.getTargets", {}))["targetInfos"]
             pages = [i["targetId"] for i in infos if i["type"] == "page"]

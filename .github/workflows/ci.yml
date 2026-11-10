@@ -178,10 +178,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     env:
-      # Chrome's answer deadlines x3 in the tests (tests/timeout_scale.py): these
-      # runners stall up to 27 s (Windows, once even Get-Process) with nothing
-      # wrong in tellurium, against waits of 10 s. The longest, the session
-      # default (30 s -> 90 s), stays under --timeout=120.
+      # Chrome's answer deadlines x3 in the tests (tests/timeout_scale.py), and
+      # at least 30 s: these runners stall up to 27 s (Windows, once even
+      # Get-Process) with nothing wrong in tellurium, against waits of 5-10 s.
+      # A test that fails after such waits adds them up (the manual sign-in:
+      # 60 s, then a cookie read and the close grace at 30 s each), past the
+      # 120 s of pytest-timeout, which kills the shard without the test's
+      # error: --timeout=300 here, one such test still fits the 35 min.
       TELLURIUM_TEST_TIMEOUT_SCALE: "3"
     strategy:
       fail-fast: false
@@ -264,7 +267,7 @@ jobs:
           TESTS: ${{ inputs.tests }}
         run: |
           files=${TESTS:-$(python -m tests.shard ${{ matrix.shard }} 4 tests/integration)}
-          pytest $files -v -rfEs --timeout=120 --junitxml=junit-integration.xml
+          pytest $files -v -rfEs --timeout=300 --junitxml=junit-integration.xml
       - name: Upload JUnit report
         if: always()
         uses: actions/upload-artifact@v4
@@ -283,6 +286,10 @@ jobs:
       always() &&
       (github.event_name != 'workflow_dispatch' || inputs.os != 'ubuntu-latest')
     runs-on: ubuntu-latest
+    env:
+      CI_OSES: ${{ (inputs.os == 'windows-2025' || inputs.os == 'macos-15') && inputs.os || 'windows-2025 macos-15' }}
+      CI_SHARDS: ${{ inputs.tests && 1 || 4 }}
+      CI_UNIT: ${{ !inputs.tests && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -290,10 +297,22 @@ jobs:
           pattern: junit-*
           path: reports
       - name: Every job reported
-        env:
-          CI_OSES: ${{ (inputs.os == 'windows-2025' || inputs.os == 'macos-15') && inputs.os || 'windows-2025 macos-15' }}
-          CI_SHARDS: ${{ inputs.tests && 1 || 4 }}
-          CI_UNIT: ${{ !inputs.tests && '1' || '0' }}
+        id: reported
+        continue-on-error: true
+        run: python -m tests.ci_results reports
+      # The artifact list can lag behind an upload by seconds (run 42825277814
+      # listed 10 of 11 reports 12 s after the last one was finalized): a report
+      # still missing is looked for once more before the run goes red.
+      - name: Wait for a late report
+        if: steps.reported.outcome == 'failure'
+        run: sleep 30
+      - uses: actions/download-artifact@v4
+        if: steps.reported.outcome == 'failure'
+        with:
+          pattern: junit-*
+          path: reports
+      - name: Every job reported (second look)
+        if: steps.reported.outcome == 'failure'
         run: python -m tests.ci_results reports
 
   build:

@@ -31,6 +31,7 @@ from mcp import Client, StdioServerParameters  # noqa: E402
 from tests.integration.conftest import DOWNLOAD_BODY  # noqa: E402
 from tests.private_temp import child_temp_env, short_mkdtemp  # noqa: E402
 from tests.tellurium_cli import TELLURIUM_CLI  # noqa: E402
+from tests.timeout_scale import scaled  # noqa: E402
 
 _TELLURIUM = TELLURIUM_CLI
 
@@ -378,7 +379,7 @@ def test_sigterm_closes_and_saves_every_session(tmp_path, short_tmp):
         assert _chrome_using(profile) > 0
 
         proc.send_signal(signal.SIGTERM)
-        assert proc.wait(timeout=30) == 0, proc.stderr.read()
+        assert proc.wait(timeout=scaled(30)) == 0, proc.stderr.read()
         assert _chrome_using(profile) == 0
         assert (profile / "session.json").is_file()
         assert list(short_tmp.iterdir()) == []
@@ -399,7 +400,7 @@ def test_sigterm_during_session_open_leaves_nothing_behind(tmp_path, short_tmp, 
         proc.stdin.flush()
         time.sleep(delay)  # Chrome is starting
         proc.send_signal(signal.SIGTERM)
-        assert proc.wait(timeout=60) == 0, proc.stderr.read()
+        assert proc.wait(timeout=scaled(60)) == 0, proc.stderr.read()
         assert _chrome_using(tmp_path / "sessions" / "work") == 0
         assert list(tmp.iterdir()) == []
     finally:
@@ -414,7 +415,7 @@ def test_client_closing_only_its_reading_end_stops_the_server(tmp_path, short_tm
         opened = _rpc(proc, {"id": 2, "method": "tools/call", "params": call})
         assert opened["result"]["isError"] is False
         proc.stdout.close()  # stdin stays open: only the replies have nowhere to go
-        assert proc.wait(timeout=20) == 0, proc.stderr.read()
+        assert proc.wait(timeout=scaled(20)) == 0, proc.stderr.read()
         assert _chrome_using(tmp_path / "sessions" / "work") == 0
         assert (tmp_path / "sessions" / "work" / "session.json").is_file()
         assert list(short_tmp.iterdir()) == []

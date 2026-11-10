@@ -219,7 +219,10 @@ class _Counting(_FixtureHandler):
     seen: list[str] = []
 
     def do_GET(self):
-        type(self).seen.append(self.path)
+        # Chrome asks for the favicon on its own once the page has loaded, late on
+        # a slow runner (run 42828802478): the page never asks for it.
+        if self.path != "/favicon.ico":
+            type(self).seen.append(self.path)
         super().do_GET()
 
 

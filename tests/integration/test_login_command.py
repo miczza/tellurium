@@ -17,6 +17,7 @@ from tests.integration import banner_probe
 from tests.integration.login_timeline import LoginTimeline
 from tests.integration.test_wait_for_human import _click_node, _done_button
 from tests.platform_marks import needs_display
+from tests.timeout_scale import scaled
 
 pytestmark = needs_display
 
@@ -37,6 +38,7 @@ def launched(monkeypatch):
 
 
 async def _first(launched, timeout=30.0):
+    timeout = scaled(timeout)
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while not launched:
@@ -46,6 +48,7 @@ async def _first(launched, timeout=30.0):
 
 
 async def _cookie(browser, name, timeout=15.0):
+    timeout = scaled(timeout)
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while True:
@@ -56,6 +59,7 @@ async def _cookie(browser, name, timeout=15.0):
 
 
 async def _loaded(tab, page, timeout=15.0):
+    timeout = scaled(timeout)
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while True:
@@ -72,12 +76,12 @@ async def _loaded(tab, page, timeout=15.0):
 async def _close_windows(browser, timeline=None) -> None:
     """What the person does: close every window (Chrome stays up for the save)."""
     root = browser._router.root
-    targets = (await root.send("Target.getTargets", {}, timeout=5))["targetInfos"]
+    targets = (await root.send("Target.getTargets", {}, timeout=scaled(5)))["targetInfos"]
     for t in targets:
         if t["type"] == "page":
             if timeline is not None:
                 timeline.note(f"test closes {timeline._name(t['targetId'])}")
-            await root.send("Target.closeTarget", {"targetId": t["targetId"]}, timeout=5)
+            await root.send("Target.closeTarget", {"targetId": t["targetId"]}, timeout=scaled(5))
 
 
 async def test_closing_the_window_saves_a_session_mcp_reopens_signed_in(
@@ -99,7 +103,7 @@ async def test_closing_the_window_saves_a_session_mcp_reopens_signed_in(
         await _cookie(browser, "http_sso")
         await asyncio.sleep(4 * login_command.POLL)  # a cookie that old is never missed
         await _close_windows(browser, timeline)
-        path = await asyncio.wait_for(task, 30)
+        path = await asyncio.wait_for(task, scaled(30))
     finally:
         task.cancel()
     folder = config.sessions_dir / "acct"
@@ -124,7 +128,7 @@ async def test_done_on_the_banner_ends_the_login_too(tmp_path, local_server, lau
         browser = await _first(launched)
         tab = browser.main_tab
         await _click_node(tab, await _done_button(tab))
-        done, _ = await asyncio.wait({task}, timeout=30)
+        done, _ = await asyncio.wait({task}, timeout=scaled(30))
         assert done, await banner_probe.report(tab)
         await task
     finally:
@@ -149,8 +153,8 @@ async def test_a_cookie_set_just_before_the_window_closes_is_saved(
         await tab.eval("document.cookie = 'late=1; path=/'")
         await asyncio.sleep(0.05)
         root = browser._router.root
-        await root.send("Target.closeTarget", {"targetId": tab._target_id}, timeout=5)
-        await asyncio.wait_for(task, 30)
+        await root.send("Target.closeTarget", {"targetId": tab._target_id}, timeout=scaled(5))
+        await asyncio.wait_for(task, scaled(30))
     finally:
         task.cancel()
     saved = json.loads((tmp_path / "acct" / "cookies.json").read_text())["cookies"]
@@ -180,7 +184,7 @@ async def test_session_cookies_chrome_drops_after_the_windows_went_are_saved(
         await _cookie(browser, "http_sso")
         await asyncio.sleep(4 * login_command.POLL)  # a cookie that old is never missed
         await _close_windows(browser)
-        await asyncio.wait_for(task, 30)
+        await asyncio.wait_for(task, scaled(30))
     finally:
         task.cancel()
     saved = json.loads((tmp_path / "acct" / "cookies.json").read_text())["cookies"]
@@ -222,7 +226,7 @@ async def test_the_login_cookies_are_written_under_the_session_lock(
         await _cookie(browser, "http_sso")
         await asyncio.sleep(4 * login_command.POLL)  # a cookie that old is never missed
         await _close_windows(browser)
-        await asyncio.wait_for(task, 30)
+        await asyncio.wait_for(task, scaled(30))
     finally:
         task.cancel()
     assert writes and writes[-1][0]  # the last write has the login's cookie
@@ -244,7 +248,7 @@ async def test_the_keeper_closing_just_after_the_sign_in_window_keeps_the_cookie
     async def keeper_closed_then_dropped(browser, keeper):
         kept = await watch(browser, keeper)
         root = browser._router.root
-        await root.send("Target.closeTarget", {"targetId": keeper}, timeout=5)
+        await root.send("Target.closeTarget", {"targetId": keeper}, timeout=scaled(5))
         await browser.clear_cookies()  # Chrome ends its browsing session
         timeline.note("keeper closed, jar dropped")
         return kept
@@ -258,7 +262,7 @@ async def test_the_keeper_closing_just_after_the_sign_in_window_keeps_the_cookie
         await _cookie(browser, "http_sso")
         await asyncio.sleep(4 * login_command.POLL)  # a cookie that old is never missed
         await browser.main_tab.close()  # the sign-in window; the keeper stays listed
-        await asyncio.wait_for(task, 30)
+        await asyncio.wait_for(task, scaled(30))
     finally:
         task.cancel()
     saved = json.loads((tmp_path / "acct" / "cookies.json").read_text())["cookies"]

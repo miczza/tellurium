@@ -17,6 +17,7 @@ from urllib.parse import quote
 import pytest
 
 from tellurium.browser.navigation import NavigationError, NavigationTimeoutError
+from tests.timeout_scale import scaled
 
 GUARD = 20
 FIXTURES = str(Path(__file__).parent / "fixtures")
@@ -33,6 +34,14 @@ def server():
         def do_GET(self):
             if self.path == "/hang":
                 release.wait(60)
+                return
+            if self.path == "/held_image.html":
+                body = b"<p>x</p><img src='/hang'>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
                 return
             if self.path == "/204":
                 self.send_response(204)
@@ -59,7 +68,7 @@ def server():
 
 
 async def _guard(coro):
-    return await asyncio.wait_for(coro, timeout=GUARD)
+    return await asyncio.wait_for(coro, timeout=scaled(GUARD))
 
 
 # ---------------------------------------------------------------------------
@@ -84,15 +93,27 @@ async def test_tab_is_usable_after_a_navigation_timeout(browser, server):
     tab = browser.main_tab
     with pytest.raises(TimeoutError):
         await _guard(tab.get(f"{server}/hang", timeout=1))
-    await _guard(tab.get(f"{server}/basic.html", timeout=10))
+    await _guard(tab.get(f"{server}/basic.html", timeout=scaled(10)))
     assert tab.title == "Basic Test Page"
 
 
-async def test_timeout_while_waiting_for_load_names_the_phase(browser, local_server):
+async def test_timeout_while_waiting_for_load_names_the_phase(browser, server):
+    """The document commits, its image never comes: the deadline runs out in
+    the load phase, whatever it is.
+
+    The commit must fit in the deadline: on the Windows runner the first
+    request of a fresh Chrome reaches the server ~1 s after Page.navigate, and
+    the runner stalls for seconds on top of that (a commit past 4.5 s gave
+    phase "commit", docs/gotchas.md R3-C). Hence a deadline scaled like the
+    other waits for Chrome, and an image held until the module ends.
+    """
     tab = browser.main_tab
+    deadline = scaled(5)
     with pytest.raises(NavigationTimeoutError) as info:
-        # 5 s: the commit fits even on a slow runner, the 12 s image does not
-        await _guard(tab.get(f"{local_server}/slower_load.html", wait_until="load", timeout=5))
+        await asyncio.wait_for(
+            tab.get(f"{server}/held_image.html", wait_until="load", timeout=deadline),
+            deadline + GUARD,
+        )
     assert info.value.phase == "load"
     assert "load" in str(info.value)
 
@@ -105,7 +126,7 @@ async def test_timeout_while_waiting_for_load_names_the_phase(browser, local_ser
 async def test_no_content_response_raises_navigation_error_with_url(browser, server):
     tab = browser.main_tab
     with pytest.raises(NavigationError) as info:
-        await _guard(tab.get(f"{server}/204", timeout=10))
+        await _guard(tab.get(f"{server}/204", timeout=scaled(10)))
     err = info.value
     assert isinstance(err, RuntimeError)
     assert err.url == f"{server}/204"
@@ -115,7 +136,7 @@ async def test_no_content_response_raises_navigation_error_with_url(browser, ser
 
 async def test_download_raises_navigation_error(browser, server):
     with pytest.raises(NavigationError, match="ERR_ABORTED"):
-        await _guard(browser.main_tab.get(f"{server}/download", timeout=10))
+        await _guard(browser.main_tab.get(f"{server}/download", timeout=scaled(10)))
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +147,7 @@ async def test_download_raises_navigation_error(browser, server):
 async def test_wait_for_navigation_ignores_iframe_navigations(browser, server):
     tab = browser.main_tab
     await _guard(tab.get(f"{server}/basic.html"))
-    waiter = asyncio.ensure_future(tab.wait_for_navigation(timeout=10))
+    waiter = asyncio.ensure_future(tab.wait_for_navigation(timeout=scaled(10)))
     await tab.eval(
         "var f = document.createElement('iframe');"
         f"f.src = '{server}/form.html'; document.body.appendChild(f); 1"
@@ -142,7 +163,7 @@ async def test_wait_for_navigation_ignores_iframe_navigations(browser, server):
 async def test_wait_for_navigation_matches_the_url_pattern(browser, server):
     tab = browser.main_tab
     await _guard(tab.get(f"{server}/basic.html"))
-    waiter = asyncio.ensure_future(tab.wait_for_navigation("*/tree.html", timeout=10))
+    waiter = asyncio.ensure_future(tab.wait_for_navigation("*/tree.html", timeout=scaled(10)))
     await tab.eval(f"location.href = '{server}/form.html'; 1")
     await asyncio.sleep(1)
     assert not waiter.done()
@@ -163,7 +184,7 @@ async def test_wait_for_navigation_timeout_is_a_builtin_timeout_error(browser, s
 async def test_wait_for_navigation_returns_on_a_back_forward_cache_restore(browser, server):
     tab = await _guard(browser.new_tab(f"{server}/basic.html"))
     await _guard(tab.get(f"{server}/tree.html"))
-    waiter = asyncio.ensure_future(tab.wait_for_navigation(timeout=8))
+    waiter = asyncio.ensure_future(tab.wait_for_navigation(timeout=scaled(8)))
     await asyncio.sleep(0.1)
     await tab.back()
     await _guard(waiter)
@@ -175,7 +196,7 @@ async def test_wait_for_navigation_waits_for_the_load_of_the_matching_document(
 ):
     tab = browser.main_tab
     await _guard(tab.get(f"{local_server}/basic.html"))
-    waiter = asyncio.ensure_future(tab.wait_for_navigation("*redirect_final*", timeout=10))
+    waiter = asyncio.ensure_future(tab.wait_for_navigation("*redirect_final*", timeout=scaled(10)))
     await tab.eval("location.href = '/redirect_step.html'; 1")
     await _guard(waiter)
     assert tab.url.endswith("/redirect_final.html")
@@ -199,9 +220,10 @@ _LOAD_ALERT = "data:text/html," + quote(
 async def test_get_returns_within_timeout_when_the_page_freezes_after_commit(browser):
     tab = browser.main_tab
     tab._dialogs.policy = "manual"  # the alert stays open and freezes the page
+    deadline = scaled(3)  # a wait for Chrome: the alert opens only after the event
     start = time.monotonic()
-    await _guard(tab.get(_DCL_ALERT, wait_until="domcontentloaded", timeout=3))
-    assert time.monotonic() - start < 3.5
+    await _guard(tab.get(_DCL_ALERT, wait_until="domcontentloaded", timeout=deadline))
+    assert time.monotonic() - start < deadline + 0.5
     await tab._dialogs.last.dismiss()
 
 

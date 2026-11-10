@@ -35,6 +35,7 @@ from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS  # noqa: E402
 
 from tests.console_signals import NEW_GROUP, terminate  # noqa: E402
 from tests.tellurium_cli import TELLURIUM_CLI  # noqa: E402
+from tests.timeout_scale import scaled  # noqa: E402
 
 _TELLURIUM = TELLURIUM_CLI
 _LISTENING = re.compile(r"listening on (http://\S+/mcp)")
@@ -60,11 +61,14 @@ class _Server:
     def token(self) -> str:
         return (self.home / "mcp-token").read_text().strip()
 
-    async def stop(self, timeout: float = 30) -> int:
+    async def stop(self, timeout: float | None = None) -> int:
+        """Stop the server, which closes its Chromes first (30 s, scaled, by default)."""
         if self.proc.returncode is None:
             terminate(self.proc)  # Ctrl-Break on Windows
         try:
-            return await asyncio.wait_for(self.proc.wait(), timeout)
+            return await asyncio.wait_for(
+                self.proc.wait(), scaled(30) if timeout is None else timeout
+            )
         except TimeoutError:
             self.proc.kill()
             await self.proc.wait()
@@ -251,7 +255,7 @@ async def test_screenshot_over_the_cap_through_the_client(local_server, tmp_path
     async with _server(tmp_path / "home") as server, _client(server) as client:
         tid = (await _call(client, "session-open"))["targetId"]
         await _call(client, "navigate", targetId=tid, url=f"{local_server}/noise.html")
-        for _ in range(50):
+        for _ in range(int(scaled(5) / 0.1)):
             tabs = (await _call(client, "tab-list"))["tabs"]
             if tabs[0]["title"] == "Noise ready":
                 break
@@ -505,7 +509,7 @@ class _Raw:
 
 
 async def test_a_delete_naming_two_sessions_is_refused_and_touches_neither(local_server, tmp_path):
-    async with _server(tmp_path / "home") as server, httpx2.AsyncClient(timeout=60) as http:
+    async with _server(tmp_path / "home") as server, httpx2.AsyncClient(timeout=scaled(60)) as http:
         a, b = await _Raw(server, http).start(), await _Raw(server, http).start()
         await a.call("session-open")
         headers = [
@@ -532,9 +536,10 @@ async def test_browsers_are_capped_per_client_and_per_server(tmp_path):
             await _call(c, "session-open")  # a's place is free again
 
 
-async def _open_when_free(client: Client, name: str, within: float = 20):
-    """session-open *name* as soon as the client holding it has let it go."""
-    deadline = time.monotonic() + within
+async def _open_when_free(client: Client, name: str, within: float | None = None):
+    """session-open *name* as soon as the client holding it has let it go
+    (within 20 s, scaled, by default)."""
+    deadline = time.monotonic() + (scaled(20) if within is None else within)
     while True:
         result = await client.call_tool("session-open", {"name": name})
         if not result.is_error:
@@ -611,6 +616,6 @@ async def test_readme_python_client_example_runs(local_server, tmp_path):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        out, err = await asyncio.wait_for(proc.communicate(), 60)
+        out, err = await asyncio.wait_for(proc.communicate(), scaled(60))
         assert proc.returncode == 0, err.decode()
         assert "[ref=" in out.decode() or "heading" in out.decode(), out.decode()

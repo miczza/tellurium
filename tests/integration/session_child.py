@@ -52,6 +52,8 @@ _SELF = os.path.abspath(__file__)
 
 async def start_holder(path: str) -> asyncio.subprocess.Process:
     """A ``hold`` child of the session at *path*, once it has printed ``ready``."""
+    from tests.timeout_scale import scaled  # the parent's only: the child cannot import tests
+
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
         _SELF,
@@ -65,7 +67,7 @@ async def start_holder(path: str) -> asyncio.subprocess.Process:
         start_new_session=sys.platform != "win32",
     )
     try:
-        line = await asyncio.wait_for(proc.stdout.readline(), 60)
+        line = await asyncio.wait_for(proc.stdout.readline(), scaled(60))
     except BaseException:
         kill_holder(proc)
         await proc.wait()

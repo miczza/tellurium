@@ -17,6 +17,7 @@ from tellurium import Browser
 from tellurium.browser.navigation import NavigationError
 from tellurium.browser.proxy_auth import ProxyAuth
 from tests.private_temp import point_temp_at, short_mkdtemp
+from tests.timeout_scale import scaled
 
 pytestmark = pytest.mark.asyncio
 
@@ -166,12 +167,12 @@ async def test_post_and_keep_alive_through_authenticated_proxy():
     async with FakeProxy() as proxy:
         browser = await Browser.launch(headless=True, proxy=_url(proxy))
         try:
-            tab = await browser.get("http://site.test/", timeout=15)
+            tab = await browser.get("http://site.test/", timeout=scaled(15))
             assert await tab.eval("document.title") == "proxied"
             for i in range(5):
                 text = await tab.eval(
                     f"fetch('/echo', {{method: 'POST', body: 'hello-{i}'}}).then(r => r.text())",
-                    timeout=10,
+                    timeout=scaled(10),
                 )
                 assert text == f"POST|hello-{i}"
         finally:
@@ -191,7 +192,7 @@ async def test_upstream_407_reaches_chrome_as_an_auth_error():
         browser = await Browser.launch(headless=True, proxy=_url(proxy, "wrong"))
         try:
             with pytest.raises(NavigationError) as err:
-                await browser.get("https://site.test/", timeout=15)
+                await browser.get("https://site.test/", timeout=scaled(15))
         finally:
             await browser.close()
     assert "SSL" not in str(err.value)
@@ -224,7 +225,7 @@ async def test_a_local_process_without_the_secret_gets_407(head):
             assert status.startswith(b"HTTP/1.1 407"), status
             assert b'Proxy-Authenticate: Basic realm="tellurium"' in rest
             # Chrome itself still gets through.
-            tab = await browser.get("http://site.test/", timeout=15)
+            tab = await browser.get("http://site.test/", timeout=scaled(15))
             assert await tab.eval("document.title") == "proxied"
         finally:
             await browser.close()
@@ -260,7 +261,7 @@ async def test_https_through_the_connect_tunnel(tls_context):
             args=["--ignore-certificate-errors"],  # the test site's own certificate
         )
         try:
-            tab = await browser.get("https://secure.test/", timeout=15)
+            tab = await browser.get("https://secure.test/", timeout=scaled(15))
             assert await tab.eval("document.title") == "proxied"
         finally:
             await browser.close()
@@ -276,11 +277,11 @@ async def test_new_context_and_popup_go_through_the_proxy():
             tab = await context.new_tab("http://site.test/")
             assert await tab.eval("document.title") == "proxied"
 
-            await tab.get("http://site.test/opener.html", timeout=15)
+            await tab.get("http://site.test/opener.html", timeout=scaled(15))
             box = await (await tab.select("#pop")).bounding_box()
             await tab.mouse_click(box["x"] + 10, box["y"] + 10)
-            popup = await browser.wait_for_tab("http://site.test/popup.html", timeout=15)
-            for _ in range(100):
+            popup = await browser.wait_for_tab("http://site.test/popup.html", timeout=scaled(15))
+            for _ in range(int(scaled(5) / 0.05)):
                 if await popup.eval("document.readyState") == "complete":
                     break
                 await asyncio.sleep(0.05)
@@ -300,10 +301,10 @@ async def test_a_worker_and_a_service_worker_go_through_the_proxy():
             args=["--unsafely-treat-insecure-origin-as-secure=http://site.test"],
         )
         try:
-            tab = await browser.get("http://site.test/", timeout=15)
+            tab = await browser.get("http://site.test/", timeout=scaled(15))
             from_worker = await tab.eval(
                 "new Promise(r => { new Worker('/worker.js').onmessage = e => r(e.data); })",
-                timeout=15,
+                timeout=scaled(15),
             )
             assert from_worker == "/from-worker"
             from_sw = await tab.eval(
@@ -315,7 +316,7 @@ async def test_a_worker_and_a_service_worker_go_through_the_proxy():
                         reg.active.postMessage('go');
                     });
                 })()""",
-                timeout=15,
+                timeout=scaled(15),
             )
             assert from_sw == "/from-sw"
         finally:
@@ -329,12 +330,12 @@ async def test_tab_intercept_still_sees_its_requests():
     async with FakeProxy() as proxy:
         browser = await Browser.launch(headless=True, proxy=_url(proxy))
         try:
-            tab = await browser.get("http://site.test/", timeout=15)
+            tab = await browser.get("http://site.test/", timeout=scaled(15))
             async with tab.intercept("*/api/*") as stream:
                 pending = asyncio.ensure_future(
-                    tab.eval("fetch('/api/x').then(r => r.text())", timeout=15)
+                    tab.eval("fetch('/api/x').then(r => r.text())", timeout=scaled(15))
                 )
-                request = await asyncio.wait_for(stream.__anext__(), 10)
+                request = await asyncio.wait_for(stream.__anext__(), scaled(10))
                 assert request.url == "http://site.test/api/x"
                 await request.continue_()
                 assert await pending == "/api/x"
@@ -351,7 +352,7 @@ async def test_a_site_401_fails_as_it_does_without_fetch(credentials):
         browser = await Browser.launch(headless=True, proxy=url)
         try:
             with pytest.raises(NavigationError, match="ERR_INVALID_AUTH_CREDENTIALS"):
-                await browser.get("http://site.test/401", timeout=15)
+                await browser.get("http://site.test/401", timeout=scaled(15))
         finally:
             await browser.close()
     # No credentials were invented for the site: one request, no retry.
@@ -390,7 +391,7 @@ async def test_without_credentials_no_forwarder_and_no_fetch():
         try:
             assert browser._proc.forwarder is None and browser._proc.proxy_auth is None
             assert not browser._router.root._event_handlers.get("Fetch.requestPaused")
-            tab = await browser.get("http://site.test/", timeout=15)
+            tab = await browser.get("http://site.test/", timeout=scaled(15))
             assert await tab.eval("document.title") == "proxied"
         finally:
             await browser.close()

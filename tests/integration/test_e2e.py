@@ -1,6 +1,7 @@
 """End-to-end tests exercising the full Tellurium stack."""
 
 from tellurium import Browser, Cookie
+from tests.timeout_scale import scaled
 
 
 async def test_full_scraping_workflow(local_server):
@@ -62,7 +63,7 @@ async def test_dynamic_content(local_server):
     browser = await Browser.launch(headless=True)
     async with browser:
         tab = await browser.new_tab(f"{local_server}/dynamic.html")
-        el = await tab.wait_for("#lazy-content", timeout=5)
+        el = await tab.wait_for("#lazy-content", timeout=scaled(5))
         text = await el.text()
         assert text == "Loaded!"
 

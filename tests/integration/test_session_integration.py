@@ -1,6 +1,7 @@
 import pytest
 
 from tellurium.session import Session, SessionInvalidError, SessionLoginFailedError
+from tests.timeout_scale import scaled
 
 
 async def test_start_launches_and_closes(tmp_path):
@@ -77,7 +78,7 @@ async def test_first_run_triggers_login_then_persists(tmp_path, local_server):
         # After login, navigate to dashboard and check visible
         tab = browser.main_tab
         await tab.get(f"{local_server}/dashboard.html")
-        el = await tab.select(".welcome", timeout=3)
+        el = await tab.select(".welcome", timeout=scaled(3))
         assert el is not None
         await s.save_now()
 
@@ -126,7 +127,7 @@ async def test_second_run_skips_login(tmp_path, local_server):
     async def signed_in2(tab):
         validator_calls["n"] += 1
         await tab.get(f"{local_server}/dashboard.html")
-        el = await tab.select(".welcome", timeout=2)
+        el = await tab.select(".welcome", timeout=scaled(2))
         return el is not None
 
     @s2.login
@@ -210,7 +211,7 @@ async def test_portability_new_session_loads_metadata(tmp_path, local_server):
     async with s_b.start(headless=True) as browser:
         tab = browser.main_tab
         await tab.get(f"{local_server}/dashboard.html")
-        assert (await tab.select(".welcome", timeout=3)) is not None
+        assert (await tab.select(".welcome", timeout=scaled(3))) is not None
 
     assert login_called["n"] == 1
 
