@@ -286,6 +286,10 @@ jobs:
       always() &&
       (github.event_name != 'workflow_dispatch' || inputs.os != 'ubuntu-latest')
     runs-on: ubuntu-latest
+    env:
+      CI_OSES: ${{ (inputs.os == 'windows-2025' || inputs.os == 'macos-15') && inputs.os || 'windows-2025 macos-15' }}
+      CI_SHARDS: ${{ inputs.tests && 1 || 4 }}
+      CI_UNIT: ${{ !inputs.tests && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -293,10 +297,22 @@ jobs:
           pattern: junit-*
           path: reports
       - name: Every job reported
-        env:
-          CI_OSES: ${{ (inputs.os == 'windows-2025' || inputs.os == 'macos-15') && inputs.os || 'windows-2025 macos-15' }}
-          CI_SHARDS: ${{ inputs.tests && 1 || 4 }}
-          CI_UNIT: ${{ !inputs.tests && '1' || '0' }}
+        id: reported
+        continue-on-error: true
+        run: python -m tests.ci_results reports
+      # The artifact list can lag behind an upload by seconds (run 42825277814
+      # listed 10 of 11 reports 12 s after the last one was finalized): a report
+      # still missing is looked for once more before the run goes red.
+      - name: Wait for a late report
+        if: steps.reported.outcome == 'failure'
+        run: sleep 30
+      - uses: actions/download-artifact@v4
+        if: steps.reported.outcome == 'failure'
+        with:
+          pattern: junit-*
+          path: reports
+      - name: Every job reported (second look)
+        if: steps.reported.outcome == 'failure'
         run: python -m tests.ci_results reports
 
   build:
