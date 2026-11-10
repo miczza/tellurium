@@ -15,12 +15,13 @@ import sys
 import pytest
 
 from tellurium.cdp.types import TargetCrashedError
+from tests.timeout_scale import scaled
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="kills renderers with SIGKILL")
 
 
 async def _kill_renderers(browser) -> None:
-    info = await browser._router.root.send("SystemInfo.getProcessInfo", {}, timeout=10)
+    info = await browser._router.root.send("SystemInfo.getProcessInfo", {}, timeout=scaled(10))
     for proc in info["processInfo"]:
         if proc["type"] == "renderer":
             try:
@@ -29,7 +30,8 @@ async def _kill_renderers(browser) -> None:
                 pass
 
 
-async def _wait_until(predicate, timeout: float = 10.0) -> bool:
+async def _wait_until(predicate, timeout: float | None = None) -> bool:
+    timeout = scaled(10.0) if timeout is None else timeout
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while loop.time() < deadline:
@@ -48,9 +50,9 @@ async def test_crash_fails_pending_and_future_commands(browser, local_server):
     await _kill_renderers(browser)
 
     with pytest.raises(TargetCrashedError):
-        await asyncio.wait_for(pending, timeout=10)
+        await asyncio.wait_for(pending, timeout=scaled(10))
     with pytest.raises(TargetCrashedError):
-        await asyncio.wait_for(tab.eval("1 + 1"), timeout=10)
+        await asyncio.wait_for(tab.eval("1 + 1"), timeout=scaled(10))
 
 
 async def test_crashed_tab_leaves_browser_tabs(browser, local_server):
@@ -68,8 +70,10 @@ async def test_browser_keeps_working_after_a_crash(browser, local_server):
     await _kill_renderers(browser)
     await _wait_until(lambda: not browser.tabs)
 
-    fresh = await asyncio.wait_for(browser.new_tab(f"{local_server}/basic.html"), timeout=30)
-    assert await asyncio.wait_for(fresh.eval("1 + 1"), timeout=10) == 2
+    fresh = await asyncio.wait_for(
+        browser.new_tab(f"{local_server}/basic.html"), timeout=scaled(30)
+    )
+    assert await asyncio.wait_for(fresh.eval("1 + 1"), timeout=scaled(10)) == 2
 
 
 def test_target_crashed_error_is_a_connection_error():
@@ -78,7 +82,7 @@ def test_target_crashed_error_is_a_connection_error():
 
 
 async def _page_target_ids(browser) -> set[str]:
-    result = await browser._router.root.send("Target.getTargets", {}, timeout=10)
+    result = await browser._router.root.send("Target.getTargets", {}, timeout=scaled(10))
     return {t["targetId"] for t in result["targetInfos"] if t["type"] == "page"}
 
 
@@ -92,7 +96,7 @@ async def test_crashed_target_is_closed_in_chrome(browser, local_server):
     await tab.close()  # public API on a crashed tab: no error
 
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + 10
+    deadline = loop.time() + scaled(10)
     while tab._target_id in await _page_target_ids(browser):
         assert loop.time() < deadline, "the crashed target is still open in Chrome"
         await asyncio.sleep(0.1)
@@ -105,7 +109,7 @@ async def test_main_tab_does_not_stay_on_a_crashed_tab(browser, local_server):
     await _kill_renderers(browser)
     assert await _wait_until(lambda: dead.closed)
 
-    fresh = await asyncio.wait_for(browser.get(f"{local_server}/basic.html"), timeout=30)
+    fresh = await asyncio.wait_for(browser.get(f"{local_server}/basic.html"), timeout=scaled(30))
     assert fresh is not dead
     assert browser.main_tab is fresh
-    assert await asyncio.wait_for(fresh.eval("1 + 1"), timeout=10) == 2
+    assert await asyncio.wait_for(fresh.eval("1 + 1"), timeout=scaled(10)) == 2

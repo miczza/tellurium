@@ -9,6 +9,7 @@ import pytest
 from tellurium.browser import snapshot
 from tellurium.browser.refs import RefMap
 from tellurium.browser.snapshot import SnapshotTooLargeError, take_snapshot
+from tests.timeout_scale import scaled
 
 
 def _count_full_trees(monkeypatch, session) -> list[str]:
@@ -31,7 +32,7 @@ async def test_concurrent_selector_snapshots_send_one_full_tree(browser, local_s
     sent = _count_full_trees(monkeypatch, tab._session)
     texts = await asyncio.gather(
         *(
-            take_snapshot(tab._session, RefMap(), selector=selector, snapshot_timeout=60)
+            take_snapshot(tab._session, RefMap(), selector=selector, snapshot_timeout=scaled(60))
             for selector in ("h1", "#host", "body")
         )
     )
@@ -50,7 +51,7 @@ async def test_a_snapshot_after_an_abandoned_one_joins_its_request(
     sent = _count_full_trees(monkeypatch, tab._session)
     with pytest.raises(SnapshotTooLargeError):
         await take_snapshot(tab._session, RefMap(), snapshot_timeout=0.3)
-    text = await take_snapshot(tab._session, RefMap(), selector="h1", snapshot_timeout=60)
+    text = await take_snapshot(tab._session, RefMap(), selector="h1", snapshot_timeout=scaled(60))
     assert text.startswith('- heading "Web component"')
     assert len(sent) == 1
 
@@ -69,7 +70,7 @@ async def test_input_sent_while_the_tree_is_in_flight_starts_a_new_request(
     change = asyncio.ensure_future(tab.eval("document.querySelector('h1').textContent = 'Changed'"))
     await asyncio.sleep(0)  # sent: its answer waits for the tree
     taking = asyncio.ensure_future(
-        take_snapshot(tab._session, RefMap(), selector="h1", snapshot_timeout=60)
+        take_snapshot(tab._session, RefMap(), selector="h1", snapshot_timeout=scaled(60))
     )
     await asyncio.sleep(0.05)
     assert not change.done()  # the input is concurrent with the tree in flight
@@ -88,7 +89,7 @@ async def _frame_session(tab):
         if frames:
             target = frames[0]["targetId"]
             child = router.session_for_target(target)
-            child = child or await router.attach(target, via=tab._session, timeout=5)
+            child = child or await router.attach(target, via=tab._session, timeout=scaled(5))
             ready = await child.send("Runtime.evaluate", {"expression": "document.readyState"})
             if ready["result"]["value"] == "complete":
                 return child
@@ -109,12 +110,12 @@ async def test_input_unanswered_when_the_tree_is_asked_for_is_not_shared(
     document = (await tab._session.send("DOM.getDocument", {"depth": 0}))["root"]["backendNodeId"]
     sent = _count_full_trees(monkeypatch, tab._session)
     script = {"expression": "parent.postMessage('after', '*'); 1"}
-    posted = asyncio.ensure_future(child.send("Runtime.evaluate", script, timeout=10))
+    posted = asyncio.ensure_future(child.send("Runtime.evaluate", script, timeout=scaled(10)))
     await asyncio.sleep(0)  # sent, not answered yet
-    tree = asyncio.ensure_future(snapshot._full_tree(tab._session, None, document, 60, {}))
+    tree = asyncio.ensure_future(snapshot._full_tree(tab._session, None, document, scaled(60), {}))
     await posted
     assert not tree.done()  # the input answered while the tree is in flight
-    text = await take_snapshot(tab._session, RefMap(), selector="h1", snapshot_timeout=60)
+    text = await take_snapshot(tab._session, RefMap(), selector="h1", snapshot_timeout=scaled(60))
     await tree
     assert text.startswith('- heading "After"'), text
     assert len(sent) == 2
@@ -127,7 +128,7 @@ async def test_a_new_document_starts_a_new_request(browser, local_server, monkey
     with pytest.raises(SnapshotTooLargeError):
         await take_snapshot(tab._session, RefMap(), snapshot_timeout=0.3)
     await tab.get(f"{local_server}/snapshot_form.html")
-    text = await take_snapshot(tab._session, RefMap(), snapshot_timeout=60)
+    text = await take_snapshot(tab._session, RefMap(), snapshot_timeout=scaled(60))
     assert '- button "Sign in"' in text
     assert len(sent) == 2
 
@@ -137,7 +138,9 @@ async def _closed_session(browser):
     gone = await browser.new_tab()
     session = gone._session
     await gone.close()
-    for _ in range(100):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + scaled(5)
+    while loop.time() < deadline:
         if session.closed:
             return session
         await asyncio.sleep(0.05)
@@ -161,9 +164,9 @@ async def test_snapshots_failing_on_a_closed_session_do_not_hide_an_input(
     while router._next_msg_id - before < 2:
         await asyncio.sleep(0.01)
     with pytest.raises(ConnectionError):  # tries DOM.getDocument, then Accessibility.disable
-        await take_snapshot(gone, RefMap(), snapshot_timeout=5)
+        await take_snapshot(gone, RefMap(), snapshot_timeout=scaled(5))
     assert not inputs.done()  # the tree asked for before them is still being built
-    text = await take_snapshot(tab._session, RefMap(), selector="h1", snapshot_timeout=60)
+    text = await take_snapshot(tab._session, RefMap(), selector="h1", snapshot_timeout=scaled(60))
     await inputs
     assert text.startswith('- heading "Changed"'), text
     assert len(sent) == 2

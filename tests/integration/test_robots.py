@@ -205,7 +205,7 @@ async def test_load_network_resource_sends_no_client_hints_even_with_an_override
                 "bitness": "64",
             }
             override = {"userAgent": "probe/1.0", "userAgentMetadata": metadata}
-            await frame.session.send("Network.setUserAgentOverride", override, timeout=5)
+            await frame.session.send("Network.setUserAgentOverride", override, timeout=scaled(5))
             await robots_module._load(frame, site.url + "/robots.txt")
         finally:
             await browser.close()
@@ -277,7 +277,9 @@ async def test_a_hundred_concurrent_gets_download_robots_txt_once(site):
     proxy, browser = site
     proxy.delays["/robots.txt"] = 0.5
     tabs = [await browser.new_tab() for _ in range(10)]
-    gets = [tabs[i % 10].get(f"http://site.test/private/{i}", timeout=20) for i in range(100)]
+    gets = [
+        tabs[i % 10].get(f"http://site.test/private/{i}", timeout=scaled(20)) for i in range(100)
+    ]
     results = await asyncio.gather(*gets, return_exceptions=True)
     assert all(isinstance(r, RobotsDisallowedError) for r in results), results
     assert proxy.paths("/robots.txt") == ["GET http://site.test/robots.txt HTTP/1.1"]
@@ -312,9 +314,10 @@ async def test_an_unreachable_robots_txt_disallows_everything():
 
 
 async def _hidden_targets_after_a_while(browser) -> list[str]:
-    for _ in range(30):
+    for _ in range(int(scaled(3) / 0.1)):
         await asyncio.sleep(0.1)
-        infos = (await browser._router.root.send("Target.getTargets", {}, timeout=5))["targetInfos"]
+        infos = await browser._router.root.send("Target.getTargets", {}, timeout=scaled(5))
+        infos = infos["targetInfos"]
         if not (hidden := [i["targetId"] for i in infos if i["type"] == "other"]):
             break
     return hidden
@@ -378,7 +381,7 @@ async def test_is_allowed_takes_a_timeout(site):
         await tab.is_allowed("http://wait.test/yes", timeout=0.3)
     assert loop.time() - start < 1
     assert caught.value.phase == "robots.txt"
-    assert not await tab.is_allowed("http://wait.test/no", timeout=10)
+    assert not await tab.is_allowed("http://wait.test/no", timeout=scaled(10))
     assert proxy.hits("wait.test/robots.txt") == 1
 
 
@@ -447,7 +450,7 @@ async def test_closing_the_browser_mid_download(site):
     tab = await browser.new_tab()
     waiting = asyncio.ensure_future(tab.get("http://site.test/private", timeout=30))
     await asyncio.sleep(0.5)
-    await asyncio.wait_for(browser.close(), 10)
+    await asyncio.wait_for(browser.close(), scaled(10))
     with pytest.raises(ConnectionError):
         await waiting
     package = str(Path(tellurium.__file__).parent)
@@ -458,7 +461,7 @@ async def test_closing_the_browser_mid_download(site):
             t for t, c in coros if getattr(c, "cr_code", None) and package in c.cr_code.co_filename
         ]
 
-    for _ in range(200):  # nothing of the browser left running
+    for _ in range(int(scaled(2) / 0.01)):  # nothing of the browser left running
         if not of_tellurium():
             break
         await asyncio.sleep(0.01)

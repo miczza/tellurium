@@ -40,6 +40,7 @@ from tests.integration.test_raw_chrome import (  # noqa: E402, F401 - autouse fi
     private_tempdir,
 )
 from tests.platform_marks import needs_proc  # noqa: E402
+from tests.timeout_scale import scaled  # noqa: E402
 
 
 async def _call(
@@ -200,7 +201,7 @@ async def test_other_methods_are_405_with_allow(method, target, allow):
 async def test_a_request_body_is_refused():
     """websockets reads no body: it drops the connection (or answers 400) unheard."""
     async with serving(1, warm=1) as mux:
-        assert await _wait_until(lambda: mux.status()["slots"][0]["pid"], 60)
+        assert await _wait_until(lambda: mux.status()["slots"][0]["pid"], scaled(60))
         reader, writer = await asyncio.open_connection("127.0.0.1", _port(mux))
         try:
             lines = [
@@ -228,7 +229,7 @@ async def test_a_request_body_is_refused():
 async def test_admin_routes_refuse_like_cdp_before_doing_anything(method, path):
     async with serving(1, warm=1) as mux:
         port, token = _port(mux), mux.token
-        assert await _wait_until(lambda: mux.status()["slots"][0]["pid"], 60)
+        assert await _wait_until(lambda: mux.status()["slots"][0]["pid"], scaled(60))
         pid = mux.status()["slots"][0]["pid"]
         host = ("Host", f"127.0.0.1:{port}")
         bearer = ("Authorization", f"Bearer {token}")
@@ -467,7 +468,7 @@ async def test_ctrl_c_closes_the_command_with_0_on_every_system(
         **NEW_GROUP,
     )
     try:
-        first = (await asyncio.wait_for(proc.stdout.readline(), 90)).decode()
+        first = (await asyncio.wait_for(proc.stdout.readline(), scaled(90))).decode()
         url = re.search(r"http://127\.0\.0\.1:\d+", first)
         assert url, first + (await proc.stderr.read()).decode()
         port = int(url.group(0).rsplit(":", 1)[1])
@@ -478,7 +479,7 @@ async def test_ctrl_c_closes_the_command_with_0_on_every_system(
             ws = await connect(
                 f"ws://127.0.0.1:{port}/devtools/browser/x",
                 additional_headers={"Authorization": f"Bearer {token}"},
-                open_timeout=60,
+                open_timeout=scaled(60),
             )
         except TimeoutError:
             proc.kill()
@@ -488,10 +489,10 @@ async def test_ctrl_c_closes_the_command_with_0_on_every_system(
             interrupt(proc)
             code, _ = await _closed(ws)
             assert code == 1001
-        assert await asyncio.wait_for(proc.wait(), 60) == 0
+        assert await asyncio.wait_for(proc.wait(), scaled(60)) == 0
         rest = (await proc.stdout.read()).decode()
         assert "stopped" in rest + (await proc.stderr.read()).decode()
-        assert await _wait_until(lambda: _profiles(private_tempdir) == [], 15)
+        assert await _wait_until(lambda: _profiles(private_tempdir) == [], scaled(15))
     finally:
         if proc.returncode is None:
             proc.kill()

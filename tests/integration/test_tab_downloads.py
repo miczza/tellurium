@@ -10,6 +10,7 @@ import pytest
 from tellurium import Download, DownloadError, NavigationError
 from tests.integration.conftest import DOWNLOAD_BODY
 from tests.private_temp import private_temp
+from tests.timeout_scale import scaled
 
 _INNER_CLICK = "document.getElementById('frame').contentDocument.getElementById('inner').click()"
 
@@ -41,7 +42,7 @@ async def test_download_started_by_a_ref_click(browser, local_server, tmp_path):
 
 async def test_download_from_a_same_process_iframe(browser, local_server):
     tab = await browser.get(local_server + "/download.html")
-    async with tab.expect_download(timeout=10) as info:
+    async with tab.expect_download(timeout=scaled(10)) as info:
         await tab.eval(_INNER_CLICK)
     download = await info.value
     assert download.suggested_filename == "inner.csv"
@@ -56,7 +57,7 @@ async def test_download_from_an_iframe_added_later(browser, local_server):
         "document.body.append(f);"
         "new Promise(r => f.onload = r)"
     )
-    async with tab.expect_download(timeout=10) as info:
+    async with tab.expect_download(timeout=scaled(10)) as info:
         await tab.eval(
             "document.querySelector('iframe').contentDocument.getElementById('late').click()"
         )
@@ -71,7 +72,7 @@ async def test_download_from_a_script_written_blank_iframe(browser, local_server
         "const f = document.createElement('iframe'); document.body.append(f);"
         'f.contentDocument.body.innerHTML = \'<a id="w" href="/download/w.csv">W</a>\';'
     )
-    async with tab.expect_download(timeout=10) as info:
+    async with tab.expect_download(timeout=scaled(10)) as info:
         await tab.eval(
             "document.querySelector('iframe').contentDocument.getElementById('w').click()"
         )
@@ -86,7 +87,7 @@ async def test_download_from_a_blank_iframe_of_a_blank_page(browser, local_serve
         "const a = f.contentDocument.createElement('a'); a.id = 'b';"
         f"a.href = '{local_server}/download/b.csv'; f.contentDocument.body.append(a); 1"
     )
-    async with tab.expect_download(timeout=10) as info:
+    async with tab.expect_download(timeout=scaled(10)) as info:
         await tab.eval(
             "document.querySelector('iframe').contentDocument.getElementById('b').click()"
         )
@@ -99,7 +100,7 @@ async def test_download_from_an_iframe_that_never_commits(browser, local_server,
     start) reports no frameNavigated to the tab's session: only frameAttached."""
     tab = await browser.get(local_server + "/basic.html")
     origin = local_server if site == "same" else local_server.replace("127.0.0.1", "localhost")
-    async with tab.expect_download(timeout=10) as info:
+    async with tab.expect_download(timeout=scaled(10)) as info:
         await tab.eval(
             "const f = document.createElement('iframe');"
             f"f.src = '{origin}/download/{site}.csv'; document.body.append(f); 1"
@@ -113,7 +114,7 @@ async def test_a_removed_iframe_leaves_the_tab_frames(browser, local_server):
     child = tree["frameTree"]["childFrames"][0]["frame"]["id"]
     assert child in tab._frames
     await tab.eval("document.getElementById('frame').remove()")
-    for _ in range(50):
+    for _ in range(int(scaled(2.5) / 0.05)):
         if child not in tab._frames:
             break
         await asyncio.sleep(0.05)
@@ -126,7 +127,7 @@ async def test_iframe_download_of_a_context_tab_lands_in_the_context_folder(
 ):
     context = await browser.new_context(downloads_dir=str(tmp_path / "ctx"))
     tab = await context.new_tab(local_server + "/download.html")
-    async with tab.expect_download(timeout=10) as info:
+    async with tab.expect_download(timeout=scaled(10)) as info:
         await tab.eval(_INNER_CLICK)
     download = await info.value
     assert download.context_id == context.context_id
@@ -140,7 +141,7 @@ async def test_a_tab_does_not_take_another_tabs_download(browser, local_server):
         async with first.expect_download(timeout=2), second.expect_download() as theirs:
             await second.eval(_INNER_CLICK)
             assert (await theirs.value).suggested_filename == "inner.csv"
-    async with first.expect_download(timeout=10) as info:
+    async with first.expect_download(timeout=scaled(10)) as info:
         await first.eval("document.getElementById('report').click()")
     assert (await info.value).suggested_filename == "report.csv"
 

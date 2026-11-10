@@ -21,6 +21,7 @@ import pytest
 from tellurium import Browser
 from tellurium.browser import _cache
 from tests.integration.test_robots import ROBOTS, TEXT, SiteProxy
+from tests.timeout_scale import scaled
 
 pytestmark = pytest.mark.asyncio
 
@@ -73,8 +74,8 @@ async def test_patched_stealth_keeps_its_native_user_agent_and_hints(patched_bin
         try:
             tab = await browser.new_tab()
             assert await tab.is_allowed(site.url + "/public")
-            await tab.get(site.url + "/page", timeout=15)
-            await tab.get(site.url + "/page2", timeout=15)  # Accept-CH now remembered
+            await tab.get(site.url + "/page", timeout=scaled(15))
+            await tab.get(site.url + "/page2", timeout=scaled(15))  # Accept-CH now remembered
             main = await tab.eval("navigator.userAgent")
             high = json.loads(
                 await tab.eval(

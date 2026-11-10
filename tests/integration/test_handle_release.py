@@ -10,6 +10,7 @@ import pytest
 
 from tellurium.browser.handles import StaleElementError
 from tellurium.cdp.types import CDPError
+from tests.timeout_scale import scaled
 
 GUARD = 60
 
@@ -54,7 +55,7 @@ async def test_dropped_query_results_do_not_keep_removed_nodes_alive(browser):
         # 20 rounds x 300 rows x 2 nodes would be ~12000 if handles leaked.
         assert await _live_nodes(tab) - baseline < 1500
 
-    await asyncio.wait_for(body(), timeout=GUARD)
+    await asyncio.wait_for(body(), timeout=scaled(GUARD))
 
 
 async def test_dropped_text_query_results_are_released_too(browser):
@@ -66,7 +67,7 @@ async def test_dropped_text_query_results_are_released_too(browser):
         await _settle(tab)
         assert await _live_nodes(tab) - baseline < 1500
 
-    await asyncio.wait_for(body(), timeout=GUARD)
+    await asyncio.wait_for(body(), timeout=scaled(GUARD))
 
 
 async def test_released_element_raises_stale_element_error(browser, local_server):
@@ -123,7 +124,7 @@ async def test_element_call_is_bounded_while_a_dialog_is_open(browser, local_ser
     await tab.eval("setTimeout(() => alert('stuck'), 0); 1")
     await asyncio.sleep(0.3)
     with pytest.raises(TimeoutError, match="Runtime.callFunctionOn"):
-        await asyncio.wait_for(heading.text(), timeout=10)
+        await asyncio.wait_for(heading.text(), timeout=scaled(10))
     await tab._dialogs.last.dismiss()
     assert await heading.tag() == "h1"
 
@@ -136,6 +137,6 @@ async def test_close_is_not_delayed_by_a_frozen_page(browser, local_server):
     await asyncio.sleep(0.3)
     loop = asyncio.get_running_loop()
     start = loop.time()
-    await asyncio.wait_for(tab.close(), timeout=15)
+    await asyncio.wait_for(tab.close(), timeout=scaled(15))
     assert loop.time() - start < 2.5
     assert tab.closed

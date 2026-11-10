@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 from urllib.parse import quote
 
+from tests.timeout_scale import scaled
+
 GUARD = 15
 
 
@@ -17,20 +19,20 @@ def _page(body: str) -> str:
 
 
 async def _guard(coro):
-    return await asyncio.wait_for(coro, timeout=GUARD)
+    return await asyncio.wait_for(coro, timeout=scaled(GUARD))
 
 
 async def test_alert_on_load_does_not_block_get_or_later_commands(browser):
     tab = browser.main_tab
     url = _page("<script>window.onload = () => alert('hi')</script>")
-    await _guard(tab.get(url, wait_until="load", timeout=8))
+    await _guard(tab.get(url, wait_until="load", timeout=scaled(8)))
     assert await _guard(tab.eval("1 + 1")) == 2
 
 
 async def test_alert_after_domcontentloaded_does_not_block_the_next_call(browser):
     tab = browser.main_tab
     url = _page("<script>setTimeout(() => alert('later'), 50)</script>")
-    await _guard(tab.get(url, wait_until="domcontentloaded", timeout=8))
+    await _guard(tab.get(url, wait_until="domcontentloaded", timeout=scaled(8)))
     await asyncio.sleep(0.3)
     assert await _guard(tab.eval("document.body !== null")) is True
 
@@ -114,7 +116,7 @@ async def test_beforeunload_is_accepted_so_navigation_proceeds(browser):
     )
     await _guard(tab.get(page))
     await _guard(tab.mouse_click(20, 20))  # beforeunload needs a user gesture
-    await _guard(tab.get(_page("<p id='next'>next</p>"), timeout=8))
+    await _guard(tab.get(_page("<p id='next'>next</p>"), timeout=scaled(8)))
     assert seen == ["beforeunload"]
     assert await _guard(tab.eval("document.getElementById('next') !== null")) is True
 
@@ -128,7 +130,7 @@ async def test_handler_that_never_decides_times_out_to_the_policy(browser):
 
     tab.on_dialog(handler)
     await _guard(tab.get(_page("<p>x</p>")))
-    assert await asyncio.wait_for(tab.eval("confirm('ok?')"), timeout=5) is False
+    assert await asyncio.wait_for(tab.eval("confirm('ok?')"), timeout=scaled(5)) is False
 
 
 async def test_launch_dialog_policy_reaches_every_tab():
@@ -147,7 +149,7 @@ async def test_launch_dialog_policy_reaches_every_tab():
 
 async def test_alert_on_the_initial_tab_before_any_get_is_dismissed(browser):
     tab = browser.main_tab
-    assert await _guard(tab.eval("alert('early'); 7", timeout=5)) == 7
+    assert await _guard(tab.eval("alert('early'); 7", timeout=scaled(5))) == 7
 
 
 async def test_unknown_launch_dialog_policy_is_refused_before_chrome_starts():

@@ -11,6 +11,7 @@ import pytest
 pytest.importorskip("mcp")
 
 from tellurium.mcp import pages, screenshots  # noqa: E402
+from tests.timeout_scale import scaled  # noqa: E402
 
 
 class _Pool:
@@ -23,7 +24,7 @@ class _Pool:
 
 async def _noise_tab(browser, local_server):
     tab = await browser.get(f"{local_server}/noise.html")
-    for _ in range(100):
+    for _ in range(int(scaled(10) / 0.1)):
         if await tab.eval("document.title") == "Noise ready":
             return tab
         await asyncio.sleep(0.1)
@@ -108,7 +109,7 @@ async def test_full_page_of_a_quirks_mode_page_gives_the_scrollbar_back(any_brow
     await tab.get(local_server + "/quirks.html")
     await tab.eval(
         "new Promise(r => { addEventListener('scroll', r, {once: true}); scrollTo(0, 1000) })",
-        timeout=10,
+        timeout=scaled(10),
     )
     await tab.eval(_FRAMES)
     await tab.eval("window.scrolls = 0")

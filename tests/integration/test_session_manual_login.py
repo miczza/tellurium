@@ -14,6 +14,7 @@ from tellurium.session import SessionBusyError, SessionLoginFailedError
 from tests.integration.test_wait_for_human import _click_node, _done_button
 from tests.platform_marks import needs_display
 from tests.side_task import side_task
+from tests.timeout_scale import scaled
 
 pytestmark = needs_display
 
@@ -37,7 +38,8 @@ def launched(monkeypatch):
     return seen
 
 
-async def _nth(launched, n, timeout=30.0):
+async def _nth(launched, n, timeout=None):
+    timeout = scaled(30.0) if timeout is None else timeout
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while len(launched) < n:

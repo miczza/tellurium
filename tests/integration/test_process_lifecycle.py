@@ -25,6 +25,7 @@ from tellurium.browser.launcher import LaunchError
 from tellurium.browser.process import BrowserProcess
 from tests.platform_marks import needs_proc
 from tests.private_temp import private_temp
+from tests.timeout_scale import scaled
 
 VERBOSE = ["--enable-logging=stderr", "--v=1"]
 
@@ -90,7 +91,8 @@ async def test_verbose_chrome_logging_does_not_freeze_the_browser(local_server):
             for i in range(200):
                 await browser.main_tab.get(f"{local_server}/basic.html?page={i}")
 
-        await asyncio.wait_for(scrape(), timeout=120)
+        # Scaled, but under the CI's 300 s pytest-timeout, which would kill the shard.
+        await asyncio.wait_for(scrape(), timeout=min(scaled(120), 240))
     finally:
         await browser.close()
 
@@ -116,7 +118,7 @@ class TestWhatTheLaunchHandsToChrome:
             await proc.spawn(plan.chrome_path, flags, None, {"CHROME_LOG_FILE": str(log)})
             chrome_tmp = Path(proc.chrome_tmp)
             assert chrome_tmp.is_dir() and chrome_tmp.parent == Path(tempfile.gettempdir())
-            assert await _wait_until(lambda: log.is_file() and log.stat().st_size > 0, 30)
+            assert await _wait_until(lambda: log.is_file() and log.stat().st_size > 0, scaled(30))
         finally:
             await proc.close()
         assert not chrome_tmp.exists()
@@ -131,7 +133,9 @@ class TestWhatTheLaunchHandsToChrome:
         chrome_tmp = Path(browser._proc.chrome_tmp)
         try:
             assert chrome_tmp.is_dir()
-            await asyncio.wait_for(browser.main_tab.get(f"{local_server}/basic.html"), timeout=30)
+            await asyncio.wait_for(
+                browser.main_tab.get(f"{local_server}/basic.html"), timeout=scaled(30)
+            )
         finally:
             await browser.close()
         assert log.is_file()
@@ -145,10 +149,12 @@ class TestWhatTheLaunchHandsToChrome:
         first = await Browser.launch(headless=True, user_data_dir=profile)
         try:
             with pytest.raises(LaunchError) as info:
-                await asyncio.wait_for(Browser.launch(headless=True, user_data_dir=profile), 30)
+                await asyncio.wait_for(
+                    Browser.launch(headless=True, user_data_dir=profile), scaled(30)
+                )
             assert "profile" in str(info.value).lower()
             # The first browser is untouched by the failed second launch.
-            assert await asyncio.wait_for(first.main_tab.eval("1 + 1"), 10) == 2
+            assert await asyncio.wait_for(first.main_tab.eval("1 + 1"), scaled(10)) == 2
         finally:
             await first.close()
 

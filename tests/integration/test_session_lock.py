@@ -11,6 +11,7 @@ import pytest
 from tellurium import Session, SessionBusyError
 from tellurium.session.lock import SessionLock
 from tests.integration.session_child import kill_holder, start_holder
+from tests.timeout_scale import scaled
 
 _hold = start_holder
 _kill_group = kill_holder
@@ -77,7 +78,7 @@ async def test_lock_is_released_on_cancellation(tmp_path):
             await asyncio.Event().wait()
 
     task = asyncio.ensure_future(run())
-    await asyncio.wait_for(inside.wait(), 60)
+    await asyncio.wait_for(inside.wait(), scaled(60))
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task

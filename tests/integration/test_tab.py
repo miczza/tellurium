@@ -1,3 +1,6 @@
+from tests.timeout_scale import scaled
+
+
 async def test_navigate(browser, local_server):
     tab = await browser.new_tab(f"{local_server}/basic.html")
     title = await tab.eval("document.title")
@@ -28,7 +31,7 @@ async def test_eval(browser, local_server):
 
 async def test_wait_for(browser, local_server):
     tab = await browser.new_tab(f"{local_server}/dynamic.html")
-    el = await tab.wait_for("#lazy-content", timeout=5)
+    el = await tab.wait_for("#lazy-content", timeout=scaled(5))
     text = await el.text()
     assert text == "Loaded!"
 

@@ -15,6 +15,7 @@ import pytest
 
 from tellurium.browser.geometry import ElementNotHittableError, content_box
 from tellurium.browser.handles import StaleElementError
+from tests.timeout_scale import scaled
 
 # The <iframe> of oopif_host.html: left/top 360/140, border 4, padding 6.
 _WIDGET_ORIGIN = (370, 150)
@@ -86,7 +87,7 @@ async def test_stealth_reuses_the_auto_attached_session(stealth_browser, local_s
     on_widget = 0
     for session in [s for s in router._sessions.values() if s is not router.root]:
         try:
-            info = await session.send("Target.getTargetInfo", {}, timeout=5)
+            info = await session.send("Target.getTargetInfo", {}, timeout=scaled(5))
         except Exception:  # noqa: BLE001 — a worker or a closing target
             continue
         on_widget += info["targetInfo"]["targetId"] == widget["targetId"]
@@ -254,12 +255,12 @@ async def test_oopif_session_attached_by_hand_is_reused_and_detached(browser, lo
     assert used is not None and not used.closed
     await tab.snapshot()
     assert router.session_for_target(widget["targetId"]) is used  # no second attach
-    extra = await router.attach(widget["targetId"], via=tab._session, timeout=5)
+    extra = await router.attach(widget["targetId"], via=tab._session, timeout=scaled(5))
     assert extra is not used and router.session_for_target(widget["targetId"]) is used
     await router.detach(extra, via=tab._session)
-    for _ in range(50):
-        if extra.closed:
-            break
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + scaled(2.5)
+    while not extra.closed and loop.time() < deadline:
         await asyncio.sleep(0.05)
     assert extra.closed and not used.closed
 
@@ -366,7 +367,7 @@ async def test_oopif_budget_goes_in_document_order(browser, local_server, monkey
             await asyncio.sleep(delays[min(len(calls), 3) - 1])
         return count
 
-    host = await count_nodes(tab._session, 5)
+    host = await count_nodes(tab._session, scaled(5))
     monkeypatch.setattr(snapshot, "_count_nodes", delayed)
     text = await tab.snapshot(max_nodes=host + 13_000)
     assert len(calls) == 3 and all(6000 < c < 6100 for c in calls), calls

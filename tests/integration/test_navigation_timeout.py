@@ -68,7 +68,7 @@ def server():
 
 
 async def _guard(coro):
-    return await asyncio.wait_for(coro, timeout=GUARD)
+    return await asyncio.wait_for(coro, timeout=scaled(GUARD))
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +93,7 @@ async def test_tab_is_usable_after_a_navigation_timeout(browser, server):
     tab = browser.main_tab
     with pytest.raises(TimeoutError):
         await _guard(tab.get(f"{server}/hang", timeout=1))
-    await _guard(tab.get(f"{server}/basic.html", timeout=10))
+    await _guard(tab.get(f"{server}/basic.html", timeout=scaled(10)))
     assert tab.title == "Basic Test Page"
 
 
@@ -126,7 +126,7 @@ async def test_timeout_while_waiting_for_load_names_the_phase(browser, server):
 async def test_no_content_response_raises_navigation_error_with_url(browser, server):
     tab = browser.main_tab
     with pytest.raises(NavigationError) as info:
-        await _guard(tab.get(f"{server}/204", timeout=10))
+        await _guard(tab.get(f"{server}/204", timeout=scaled(10)))
     err = info.value
     assert isinstance(err, RuntimeError)
     assert err.url == f"{server}/204"
@@ -136,7 +136,7 @@ async def test_no_content_response_raises_navigation_error_with_url(browser, ser
 
 async def test_download_raises_navigation_error(browser, server):
     with pytest.raises(NavigationError, match="ERR_ABORTED"):
-        await _guard(browser.main_tab.get(f"{server}/download", timeout=10))
+        await _guard(browser.main_tab.get(f"{server}/download", timeout=scaled(10)))
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +147,7 @@ async def test_download_raises_navigation_error(browser, server):
 async def test_wait_for_navigation_ignores_iframe_navigations(browser, server):
     tab = browser.main_tab
     await _guard(tab.get(f"{server}/basic.html"))
-    waiter = asyncio.ensure_future(tab.wait_for_navigation(timeout=10))
+    waiter = asyncio.ensure_future(tab.wait_for_navigation(timeout=scaled(10)))
     await tab.eval(
         "var f = document.createElement('iframe');"
         f"f.src = '{server}/form.html'; document.body.appendChild(f); 1"
@@ -163,7 +163,7 @@ async def test_wait_for_navigation_ignores_iframe_navigations(browser, server):
 async def test_wait_for_navigation_matches_the_url_pattern(browser, server):
     tab = browser.main_tab
     await _guard(tab.get(f"{server}/basic.html"))
-    waiter = asyncio.ensure_future(tab.wait_for_navigation("*/tree.html", timeout=10))
+    waiter = asyncio.ensure_future(tab.wait_for_navigation("*/tree.html", timeout=scaled(10)))
     await tab.eval(f"location.href = '{server}/form.html'; 1")
     await asyncio.sleep(1)
     assert not waiter.done()
@@ -184,7 +184,7 @@ async def test_wait_for_navigation_timeout_is_a_builtin_timeout_error(browser, s
 async def test_wait_for_navigation_returns_on_a_back_forward_cache_restore(browser, server):
     tab = await _guard(browser.new_tab(f"{server}/basic.html"))
     await _guard(tab.get(f"{server}/tree.html"))
-    waiter = asyncio.ensure_future(tab.wait_for_navigation(timeout=8))
+    waiter = asyncio.ensure_future(tab.wait_for_navigation(timeout=scaled(8)))
     await asyncio.sleep(0.1)
     await tab.back()
     await _guard(waiter)
@@ -196,7 +196,7 @@ async def test_wait_for_navigation_waits_for_the_load_of_the_matching_document(
 ):
     tab = browser.main_tab
     await _guard(tab.get(f"{local_server}/basic.html"))
-    waiter = asyncio.ensure_future(tab.wait_for_navigation("*redirect_final*", timeout=10))
+    waiter = asyncio.ensure_future(tab.wait_for_navigation("*redirect_final*", timeout=scaled(10)))
     await tab.eval("location.href = '/redirect_step.html'; 1")
     await _guard(waiter)
     assert tab.url.endswith("/redirect_final.html")

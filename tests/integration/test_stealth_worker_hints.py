@@ -17,6 +17,7 @@ import pytest
 
 from tellurium import Browser
 from tests.integration.test_robots import SiteProxy
+from tests.timeout_scale import scaled
 
 pytestmark = pytest.mark.asyncio
 
@@ -65,12 +66,12 @@ async def test_service_and_shared_workers_have_the_page_client_hints(headless):
         browser = await Browser.launch(headless=headless, stealth=True)
         try:
             tab = await browser.new_tab()
-            await tab.get(site.url + "/page", timeout=15)
+            await tab.get(site.url + "/page", timeout=scaled(15))
             page = json.loads(await tab.eval(ASK_PAGE))
-            shared = json.loads(await tab.eval(ASK_SHARED, timeout=10))
+            shared = json.loads(await tab.eval(ASK_SHARED, timeout=scaled(10)))
             loop = asyncio.get_running_loop()
             started = loop.time()
-            service = json.loads(await tab.eval(ASK_SERVICE, timeout=20))
+            service = json.loads(await tab.eval(ASK_SERVICE, timeout=scaled(20)))
             service_took = loop.time() - started
         finally:
             await browser.close()
@@ -115,10 +116,10 @@ async def test_with_no_readable_version_workers_still_show_the_page_user_agent(m
         browser = await Browser.launch(headless=True, stealth=True)
         try:
             tab = await browser.new_tab()
-            await tab.get(site.url + "/page", timeout=15)
+            await tab.get(site.url + "/page", timeout=scaled(15))
             page = await tab.eval("navigator.userAgent")
-            shared = await tab.eval(ASK_SHARED, timeout=10)
-            service = await tab.eval(ASK_SERVICE, timeout=20)
+            shared = await tab.eval(ASK_SHARED, timeout=scaled(10))
+            service = await tab.eval(ASK_SERVICE, timeout=scaled(20))
         finally:
             await browser.close()
     assert len(starts) == 2, "one start, then one more with the flag"

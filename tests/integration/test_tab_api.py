@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from tests.timeout_scale import scaled
+
 
 @pytest.fixture
 async def tree(browser, local_server):
@@ -25,7 +27,7 @@ async def test_xpath_all_is_empty_when_nothing_matches(tree):
 
 
 async def test_select_all_waits_for_late_elements(tree):
-    found = await tree.select_all("#late", timeout=5)
+    found = await tree.select_all("#late", timeout=scaled(5))
     assert len(found) == 1
     assert await found[0].text() == "Here at last"
 
@@ -35,7 +37,7 @@ async def test_select_all_without_timeout_does_not_wait(tree):
 
 
 async def test_find_all_waits_for_late_text(tree):
-    found = await tree.find_all("Here at last", timeout=5)
+    found = await tree.find_all("Here at last", timeout=scaled(5))
     assert found and await found[0].text() == "Here at last"
 
 
@@ -45,17 +47,17 @@ async def test_find_all_waits_for_late_text(tree):
 
 
 async def test_wait_for_visible(tree):
-    element = await tree.wait_for("#late", timeout=5)
+    element = await tree.wait_for("#late", timeout=scaled(5))
     assert await element.text() == "Here at last"
 
 
 async def test_wait_for_attached_matches_a_hidden_element(tree):
-    element = await tree.wait_for("#hidden-note", state="attached", timeout=5)
+    element = await tree.wait_for("#hidden-note", state="attached", timeout=scaled(5))
     assert await element.attr("id") == "hidden-note"
 
 
 async def test_wait_for_hidden_on_a_display_none_element(tree):
-    assert await tree.wait_for("#hidden-note", state="hidden", timeout=5) is None
+    assert await tree.wait_for("#hidden-note", state="hidden", timeout=scaled(5)) is None
 
 
 async def test_wait_for_visible_times_out_on_a_hidden_element(tree):
@@ -64,7 +66,7 @@ async def test_wait_for_visible_times_out_on_a_hidden_element(tree):
 
 
 async def test_wait_for_detached(tree):
-    assert await tree.wait_for("#doomed", state="detached", timeout=5) is None
+    assert await tree.wait_for("#doomed", state="detached", timeout=scaled(5)) is None
     assert await tree.select_all("#doomed") == []
 
 
@@ -75,12 +77,12 @@ async def test_wait_for_detached(tree):
 
 async def test_wait_for_url_matches_a_glob(browser, local_server):
     tab = await browser.new_tab(f"{local_server}/basic.html")
-    await tab.wait_for_url("*/basic.html", timeout=5)
+    await tab.wait_for_url("*/basic.html", timeout=scaled(5))
 
 
 async def test_wait_for_url_still_matches_a_substring(browser, local_server):
     tab = await browser.new_tab(f"{local_server}/basic.html")
-    await tab.wait_for_url("basic", timeout=5)
+    await tab.wait_for_url("basic", timeout=scaled(5))
 
 
 async def test_wait_for_url_glob_is_anchored(browser, local_server):

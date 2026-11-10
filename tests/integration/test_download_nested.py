@@ -12,6 +12,7 @@ import pytest
 
 from tests.integration.conftest import DOWNLOAD_BODY
 from tests.private_temp import private_temp
+from tests.timeout_scale import scaled
 
 
 @pytest.fixture(autouse=True)
@@ -37,7 +38,7 @@ async def test_download_from_an_iframe_inside_an_oopif(
         "third site": f"{other_server}/download_nested_inner.html",
     }[inner]
     tab = any_browser.main_tab
-    async with tab.expect_download(timeout=15) as info:
+    async with tab.expect_download(timeout=scaled(15)) as info:
         await tab.get(_host(local_server, url))
     download = await info.value
     assert download.suggested_filename == ("never.csv" if url is None else "inner.csv")
@@ -49,6 +50,6 @@ async def test_another_tab_does_not_take_a_nested_download(browser, local_server
     second = await browser.new_tab("about:blank")
     with pytest.raises(TimeoutError):
         async with second.expect_download(timeout=4):
-            async with first.expect_download(timeout=10) as mine:
+            async with first.expect_download(timeout=scaled(10)) as mine:
                 await first.get(_host(local_server, "/download_nested_inner.html"))
             assert (await mine.value).suggested_filename == "inner.csv"

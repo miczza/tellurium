@@ -12,6 +12,7 @@ import pytest
 from tellurium import Browser
 from tellurium.session import profile_release
 from tests.platform_marks import needs_proc, needs_singleton_symlink
+from tests.timeout_scale import scaled
 
 
 def _lock_pid(chrome_dir) -> int:
@@ -39,7 +40,7 @@ async def test_a_live_chrome_holds_its_profile_until_it_closes(tmp_path):
         assert await profile_release.wait(sibling, 0.3) is None
     finally:
         await browser.close()
-    assert await profile_release.wait(str(chrome_dir), 10.0) is None
+    assert await profile_release.wait(str(chrome_dir), scaled(10)) is None
 
 
 @needs_proc
@@ -72,4 +73,4 @@ async def test_a_live_chrome_holds_its_profile_on_windows_too(tmp_path):
         assert await profile_release.wait(str(chrome_dir), 0.3) is not None
     finally:
         await browser.close()
-    assert await profile_release.wait(str(chrome_dir), 10.0) is None
+    assert await profile_release.wait(str(chrome_dir), scaled(10)) is None

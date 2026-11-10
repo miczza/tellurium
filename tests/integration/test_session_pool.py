@@ -16,6 +16,7 @@ from tellurium.session import SessionBusyError, SessionPool
 from tests.integration.session_child import kill_holder, start_holder
 from tests.platform_marks import needs_proc
 from tests.private_temp import FAILING_EXECUTABLE
+from tests.timeout_scale import scaled
 
 
 def _running(directory: str) -> set[str]:
@@ -215,7 +216,7 @@ async def test_three_opens_in_a_loop_wait_no_more_than_a_launch(tmp_path):
                 await asyncio.sleep(0.05)
                 turns.append((name, entered, loop.time()))
 
-    await asyncio.wait_for(asyncio.gather(*(opener(n) for n in ("a", "b", "c"))), 240)
+    await asyncio.wait_for(asyncio.gather(*(opener(n) for n in ("a", "b", "c"))), scaled(240))
     order = [t[0] for t in turns]
     assert sorted(order[:3]) == ["a", "b", "c"] and order[3:] == order[:3]  # round robin
     gaps = [nxt[1] - prev[2] for prev, nxt in zip(turns, turns[1:], strict=False)]
