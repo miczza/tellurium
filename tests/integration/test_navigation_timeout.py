@@ -220,9 +220,10 @@ _LOAD_ALERT = "data:text/html," + quote(
 async def test_get_returns_within_timeout_when_the_page_freezes_after_commit(browser):
     tab = browser.main_tab
     tab._dialogs.policy = "manual"  # the alert stays open and freezes the page
+    deadline = scaled(3)  # a wait for Chrome: the alert opens only after the event
     start = time.monotonic()
-    await _guard(tab.get(_DCL_ALERT, wait_until="domcontentloaded", timeout=3))
-    assert time.monotonic() - start < 3.5
+    await _guard(tab.get(_DCL_ALERT, wait_until="domcontentloaded", timeout=deadline))
+    assert time.monotonic() - start < deadline + 0.5
     await tab._dialogs.last.dismiss()
 
 
