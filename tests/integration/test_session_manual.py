@@ -89,7 +89,9 @@ async def test_a_hung_validator_hands_over_to_a_person(
     lost: list[str] = []
     try:
         async with side_task(person()) as helper:
-            async with session.start(headless=True, on_login_failure="manual", manual_timeout=60):
+            async with session.start(
+                headless=True, on_login_failure="manual", manual_timeout=scaled(60)
+            ):
                 await asyncio.wait_for(helper, scaled(30))
     except SessionLoginFailedError as exc:
         raise AssertionError("\n".join(lost) or "no click lost") from exc

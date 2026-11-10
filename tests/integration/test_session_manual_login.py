@@ -78,7 +78,7 @@ async def test_a_headless_start_reopens_headed_and_waits_for_the_validators(
 
     async with side_task(person()) as helper:
         async with session.start(
-            headless=True, on_login_failure="manual", manual_timeout=_MINUTE
+            headless=True, on_login_failure="manual", manual_timeout=scaled(_MINUTE)
         ) as browser:
             await helper
             assert [kw.get("headless") for kw, _ in launched] == [True, False]
@@ -105,7 +105,7 @@ async def test_done_before_signing_in_shows_the_banner_again(tmp_path, local_ser
 
     async with side_task(person()) as helper:
         async with session.start(
-            headless=False, on_login_failure="manual", manual_timeout=_MINUTE
+            headless=False, on_login_failure="manual", manual_timeout=scaled(_MINUTE)
         ) as browser:
             await helper
             assert len(launched) == 1  # headed already: no second Chrome
@@ -125,7 +125,9 @@ async def test_a_login_callback_that_fails_hands_over_to_a_person(tmp_path, loca
         await _click_node(browser.main_tab, await _done_button(browser.main_tab))
 
     async with side_task(person()) as helper:
-        async with session.start(headless=False, on_login_failure="manual", manual_timeout=_MINUTE):
+        async with session.start(
+            headless=False, on_login_failure="manual", manual_timeout=scaled(_MINUTE)
+        ):
             await helper
 
 
