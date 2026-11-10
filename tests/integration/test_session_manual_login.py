@@ -13,6 +13,7 @@ from tellurium import Session
 from tellurium.session import SessionBusyError, SessionLoginFailedError
 from tests.integration.test_wait_for_human import _click_node, _done_button
 from tests.platform_marks import needs_display
+from tests.side_task import side_task
 
 pytestmark = needs_display
 
@@ -73,8 +74,7 @@ async def test_a_headless_start_reopens_headed_and_waits_for_the_validators(
         await _sign_in(browser, local_server)
         await _click_node(browser.main_tab, await _done_button(browser.main_tab))
 
-    helper = asyncio.create_task(person())
-    try:
+    async with side_task(person()) as helper:
         async with session.start(
             headless=True, on_login_failure="manual", manual_timeout=_MINUTE
         ) as browser:
@@ -86,8 +86,6 @@ async def test_a_headless_start_reopens_headed_and_waits_for_the_validators(
             with pytest.raises(SessionBusyError):
                 async with Session("s", path=path).start(headless=True):
                     pass
-    finally:
-        helper.cancel()
     assert launched[0][1]._proc.process.poll() is not None  # the headless Chrome was closed
 
 
@@ -103,16 +101,13 @@ async def test_done_before_signing_in_shows_the_banner_again(tmp_path, local_ser
         await _sign_in(browser, local_server)
         await _click_node(browser.main_tab, await _done_button(browser.main_tab))
 
-    helper = asyncio.create_task(person())
-    try:
+    async with side_task(person()) as helper:
         async with session.start(
             headless=False, on_login_failure="manual", manual_timeout=_MINUTE
         ) as browser:
             await helper
             assert len(launched) == 1  # headed already: no second Chrome
             assert "auth=1" in await browser.main_tab.eval("document.cookie")
-    finally:
-        helper.cancel()
 
 
 async def test_a_login_callback_that_fails_hands_over_to_a_person(tmp_path, local_server, launched):
@@ -127,12 +122,9 @@ async def test_a_login_callback_that_fails_hands_over_to_a_person(tmp_path, loca
         await _sign_in(browser, local_server)
         await _click_node(browser.main_tab, await _done_button(browser.main_tab))
 
-    helper = asyncio.create_task(person())
-    try:
+    async with side_task(person()) as helper:
         async with session.start(headless=False, on_login_failure="manual", manual_timeout=_MINUTE):
             await helper
-    finally:
-        helper.cancel()
 
 
 async def test_nobody_signing_in_fails_the_start(tmp_path, local_server, launched):

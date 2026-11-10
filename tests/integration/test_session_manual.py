@@ -14,6 +14,7 @@ from tellurium.session import SessionLoginFailedError, manual_login
 from tests.integration import banner_probe
 from tests.integration.test_wait_for_human import _click_node, _closed_roots, _done_button
 from tests.platform_marks import LINUX, needs_display
+from tests.side_task import side_task
 
 
 @pytest.fixture
@@ -85,14 +86,12 @@ async def test_a_hung_validator_hands_over_to_a_person(
             lost.append(await banner_probe.report(tab))
 
     lost: list[str] = []
-    helper = asyncio.create_task(person())
     try:
-        async with session.start(headless=True, on_login_failure="manual", manual_timeout=60):
-            await asyncio.wait_for(helper, 30)
+        async with side_task(person()) as helper:
+            async with session.start(headless=True, on_login_failure="manual", manual_timeout=60):
+                await asyncio.wait_for(helper, 30)
     except SessionLoginFailedError as exc:
         raise AssertionError("\n".join(lost) or "no click lost") from exc
-    finally:
-        helper.cancel()
     assert launched[1][0]["headless"] is False
     assert len(calls) == 2
 
