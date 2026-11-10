@@ -71,6 +71,16 @@ def test_a_stretched_deadline_outlasts_the_longest_stall(monkeypatch):
     assert timeout_scale.scaled(30) == 90.0
 
 
+def test_a_stretched_deadline_ends_before_pytest_timeout(monkeypatch):
+    """One expiring wait must end the test inside the 300 s pytest-timeout of
+    the scaled jobs, or Windows loses the whole shard without a report."""
+    monkeypatch.setenv(timeout_scale.ENV, "3")
+    assert timeout_scale.CEILING == 240.0
+    assert timeout_scale.scaled(90) == 240.0
+    assert timeout_scale.scaled(240) == 240.0
+    assert timeout_scale.scaled(300) == 300.0  # already longer: left alone
+
+
 @pytest.mark.parametrize("value", ["1", "0.5"])
 def test_no_floor_without_a_factor_above_one(monkeypatch, value):
     """Linux, the local gate and the tests that shrink the deadlines on purpose."""

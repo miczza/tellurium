@@ -42,6 +42,10 @@ ENV = "TELLURIUM_TEST_TIMEOUT_SCALE"
 #: Least scaled wait when the factor is above 1: the longest stall measured on
 #: the runners is 27 s (Windows, R3-B), a 5 s wait x 3 is still short of it.
 FLOOR = 30.0
+#: Most a scaled wait grows to: a wait that expires must end the test before
+#: pytest-timeout (300 s on the scaled jobs) ends the whole shard, which on
+#: Windows leaves no report. A wait already longer stays as it is.
+CEILING = 240.0
 
 #: Owner and attribute of each deadline on an answer from Chrome that is scaled.
 SCALED: tuple[tuple[object, str], ...] = (
@@ -72,14 +76,15 @@ def factor() -> float:
 
 
 def scaled(seconds: float) -> float:
-    """*seconds* times the factor, and at least :data:`FLOOR` when the factor
-    is above 1: a test's own bound on an answer from Chrome."""
+    """*seconds* times the factor, at least :data:`FLOOR` and at most
+    :data:`CEILING` when the factor is above 1: a test's own bound on an
+    answer from Chrome."""
     return _stretched(seconds, factor())
 
 
 def _stretched(seconds: float, times: float) -> float:
     if times > 1.0:
-        return max(seconds * times, FLOOR)
+        return max(seconds, min(max(seconds * times, FLOOR), CEILING))
     return seconds * times
 
 
