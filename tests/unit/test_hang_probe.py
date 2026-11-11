@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
+
+import pytest
 
 from tests.await_chain import awaiting, tasks_report
+from tests.process_freeze import frozen
+from tests.process_snapshot import snapshot
 
 
 async def test_every_task_is_listed_with_the_awaits_it_is_suspended_in():
@@ -46,3 +52,36 @@ async def test_the_chain_names_the_future_it_ends_on():
         await task
     assert "on_a_future" in lines[0]
     assert "Future" in lines[-1]
+
+
+@pytest.fixture
+def sleeper():
+    """A child process that only sleeps, killed at the end."""
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    yield child
+    child.kill()
+    child.wait(10)
+
+
+#: How each system shows a process frozen by :func:`frozen`.
+FROZEN_MARK = {"linux": "state=T", "darwin": "state=T", "win32": "Suspended"}
+
+
+def test_the_snapshot_of_a_frozen_process_shows_it_frozen(sleeper):
+    with frozen(sleeper.pid):
+        text = snapshot(sleeper.pid)
+    assert str(sleeper.pid) in text
+    assert FROZEN_MARK[sys.platform] in text
+
+
+def test_a_thawed_process_runs_again(sleeper):
+    with frozen(sleeper.pid):
+        pass
+    text = snapshot(sleeper.pid)
+    assert FROZEN_MARK[sys.platform] not in text
+
+
+def test_the_snapshot_of_a_process_gone_says_so():
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait(30)
+    assert "no process" in snapshot(child.pid)
