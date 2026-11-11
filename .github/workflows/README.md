@@ -72,7 +72,13 @@ run, and a manual run does not cancel it. Every job installs the `geoip`,
   ends the whole pytest process, so the rest of that shard does not run and
   there is no JUnit report for it. `-v` names the test that was running in
   either case, and each job uploads its JUnit
-  XML as `junit-<suite>-<os>[-<shard>]`. The diagnostic step does not run
+  XML as `junit-<suite>-<os>[-<shard>]`. A command to Chrome still
+  unanswered well inside its deadline makes `tests/hang_probe.py` write where
+  every asyncio task waits and what Chrome's processes are doing (`/proc` on
+  Linux, `sample` on macOS, threads and wait reasons on Windows) to
+  `$TELLURIUM_HANG_REPORTS/<test>.txt`; the integration jobs upload that
+  folder as `hang-reports-<os>[-<shard>]`, red job or not, when it is not
+  empty. The diagnostic step does not run
   `chrome.exe --version`: on Windows it opens a browser window and never
   exits.
   - **When**: on the same events as the Linux jobs (every push to `master`
