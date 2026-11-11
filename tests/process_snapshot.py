@@ -27,8 +27,10 @@ from pathlib import Path
 SAMPLE_SECONDS = 3
 #: Deadline of each subprocess: a stalled runner froze even ``Get-Process`` for 20 s.
 COMMAND_TIMEOUT = 45.0
-#: Lines of the call graph (macOS) or of the root's threads kept.
+#: Threads of the root process listed (Linux, Windows).
 MAX_LINES = 300
+#: Lines of ``sample``'s output kept (macOS): all of a browser process's ~60 threads.
+MAX_SAMPLE_LINES = 5000
 _TYPE = re.compile(r"--type=(\S+)")
 
 
@@ -183,11 +185,20 @@ def _sample(pid: int) -> str:
             text = Path(path).read_text(errors="replace")
         except OSError:
             return f"(no sample: {said.strip()[:500]})"
+    return trimmed_sample(text)
+
+
+def trimmed_sample(text: str) -> str:
+    """The call graph of every thread, the stacks it ends on most, and where
+    Chrome's binaries are loaded (to symbolize its ``ChromeMain + n`` frames)."""
     lines = text.splitlines()
     start = next((i for i, line in enumerate(lines) if line.startswith("Call graph:")), 0)
-    graph = [line[:200] for line in lines[start:] if line.strip()]
-    end = next((i for i, line in enumerate(graph) if line.startswith("Total number")), None)
-    return "\n".join(graph[:end][:MAX_LINES])
+    images = next((i for i, line in enumerate(lines) if line.startswith("Binary Images:")), None)
+    kept = [line[:240] for line in lines[start:images] if line.strip()][:MAX_SAMPLE_LINES]
+    if images is not None:
+        kept.append(lines[images])
+        kept.extend(line.strip() for line in lines[images + 1 :] if "Chrome" in line)
+    return "\n".join(kept)
 
 
 # --- Windows ----------------------------------------------------------------

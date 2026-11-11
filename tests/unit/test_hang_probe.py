@@ -15,7 +15,7 @@ from tellurium.cdp.transport._session import SessionRouter
 from tests import hang_probe, timeout_scale
 from tests.await_chain import awaiting, tasks_report
 from tests.process_freeze import frozen
-from tests.process_snapshot import snapshot
+from tests.process_snapshot import snapshot, trimmed_sample
 
 
 async def test_every_task_is_listed_with_the_awaits_it_is_suspended_in():
@@ -234,3 +234,26 @@ def test_the_watch_comes_before_the_deadline_and_scales_like_it(monkeypatch):
     assert hang_probe.watch_after(10.0) == 8.0
     # No deadline of its own (Page.navigate in a navigation of 30 s): before 30 s.
     assert hang_probe.watch_after(math.inf) == 20.0
+
+
+def test_a_macos_sample_keeps_every_thread_and_where_chrome_is_loaded():
+    threads = [
+        f"    1752 Thread_{n}\n    + 1752 thread_start  (in libsystem_pthread.dylib) + 8\n"
+        for n in range(400)
+    ]
+    sample = (
+        "Analysis of sampling Google Chrome (pid 4771) every 1 millisecond\n"
+        "Call graph:\n"
+        + "".join(threads)
+        + "\nTotal number in stack (recursive counted multiple times):\n"
+        "        1752       __psynch_rw_wrlock  (in libsystem_kernel.dylib)\n\n"
+        "Binary Images:\n"
+        "       0x100190000 -        0x100193fff  com.google.Chrome (142.0.7444.60) <AB12> /Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n"
+        "       0x11d398000 -        0x12a3fffff  com.google.Chrome.framework (142.0.7444.60) <CD34> /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/142.0.7444.60/Google Chrome Framework\n"
+        "       0x186ed0000 -        0x186f6ffff  dyld (1.0) <EF56> /usr/lib/dyld\n"
+    )
+    text = trimmed_sample(sample)
+    assert "Thread_399" in text
+    assert "__psynch_rw_wrlock" in text
+    assert "0x11d398000" in text and "Google Chrome Framework" in text
+    assert "/usr/lib/dyld" not in text
