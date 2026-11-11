@@ -41,6 +41,30 @@ async def test_every_task_is_listed_with_the_awaits_it_is_suspended_in():
     assert report.startswith("1 task(s)")
 
 
+async def test_the_chain_goes_into_an_async_generator_like_a_fixture():
+    gate = asyncio.Event()
+
+    async def launching_chrome():
+        await gate.wait()
+
+    async def a_browser_fixture():
+        await launching_chrome()
+        yield "browser"
+
+    async def setup():
+        return await a_browser_fixture().__anext__()
+
+    task = asyncio.create_task(setup())
+    await asyncio.sleep(0)
+    try:
+        lines = awaiting(task.get_coro())
+    finally:
+        gate.set()
+        await task
+    text = "\n".join(lines)
+    assert text.index("a_browser_fixture") < text.index("launching_chrome")
+
+
 async def test_the_chain_names_the_future_it_ends_on():
     future = asyncio.get_running_loop().create_future()
 

@@ -8,6 +8,8 @@ them, down to the future the innermost coroutine waits on.
 from __future__ import annotations
 
 import asyncio
+import gc
+import inspect
 import os
 from typing import Any
 
@@ -17,15 +19,32 @@ def awaiting(coro: Any) -> list[str]:
     line names the future it ends on, when it ends on one."""
     lines = []
     while coro is not None:
-        frame = getattr(coro, "cr_frame", None) or getattr(coro, "gi_frame", None)
+        coro = _generator_of(coro)
+        frame = (
+            getattr(coro, "cr_frame", None)
+            or getattr(coro, "gi_frame", None)
+            or getattr(coro, "ag_frame", None)
+        )
         if frame is None:
             lines.append(f"  on {_future(coro)}")
             break
         lines.append(
             f"  {_short(frame.f_code.co_filename)}:{frame.f_lineno} in {frame.f_code.co_name}"
         )
-        coro = getattr(coro, "cr_await", None) or getattr(coro, "gi_yieldfrom", None)
+        coro = (
+            getattr(coro, "cr_await", None)
+            or getattr(coro, "gi_yieldfrom", None)
+            or getattr(coro, "ag_await", None)
+        )
     return lines
+
+
+def _generator_of(awaited: Any) -> Any:
+    """The async generator behind an ``__anext__()``/``asend()`` awaitable (how
+    pytest-asyncio sets up a fixture), which has no attribute for it."""
+    if type(awaited).__name__ not in ("async_generator_asend", "async_generator_athrow"):
+        return awaited
+    return next((r for r in gc.get_referents(awaited) if inspect.isasyncgen(r)), awaited)
 
 
 def tasks_report() -> str:
