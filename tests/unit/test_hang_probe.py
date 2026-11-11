@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import math
 import subprocess
 import sys
 
 import pytest
 
+from tellurium.cdp.transport._base import CDPTransport
+from tellurium.cdp.transport._session import SessionRouter
+from tests import hang_probe, timeout_scale
 from tests.await_chain import awaiting, tasks_report
 from tests.process_freeze import frozen
 from tests.process_snapshot import snapshot
@@ -85,3 +90,123 @@ def test_the_snapshot_of_a_process_gone_says_so():
     child = subprocess.Popen([sys.executable, "-c", "pass"])
     child.wait(30)
     assert "no process" in snapshot(child.pid)
+
+
+class SilentChrome(CDPTransport):
+    """A pipe whose Chrome takes every command and never answers."""
+
+    def __init__(self):
+        self.sent: list[dict] = []
+        self._never = asyncio.Event()
+
+    async def send(self, data: bytes) -> None:
+        self.sent.append(json.loads(data.rstrip(b"\0")))
+
+    async def recv(self) -> dict:
+        await self._never.wait()
+        raise EOFError
+
+    async def close(self) -> None:
+        pass
+
+
+class LateChrome(SilentChrome):
+    """A pipe whose Chrome answers every command after *delay* seconds."""
+
+    def __init__(self, delay: float):
+        super().__init__()
+        self._replies: asyncio.Queue = asyncio.Queue()
+        self._delay = delay
+
+    async def send(self, data: bytes) -> None:
+        await super().send(data)
+        loop = asyncio.get_running_loop()
+        msg_id = self.sent[-1]["id"]
+        loop.call_later(self._delay, self._replies.put_nowait, {"id": msg_id, "result": {}})
+
+    async def recv(self) -> dict:
+        return await self._replies.get()
+
+
+@pytest.fixture
+def probe(monkeypatch, tmp_path):
+    """The probe installed, watching after 0.2 s the commands given at least 0.5 s."""
+    monkeypatch.delenv(timeout_scale.ENV, raising=False)
+    monkeypatch.setenv(hang_probe.ENV, str(tmp_path))
+    monkeypatch.setattr(hang_probe, "WATCH", 0.2)
+    monkeypatch.setattr(hang_probe, "MIN_LIMIT", 0.5)
+    monkeypatch.setattr(hang_probe, "LIVENESS_TIMEOUT", 0.2)
+    with hang_probe.installed():
+        hang_probe.begin_test("tests/unit/test_hang_probe.py::probe")
+        yield tmp_path
+
+
+async def test_a_command_without_a_reply_leaves_a_report_with_the_python_tasks(probe):
+    router = SessionRouter(SilentChrome())
+
+    async def a_command_chrome_never_answers():
+        await router.root.send("Page.navigate", {"url": "about:blank"}, timeout=1.0)
+
+    with pytest.raises(TimeoutError):
+        await a_command_chrome_never_answers()
+    [report] = probe.iterdir()
+    text = report.read_text()
+    assert "Page.navigate" in text
+    assert "tests/unit/test_hang_probe.py::probe" in text
+    assert "a_command_chrome_never_answers" in text.split("Python tasks", 1)[1]
+    assert "root Browser.getVersion: TimeoutError" in text
+    assert "no Chrome process" in text
+    assert "Page.navigate TimeoutError after 1.0" in text
+
+
+async def test_a_command_answered_in_time_leaves_no_report(probe):
+    router = SessionRouter(LateChrome(0.01))
+    reader = asyncio.create_task(router.run())
+    try:
+        assert await router.root.send("Browser.getVersion", timeout=1.0) == {}
+    finally:
+        reader.cancel()
+    assert not list(probe.iterdir())
+
+
+async def test_a_late_answer_is_reported_with_its_delay(probe):
+    router = SessionRouter(LateChrome(0.5))
+    reader = asyncio.create_task(router.run())
+    try:
+        await router.root.send("Browser.getVersion", timeout=2.0)
+    finally:
+        reader.cancel()
+    [report] = probe.iterdir()
+    assert "Browser.getVersion answered after 0." in report.read_text()
+
+
+async def test_a_deadline_shorter_than_the_least_watched_is_not_reported(probe):
+    router = SessionRouter(SilentChrome())
+    with pytest.raises(TimeoutError):
+        await router.root.send("Runtime.evaluate", timeout=0.4)
+    assert not list(probe.iterdir())
+
+
+async def test_only_the_first_stall_of_a_test_is_reported_in_full(probe):
+    router = SessionRouter(SilentChrome())
+    for method in ("Page.enable", "Page.reload"):
+        with pytest.raises(TimeoutError):
+            await router.root.send(method, timeout=0.6)
+    [report] = probe.iterdir()
+    text = report.read_text()
+    assert text.count("Python tasks") == 1
+    assert "Page.enable TimeoutError after" in text
+    assert "Page.reload TimeoutError after" in text
+
+
+def test_the_watch_comes_before_the_deadline_and_scales_like_it(monkeypatch):
+    monkeypatch.delenv(timeout_scale.ENV, raising=False)
+    assert hang_probe.watch_after(5.0) is None
+    assert hang_probe.watch_after(30.0) == 10.0
+    assert hang_probe.watch_after(10.0) == 8.0
+    assert hang_probe.watch_after(math.inf) == 10.0
+    monkeypatch.setenv(timeout_scale.ENV, "3")
+    assert hang_probe.watch_after(90.0) == 30.0
+    assert hang_probe.watch_after(10.0) == 8.0
+    # No deadline of its own (Page.navigate in a navigation of 30 s): before 30 s.
+    assert hang_probe.watch_after(math.inf) == 20.0

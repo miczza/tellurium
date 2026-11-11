@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.hang_probe import hang_probe, hang_probe_test  # noqa: F401 (autouse)
 from tests.timeout_scale import chrome_answer_deadlines_scaled  # noqa: F401 (autouse)
 
 FIXTURES_DIR = str(Path(__file__).parent / "fixtures")

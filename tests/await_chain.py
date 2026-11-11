@@ -8,6 +8,7 @@ them, down to the future the innermost coroutine waits on.
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 
@@ -20,7 +21,9 @@ def awaiting(coro: Any) -> list[str]:
         if frame is None:
             lines.append(f"  on {_future(coro)}")
             break
-        lines.append(f"  {frame.f_code.co_filename}:{frame.f_lineno} in {frame.f_code.co_name}")
+        lines.append(
+            f"  {_short(frame.f_code.co_filename)}:{frame.f_lineno} in {frame.f_code.co_name}"
+        )
         coro = getattr(coro, "cr_await", None) or getattr(coro, "gi_yieldfrom", None)
     return lines
 
@@ -44,3 +47,14 @@ def _future(awaited: Any) -> str:
 
 def _coro_name(coro: Any) -> str:
     return getattr(coro, "__qualname__", None) or type(coro).__name__
+
+
+def _short(filename: str) -> str:
+    """Relative to the working directory when under it, else its last three parts."""
+    try:
+        relative = os.path.relpath(filename)
+    except ValueError:  # Windows: another drive
+        relative = ".."
+    if not relative.startswith(".."):
+        return relative
+    return os.path.join("...", *filename.replace("\\", "/").split("/")[-3:])
