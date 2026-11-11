@@ -15,6 +15,8 @@ from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
 from typing import Any
 
+from tests.await_chain import awaiting
+
 #: How long a cancelled side task gets to unwind before it is reported as stuck.
 UNWIND = 5.0
 
@@ -46,7 +48,7 @@ async def _report(
 ) -> str | None:
     """What the side task did, once it is over; ``None`` if it ended well."""
     if not task.done():
-        where = "\n".join(_awaiting(task.get_coro()))
+        where = "\n".join(awaiting(task.get_coro()))
         took = loop.time() - started
         task.cancel()
         await asyncio.wait({task}, timeout=UNWIND)
@@ -63,15 +65,3 @@ def _failure(task: asyncio.Task) -> BaseException | None:
     if not task.done() or task.cancelled():
         return None
     return task.exception()
-
-
-def _awaiting(coro: Any) -> list[str]:
-    """The chain of awaits *coro* is suspended in, outermost first."""
-    lines = []
-    while coro is not None:
-        frame = getattr(coro, "cr_frame", None) or getattr(coro, "gi_frame", None)
-        if frame is None:
-            break
-        lines.append(f"  {frame.f_code.co_filename}:{frame.f_lineno} in {frame.f_code.co_name}")
-        coro = getattr(coro, "cr_await", None) or getattr(coro, "gi_yieldfrom", None)
-    return lines
