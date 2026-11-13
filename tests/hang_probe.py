@@ -45,7 +45,7 @@ import pytest
 from tellurium.browser.process import BrowserProcess
 from tellurium.cdp.transport._session import Session
 from tests.await_chain import tasks_report
-from tests.process_snapshot import snapshot
+from tests.process_snapshot import COMMAND_TIMEOUT, snapshot
 from tests.timeout_scale import scaled
 
 #: Folder of the reports; a temporary one when unset.
@@ -64,8 +64,10 @@ UNBOUNDED_WATCH = 20.0
 MIN_LIMIT = 8.0
 #: How long Chrome gets to answer the report's own commands.
 LIVENESS_TIMEOUT = 5.0
-#: How long a command that ended waits for its report still being made.
-REPORT_WAIT = 20.0
+#: How long a command that ended waits for its report still being made: as
+#: long as the snapshot's commands may take (``sample`` of a frozen Chrome on
+#: macOS takes over 20 s), so only a snapshot stuck past them is left behind.
+REPORT_WAIT = COMMAND_TIMEOUT + 15.0
 #: Full reports in a session at most: a Chrome gone mute for good stalls every test after.
 MAX_REPORTS = 20
 #: Bytes of Chrome's output kept in a report.

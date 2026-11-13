@@ -333,3 +333,12 @@ def test_without_the_variable_the_reports_go_to_a_folder_of_this_run(monkeypatch
     assert folder == hang_probe.report_dir()
     assert folder.parent.name == "tellurium-hang-reports"
     assert str(os.getpid()) in folder.name
+
+
+def test_the_end_of_a_command_waits_for_a_snapshot_as_long_as_its_commands_may_take():
+    """``sample`` of a frozen Chrome on macOS takes over 20 s (run 43390297210):
+    the end waits for it unless the snapshot itself is stuck past its commands'
+    own timeout."""
+    from tests import process_snapshot
+
+    assert hang_probe.REPORT_WAIT > process_snapshot.COMMAND_TIMEOUT + 10
