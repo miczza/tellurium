@@ -126,7 +126,19 @@ jobs:
         # local HTTP servers and discovers Chrome via find_chrome().
         env:
           TESTS: ${{ inputs.tests }}
+          TELLURIUM_HANG_REPORTS: ${{ runner.temp }}/hang-reports
+          # The probe's root-only views (kernel stack, sample of Chrome): runners only.
+          TELLURIUM_HANG_SUDO: "1"
         run: xvfb-run -a pytest ${TESTS:-tests/integration tests/stealth} -q -rfE --durations=15
+      - name: Upload hang reports
+        # tests/hang_probe.py: where tellurium and Chrome were when a command to
+        # Chrome stayed unanswered. Only when there is one.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hang-reports-linux
+          path: ${{ runner.temp }}/hang-reports
+          if-no-files-found: ignore
 
   # Windows and macOS: the same events as Linux (the repo is public, minutes are
   # free). A red test blocks as on Linux; a job without its JUnit report also
@@ -265,9 +277,20 @@ jobs:
         env:
           STOCK_CHROME: ${{ steps.chrome.outputs.chrome-path }}
           TESTS: ${{ inputs.tests }}
+          TELLURIUM_HANG_REPORTS: ${{ runner.temp }}/hang-reports
+          # The probe's root-only views (kernel stack, sample of Chrome): runners only.
+          TELLURIUM_HANG_SUDO: "1"
         run: |
           files=${TESTS:-$(python -m tests.shard ${{ matrix.shard }} 4 tests/integration)}
           pytest $files -v -rfEs --timeout=300 --junitxml=junit-integration.xml
+      - name: Upload hang reports
+        # Not junit-*: os-results counts those, one per job.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hang-reports-${{ matrix.os }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/hang-reports
+          if-no-files-found: ignore
       - name: Upload JUnit report
         if: always()
         uses: actions/upload-artifact@v4
