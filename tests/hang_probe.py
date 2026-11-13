@@ -13,7 +13,10 @@ it hangs, not as the test's teardown leaves it):
   (``tests.process_snapshot``), and the tail of Chrome's output.
 
 The report goes to ``$TELLURIUM_HANG_REPORTS/<test>.txt`` (the CI uploads the
-folder, red job or not), its path to the terminal. The first stall of a test
+folder, red job or not; unset, a folder of this run), its path to the
+terminal. It is written in sections, each on disk as soon as it is known: the
+test may fail, and its loop close, right after the watch fires; the snapshot's
+own thread writes it even then. The first stall of a test
 is reported in full, the next ones in a line; when the command ends, a line
 says how. A command answered in time costs a timer; nothing in ``tellurium/``
 changes.
@@ -28,6 +31,7 @@ import os
 import re
 import sys
 import tempfile
+import threading
 import time
 import weakref
 from collections.abc import Iterator
@@ -60,6 +64,8 @@ UNBOUNDED_WATCH = 20.0
 MIN_LIMIT = 8.0
 #: How long Chrome gets to answer the report's own commands.
 LIVENESS_TIMEOUT = 5.0
+#: How long a command that ended waits for its report still being made.
+REPORT_WAIT = 20.0
 #: Full reports in a session at most: a Chrome gone mute for good stalls every test after.
 MAX_REPORTS = 20
 #: Bytes of Chrome's output kept in a report.
@@ -83,6 +89,10 @@ _traffic: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _procs: weakref.WeakSet = weakref.WeakSet()
 _T0 = time.monotonic()
 _UNSAFE = re.compile(r"[^A-Za-z0-9_.-]+")
+_write_lock = threading.Lock()
+#: Without the variable: read once, before any test points ``tempfile`` elsewhere.
+_RUN_DIR = Path(tempfile.gettempdir(), "tellurium-hang-reports", f"{time.time_ns()}-{os.getpid()}")
+_NO_CHROME = "no Chrome process for this pipe (none started by BrowserProcess)"
 
 
 def watch_after(limit: float) -> float | None:
@@ -102,8 +112,9 @@ def begin_test(nodeid: str) -> None:
 
 
 def report_dir() -> Path:
-    folder = os.environ.get(ENV) or os.path.join(tempfile.gettempdir(), "tellurium-hang-reports")
-    return Path(folder)
+    """``$TELLURIUM_HANG_REPORTS``, else a folder of this run alone."""
+    folder = os.environ.get(ENV)
+    return Path(folder) if folder else _RUN_DIR
 
 
 @contextmanager
@@ -169,7 +180,12 @@ def hang_probe_test(request):
 def _start_report(
     session: Session, method: str, sent_at: float, limit: float
 ) -> asyncio.Task | None:
-    """The full report of the test's first stall as a task; a line for the next ones."""
+    """The full report of the test's first stall, a line for the next ones.
+
+    What is known now (the stall, Chrome's traffic, every task's awaits,
+    Chrome's output) goes to disk at once, in a file of its own: the test may
+    fail, and its loop close, right after. Chrome's snapshot and whether it
+    answers follow as they come (``_rest``)."""
     pending = asyncio.get_running_loop().time() - sent_at
     if _state.report is not None or _state.full_reports >= MAX_REPORTS:
         path = _state.report or _path_for(_state.test)
@@ -178,30 +194,32 @@ def _start_report(
     _state.full_reports += 1
     path = _state.report = _path_for(_state.test)
     tasks = tasks_report()  # now: where every task is as the watch fires
+    proc = next((p for p in list(_procs) if p.transport is session._router._transport), None)
+    _append(path, _head(session, method, sent_at, limit, tasks, proc), fresh=True)
+    reports.append(path)
     _emit(f"HANG PROBE: {method} pending for {pending:.1f}s in {_state.test} -> {path}")
+    pid = getattr(getattr(proc, "process", None), "pid", None)
     return asyncio.get_running_loop().create_task(
-        _safe_report(path, session, method, sent_at, limit, tasks), name="hang-probe-report"
+        _rest(path, session, pid), name="hang-probe-report"
     )
 
 
 async def _end(report: asyncio.Task | None, method: str, outcome: str, took: float) -> None:
-    """Wait for the report (Chrome is not closed before it is made), then note the end."""
-    if report is not None:
-        await asyncio.wait({report})
+    """Wait a while for the report (Chrome is not closed before it is made),
+    then note the end, even if this wait is cut short."""
     path = _state.report or _path_for(_state.test)
-    _append(path, f"=== end: {method} {outcome} after {took:.1f}s\n")
-
-
-async def _safe_report(path: Path, *args: Any) -> None:
+    late = ""
     try:
-        text = await _report(*args)
-    except Exception as exc:
-        text = f"=== HANG PROBE failed: {exc!r}\n"
-    await asyncio.to_thread(_append, path, text)
-    reports.append(path)
+        if report is not None:
+            await asyncio.wait({report}, timeout=REPORT_WAIT)
+            late = "" if report.done() else " (the report is still being made)"
+    finally:
+        _append(path, f"=== end: {method} {outcome} after {took:.1f}s{late}\n")
 
 
-async def _report(session: Session, method: str, sent_at: float, limit: float, tasks: str) -> str:
+def _head(
+    session: Session, method: str, sent_at: float, limit: float, tasks: str, proc: Any
+) -> str:
     router = session._router
     now = asyncio.get_running_loop().time()
     out = [
@@ -215,21 +233,7 @@ async def _report(session: Session, method: str, sent_at: float, limit: float, t
     since = sum(1 for t, *_ in traffic if t >= sent_at)
     out.append(f"--- messages from Chrome on this pipe: {since} since the send; the last 25:")
     out.extend(f"  {t - sent_at:+8.2f}s {what} {sid}" for t, what, sid in traffic[-25:])
-
-    proc = next((p for p in list(_procs) if p.transport is router._transport), None)
-    pid = getattr(getattr(proc, "process", None), "pid", None)
-    checks = [_check("root Browser.getVersion", router.root, "Browser.getVersion", {})]
-    if session.session_id:
-        expr = "[document.readyState, document.visibilityState, location.href]"
-        params = {"expression": expr, "returnByValue": True}
-        checks.append(_check("session Runtime.evaluate", session, "Runtime.evaluate", params))
-    chrome = asyncio.to_thread(snapshot, pid) if pid is not None else _no_chrome()
-    shot, *answers = await asyncio.gather(chrome, *checks)
-    out.append("--- does Chrome answer?")
-    out.extend(answers)
     out.append(f"--- Python tasks: {tasks}")
-    out.append(f"--- Chrome {pid} (this pipe):" if pid is not None else "--- Chrome:")
-    out.append(shot)
     output = getattr(proc, "_output", None)
     if output is not None:
         out.append(f"--- Chrome's output, the last {OUTPUT_TAIL} characters:")
@@ -237,8 +241,35 @@ async def _report(session: Session, method: str, sent_at: float, limit: float, t
     return "\n".join(out) + "\n"
 
 
-async def _no_chrome() -> str:
-    return "no Chrome process for this pipe (none started by BrowserProcess)"
+async def _rest(path: Path, session: Session, pid: int | None) -> None:
+    """Chrome's snapshot (written by its own thread, which a closing loop does
+    not stop) and whether Chrome answers; a cut-short part says so."""
+    if pid is None:
+        _append(path, f"--- Chrome:\n{_NO_CHROME}\n")
+        shot = None
+    else:
+        shot = asyncio.ensure_future(asyncio.to_thread(_snapshot_into, path, pid))
+    checks = [_check("root Browser.getVersion", session._router.root, "Browser.getVersion", {})]
+    if session.session_id:
+        expr = "[document.readyState, document.visibilityState, location.href]"
+        params = {"expression": expr, "returnByValue": True}
+        checks.append(_check("session Runtime.evaluate", session, "Runtime.evaluate", params))
+    try:
+        answers = await asyncio.gather(*checks)
+    except BaseException as exc:
+        _append(path, f"--- does Chrome answer? cut short: {type(exc).__name__}\n")
+        raise
+    _append(path, "--- does Chrome answer?\n" + "\n".join(answers) + "\n")
+    if shot is not None:
+        await shot
+
+
+def _snapshot_into(path: Path, pid: int) -> None:
+    try:
+        text = snapshot(pid)
+    except Exception as exc:  # noqa: BLE001 — the report says it, the test goes on
+        text = f"snapshot failed: {exc!r}"
+    _append(path, f"--- Chrome {pid} (this pipe):\n{text}\n")
 
 
 async def _check(label: str, session: Session, method: str, params: dict) -> str:
@@ -262,11 +293,15 @@ def _path_for(test: str) -> Path:
     return report_dir() / f"{_UNSAFE.sub('_', test).strip('_')[-120:] or 'run'}.txt"
 
 
-def _append(path: Path, text: str) -> None:
-    """A few lines on a failure path: small enough to write from the loop."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(text)
+def _append(path: Path, text: str, fresh: bool = False) -> None:
+    """A section of a report, on disk when this returns (the loop's and the
+    snapshot thread's alike); *fresh* starts the file anew. A few lines on a
+    failure path: small enough to write from the loop."""
+    with _write_lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w" if fresh else "a", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
 
 
 def _emit(text: str) -> None:

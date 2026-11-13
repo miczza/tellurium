@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import os
 import subprocess
 import sys
 
@@ -257,3 +258,78 @@ def test_a_macos_sample_keeps_every_thread_and_where_chrome_is_loaded():
     assert "__psynch_rw_wrlock" in text
     assert "0x11d398000" in text and "Google Chrome Framework" in text
     assert "/usr/lib/dyld" not in text
+
+
+async def test_a_navigation_cut_short_from_outside_is_reported(probe):
+    """Like ``Tab.get``: ``Page.navigate`` has no deadline of its own, the
+    navigation's ``wait_for`` cancels it."""
+    router = SessionRouter(SilentChrome())
+
+    async def a_navigation_of_the_test():
+        await router.root.send("Page.navigate", {"url": "about:blank"}, timeout=math.inf)
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(a_navigation_of_the_test(), 0.5)
+    [report] = probe.iterdir()
+    text = report.read_text()
+    assert "Page.navigate (session root) pending" in text and "deadline infs" in text
+    assert "a_navigation_of_the_test" in text.split("Python tasks", 1)[1]
+    assert "root Browser.getVersion: TimeoutError" in text
+    assert "no Chrome process" in text
+    assert "=== end: Page.navigate CancelledError after 0.5" in text
+
+
+class _AChrome:
+    """What the probe reads of a ``BrowserProcess``: its pipe and its process."""
+
+    def __init__(self, transport, process):
+        self.transport, self.process = transport, process
+
+
+def test_a_test_that_falls_right_after_the_warning_still_leaves_the_report(
+    probe, monkeypatch, sleeper
+):
+    """The test does not wait for the report and its loop closes at once: what
+    was known at the warning is on disk already, Chrome's snapshot follows."""
+    monkeypatch.setattr(hang_probe, "LIVENESS_TIMEOUT", 5.0)  # the checks outlast the test
+    monkeypatch.setattr(hang_probe, "REPORT_WAIT", 0.0)  # and nobody waits for them
+
+    async def a_test_that_falls():
+        router = SessionRouter(SilentChrome())
+        chrome = _AChrome(router._transport, sleeper)
+        hang_probe._procs.add(chrome)
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(
+                router.root.send("Page.navigate", {"url": "about:blank"}, timeout=math.inf), 0.5
+            )
+        [report] = probe.iterdir()
+        text = report.read_text()
+        assert "Page.navigate (session root) pending" in text
+        assert "a_test_that_falls" in text.split("Python tasks", 1)[1]
+
+    asyncio.run(a_test_that_falls())
+    [report] = probe.iterdir()
+    text = report.read_text()
+    assert f"--- Chrome {sleeper.pid} (this pipe):" in text
+    assert str(sleeper.pid) in text.split(f"--- Chrome {sleeper.pid} (this pipe):", 1)[1]
+    assert "does Chrome answer? cut short: CancelledError" in text
+    assert "=== end: Page.navigate CancelledError after 0.5" in text
+
+
+async def test_a_full_report_starts_its_file_afresh(probe):
+    stale = probe / "tests_unit_test_hang_probe.py_probe.txt"
+    stale.write_text("=== end: Page.navigate answered after 1.0s\n")
+    router = SessionRouter(SilentChrome())
+    with pytest.raises(TimeoutError):
+        await router.root.send("Page.enable", timeout=0.6)
+    text = stale.read_text()
+    assert "answered after 1.0s" not in text
+    assert "Page.enable TimeoutError after" in text
+
+
+def test_without_the_variable_the_reports_go_to_a_folder_of_this_run(monkeypatch):
+    monkeypatch.delenv(hang_probe.ENV, raising=False)
+    folder = hang_probe.report_dir()
+    assert folder == hang_probe.report_dir()
+    assert folder.parent.name == "tellurium-hang-reports"
+    assert str(os.getpid()) in folder.name
