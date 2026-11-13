@@ -3,21 +3,21 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
 
 import pytest
 
-from tellurium.cdp.transport._base import CDPTransport
 from tellurium.cdp.transport._session import SessionRouter
 from tests import hang_probe, timeout_scale
 from tests.await_chain import awaiting, tasks_report
 from tests.process_freeze import frozen
 from tests.process_snapshot import snapshot, trimmed_sample
+from tests.unit.fake_chrome import LateChrome, ProbedChrome, SilentChrome
 
 
 async def test_every_task_is_listed_with_the_awaits_it_is_suspended_in():
@@ -116,42 +116,6 @@ def test_the_snapshot_of_a_process_gone_says_so():
     child = subprocess.Popen([sys.executable, "-c", "pass"])
     child.wait(30)
     assert "no process" in snapshot(child.pid)
-
-
-class SilentChrome(CDPTransport):
-    """A pipe whose Chrome takes every command and never answers."""
-
-    def __init__(self):
-        self.sent: list[dict] = []
-        self._never = asyncio.Event()
-
-    async def send(self, data: bytes) -> None:
-        self.sent.append(json.loads(data.rstrip(b"\0")))
-
-    async def recv(self) -> dict:
-        await self._never.wait()
-        raise EOFError
-
-    async def close(self) -> None:
-        pass
-
-
-class LateChrome(SilentChrome):
-    """A pipe whose Chrome answers every command after *delay* seconds."""
-
-    def __init__(self, delay: float):
-        super().__init__()
-        self._replies: asyncio.Queue = asyncio.Queue()
-        self._delay = delay
-
-    async def send(self, data: bytes) -> None:
-        await super().send(data)
-        loop = asyncio.get_running_loop()
-        msg_id = self.sent[-1]["id"]
-        loop.call_later(self._delay, self._replies.put_nowait, {"id": msg_id, "result": {}})
-
-    async def recv(self) -> dict:
-        return await self._replies.get()
 
 
 @pytest.fixture
@@ -280,13 +244,6 @@ async def test_a_navigation_cut_short_from_outside_is_reported(probe):
     assert "=== end: Page.navigate CancelledError after 0.5" in text
 
 
-class _AChrome:
-    """What the probe reads of a ``BrowserProcess``: its pipe and its process."""
-
-    def __init__(self, transport, process):
-        self.transport, self.process = transport, process
-
-
 def test_a_test_that_falls_right_after_the_warning_still_leaves_the_report(
     probe, monkeypatch, sleeper
 ):
@@ -297,7 +254,7 @@ def test_a_test_that_falls_right_after_the_warning_still_leaves_the_report(
 
     async def a_test_that_falls():
         router = SessionRouter(SilentChrome())
-        chrome = _AChrome(router._transport, sleeper)
+        chrome = ProbedChrome(router._transport, sleeper)
         hang_probe._procs.add(chrome)
         with pytest.raises(TimeoutError):
             await asyncio.wait_for(
@@ -348,9 +305,11 @@ def test_the_end_of_a_command_waits_for_a_snapshot_as_long_as_its_commands_may_t
 async def test_an_answer_after_the_warning_comes_back_at_once(probe, monkeypatch, sleeper):
     """The probe never holds an answer: Chrome answers at 0.5 s, the report's
     snapshot takes 3 s, and a caller's wait_for of 1.5 s still has the answer."""
-    monkeypatch.setattr(hang_probe, "snapshot", lambda pid: time.sleep(3) or "a slow snapshot")
+    monkeypatch.setattr(
+        hang_probe, "snapshot", lambda pid, since=None: time.sleep(3) or "a slow snapshot"
+    )
     router = SessionRouter(LateChrome(0.5))
-    chrome = _AChrome(router._transport, sleeper)
+    chrome = ProbedChrome(router._transport, sleeper)
     hang_probe._procs.add(chrome)
     reader = asyncio.create_task(router.run())
     try:
@@ -362,6 +321,113 @@ async def test_an_answer_after_the_warning_comes_back_at_once(probe, monkeypatch
     assert "=== end: Page.navigate answered after 0.5" in report.read_text()
 
 
+async def test_the_report_lists_the_requests_to_the_test_servers_around_the_send(probe):
+    """Whether the server got the navigation's request, and when it answered:
+    a stall before the request is not one after the response (R4-B)."""
+    router = SessionRouter(LateChrome(0.6))
+    reader = asyncio.create_task(router.run())
+    early = hang_probe.request_arrived("127.0.0.1:1/early.html")
+    hang_probe.request_answered(early)
+    await asyncio.sleep(0.05)  # past a tick of Windows' monotonic clock (15.6 ms)
+    loop = asyncio.get_running_loop()
+
+    def serve(path: str, answer: bool) -> None:
+        entry = hang_probe.request_arrived(path)
+        if answer:
+            hang_probe.request_answered(entry)
+
+    loop.call_later(0.1, serve, "127.0.0.1:1/frame.html", True)
+    loop.call_later(0.4, serve, "127.0.0.1:1/late.html", False)
+    try:
+        await router.root.send("Page.navigate", {"url": "about:blank"}, timeout=2.0)
+    finally:
+        reader.cancel()
+    [report] = probe.iterdir()
+    text = report.read_text()
+    head, end = text.split("=== end", 1)
+    assert "early.html" not in text
+    # Windows' loop fires timers on its 15.6 ms clock: a range, not digits.
+    [(came, went)] = re.findall(
+        r"\+([\d.]+)s GET 127.0.0.1:1/frame.html, answered at \+([\d.]+)s", head
+    )
+    assert 0.05 < float(came) <= float(went) < 0.3
+    assert "late.html" not in head
+    [late] = re.findall(r"\+([\d.]+)s GET 127.0.0.1:1/late.html, not answered", end)
+    assert 0.3 < float(late) < 0.6
+
+
+async def test_the_report_says_when_the_send_was_on_the_clock_of_the_snapshot(probe):
+    router = SessionRouter(SilentChrome())
+    before = time.time()
+    with pytest.raises(TimeoutError):
+        await router.root.send("Page.enable", timeout=0.6)
+    [report] = probe.iterdir()
+    [sent] = re.findall(r"sent at Unix time ([\d.]+)", report.read_text())
+    assert before - 0.1 < float(sent) < before + 0.1
+
+
+async def test_a_navigation_shorter_than_the_watch_is_watched_within_its_own_deadline(
+    probe, monkeypatch
+):
+    """``Page.navigate`` has no deadline of its own: the navigation's bounds it,
+    and a ``tab.get(timeout=1)`` is watched within it, not at the fixed watch."""
+    from tellurium.browser import tab as tab_module
+    from tellurium.browser.navigation import NavigationTimeoutError
+
+    monkeypatch.setattr(hang_probe, "WATCH", 10.0)
+    monkeypatch.setattr(hang_probe, "UNBOUNDED_WATCH", 10.0)
+    router = SessionRouter(SilentChrome())
+    with pytest.raises(NavigationTimeoutError):
+        await tab_module.navigate(router.root, "about:blank", wait_until="load", timeout=1.0)
+    [report] = probe.iterdir()
+    assert re.search(r"Page.navigate \(session root\) pending for 0\.[78]s", report.read_text())
+
+
+async def test_the_end_says_how_long_the_command_took_not_the_report(probe, monkeypatch, sleeper):
+    """A slow snapshot (seconds on Windows and macOS) does not stretch the
+    duration of the command in the end line."""
+    monkeypatch.setattr(
+        hang_probe, "snapshot", lambda pid, since=None: time.sleep(1.5) or "a slow snapshot"
+    )
+    router = SessionRouter(SilentChrome())
+    hang_probe._procs.add(ProbedChrome(router._transport, sleeper))
+    with pytest.raises(TimeoutError):
+        await router.root.send("Page.enable", timeout=0.6)
+    [report] = probe.iterdir()
+    assert "=== end: Page.enable TimeoutError after 0.6s" in report.read_text()
+
+
+async def test_the_view_of_the_machine_comes_within_the_wait_while_chromes_tree_is_slow(
+    probe, monkeypatch, sleeper
+):
+    """On Windows Chrome's tree (full, then light) may outlast the wait for the
+    report: the machine's view (the shadow copy events) does not queue behind
+    it, it is in the report before the end line."""
+    monkeypatch.setattr(
+        hang_probe, "snapshot", lambda pid, since=None: time.sleep(3) or "a slow tree"
+    )
+    monkeypatch.setattr(hang_probe, "machine", lambda since=None: "a quick view")
+    monkeypatch.setattr(hang_probe, "REPORT_WAIT", 1.0)
+    router = SessionRouter(SilentChrome())
+    chrome = ProbedChrome(router._transport, sleeper)  # held: the probe keeps it weakly
+    hang_probe._procs.add(chrome)
+    with pytest.raises(TimeoutError):
+        await router.root.send("Page.enable", timeout=0.6)
+    [report] = probe.iterdir()
+    text = report.read_text()
+    assert "a slow tree" not in text
+    assert text.index("--- the machine:\na quick view") < text.index("=== end: Page.enable")
+
+
+def test_the_view_of_the_machine_on_windows_ends_within_the_wait_for_the_report():
+    """Its PowerShell runs alone in its thread: its own deadline, then the
+    ending of what it started past it, fit in the wait."""
+    from tests import process_snapshot as ps
+
+    worst = ps.WINDOWS_FULL_TIMEOUT + ps.TASKKILL_TIMEOUT + ps.PIPES_TIMEOUT
+    assert hang_probe.REPORT_WAIT > worst + 5
+
+
 _PARKED_SAMPLE = "sample of 1, 3 s:\n    + 1 __psynch_rw_wrlock  (in libsystem_kernel.dylib) + 8"
 
 
@@ -370,12 +436,12 @@ async def test_after_lldb_detaches_the_report_says_whether_chrome_answers(
 ):
     """An attach can wake a thread that missed its wakeup: the report says
     whether Chrome answers once lldb has let it go."""
-    monkeypatch.setattr(hang_probe, "snapshot", lambda pid: _PARKED_SAMPLE)
+    monkeypatch.setattr(hang_probe, "snapshot", lambda pid, since=None: _PARKED_SAMPLE)
     monkeypatch.setattr(
         hang_probe.blocked_locks, "rwlocks", lambda pid, s: "read-write locks waited on (lldb):"
     )
     router = SessionRouter(SilentChrome())
-    chrome = _AChrome(router._transport, sleeper)  # the probe holds it weakly
+    chrome = ProbedChrome(router._transport, sleeper)  # the probe holds it weakly
     hang_probe._procs.add(chrome)
     with pytest.raises(TimeoutError):
         await router.root.send("Page.navigate", {"url": "about:blank"}, timeout=1.0)
@@ -389,12 +455,14 @@ async def test_after_lldb_detaches_the_report_says_whether_chrome_answers(
 
 async def test_a_command_answered_during_the_sample_gets_no_lldb(probe, monkeypatch, sleeper):
     attached: list[int] = []
-    monkeypatch.setattr(hang_probe, "snapshot", lambda pid: time.sleep(1) or _PARKED_SAMPLE)
+    monkeypatch.setattr(
+        hang_probe, "snapshot", lambda pid, since=None: time.sleep(1) or _PARKED_SAMPLE
+    )
     monkeypatch.setattr(
         hang_probe.blocked_locks, "rwlocks", lambda pid, s: attached.append(pid) or "attached"
     )
     router = SessionRouter(LateChrome(0.5))
-    chrome = _AChrome(router._transport, sleeper)  # the probe holds it weakly
+    chrome = ProbedChrome(router._transport, sleeper)  # the probe holds it weakly
     hang_probe._procs.add(chrome)
     reader = asyncio.create_task(router.run())
     try:

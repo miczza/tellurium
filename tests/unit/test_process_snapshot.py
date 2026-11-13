@@ -3,6 +3,8 @@ something even on a stalled Windows runner."""
 
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 import sys
 import time
@@ -50,6 +52,40 @@ def test_a_windows_snapshot_that_times_out_falls_back_to_a_light_list(monkeypatc
     assert [c[0] for c in calls] == ["powershell", "tasklist"]
     assert "powershell timed out" in text
     assert '"chrome.exe","4368"' in text
+
+
+def test_each_process_says_when_it_was_born_from_the_send(tmp_path):
+    """The birth of each process of the tree, in seconds from the stalled send:
+    whether Chrome's new renderer was born late (R4-B)."""
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        time.sleep(0.5)
+        since = time.time() - 30.0  # the send, 30 s before the snapshot
+        text = process_snapshot.snapshot(child.pid, since=since)
+    finally:
+        child.kill()
+        child.wait(10)
+    [born] = re.findall(rf"pid {child.pid} .*born=([+-][\d.]+)s", text)
+    assert 25.0 < float(born) < 30.5, text
+
+
+def test_a_snapshot_without_a_send_gives_the_utc_clock():
+    text = process_snapshot.snapshot(os.getpid())
+    assert re.search(rf"pid {os.getpid()} .*born=\d\d:\d\d:\d\d\.\d\d\dZ", text), text
+
+
+def test_the_machine_view_names_the_load_of_the_whole_machine():
+    text = process_snapshot.machine(since=time.time() - 5.0)
+    assert text.strip()
+    if sys.platform != "win32":
+        assert "load average" in text
+    else:  # a shadow copy probably froze a runner: its events, "(none)" included, are there
+        assert "shadow copy events since" in text, text
+
+
+def test_a_moment_of_the_machine_view_is_given_from_the_send_like_a_birth():
+    text = process_snapshot.births("pid 7 x born@1000500\n  System volsnap at@999000 x", 1000.0)
+    assert text == "pid 7 x born=+0.50s\n  System volsnap at=-1.00s x"
 
 
 class _RootCommand:

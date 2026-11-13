@@ -7,10 +7,12 @@ it hangs, not as the test's teardown leaves it):
 
 * the chain of awaits of every asyncio task (``tests.await_chain``), taken
   the moment the watch fires;
-* the messages Chrome sent on that pipe around the command, and whether
-  Chrome still answers the root and the command's session;
-* the process tree of that Chrome and where its browser process is
-  (``tests.process_snapshot``), and the tail of Chrome's output;
+* the messages Chrome sent on that pipe around the command, the requests
+  the tests' HTTP servers got since it was sent (``request_arrived``), and
+  whether Chrome still answers the root and the command's session;
+* the process tree of that Chrome with the birth of each process, where its
+  browser process is, the whole machine (``tests.process_snapshot``), and
+  the tail of Chrome's output;
 * on macOS, when its threads are parked on a read-write lock and the command
   is still unanswered once the sample is written, who holds that lock
   (``tests.blocked_locks``: lldb stops all of Chrome for seconds, so not for
@@ -31,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import contextvars
 import math
 import os
 import re
@@ -47,11 +50,13 @@ from typing import Any
 
 import pytest
 
+from tellurium.browser import navigation as navigation_module
+from tellurium.browser import tab as tab_module
 from tellurium.browser.process import BrowserProcess
 from tellurium.cdp.transport._session import Session
 from tests import blocked_locks
 from tests.await_chain import tasks_report
-from tests.process_snapshot import COMMAND_TIMEOUT, snapshot
+from tests.process_snapshot import COMMAND_TIMEOUT, machine, snapshot
 from tests.timeout_scale import scaled
 
 #: Folder of the reports; a temporary one when unset.
@@ -63,7 +68,9 @@ WATCH = 10.0
 #: ...but before this share of its own deadline, so that it is still pending...
 SHARE = 0.8
 #: ...and before this when it has none (``Page.navigate`` inside a navigation,
-#: bounded by ``Tab.get``'s 30 s, which is not stretched).
+#: bounded by the navigation's deadline: ``navigation.NAVIGATION_TIMEOUT``,
+#: stretched like the others, or the test's own; a shorter one is watched at
+#: its share).
 UNBOUNDED_WATCH = 20.0
 #: Deadlines shorter than this are not watched: they are the tests' own, made
 #: to expire on frozen pages; Chrome's waits are 10 s and longer.
@@ -73,6 +80,7 @@ LIVENESS_TIMEOUT = 5.0
 #: How long a command that ended waits for its report still being made: as
 #: long as the snapshot's commands may take (``sample`` of a frozen Chrome on
 #: macOS takes over 20 s), so only a snapshot stuck past them is left behind.
+#: The machine's view, in a thread of its own, ends within it even on Windows.
 REPORT_WAIT = COMMAND_TIMEOUT + 15.0
 #: Full reports in a session at most: a Chrome gone mute for good stalls every test after.
 MAX_REPORTS = 20
@@ -103,16 +111,38 @@ _running: set[asyncio.Task] = set()
 #: Without the variable: read once, before any test points ``tempfile`` elsewhere.
 _RUN_DIR = Path(tempfile.gettempdir(), "tellurium-hang-reports", f"{time.time_ns()}-{os.getpid()}")
 _NO_CHROME = "no Chrome process for this pipe (none started by BrowserProcess)"
+#: The deadline (loop clock) of the navigation the next ``Page.navigate`` is in.
+_navigation_deadline: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "hang_probe_navigation_deadline", default=None
+)
+#: Requests to the tests' HTTP servers: ``[arrived, where, answered or None]``
+#: on the loop's clock (``time.monotonic``), written by the servers' threads.
+_requests: collections.deque = collections.deque(maxlen=500)
 
 
-def watch_after(limit: float) -> float | None:
+def request_arrived(where: str) -> list:
+    """A request to a test server (*where*: host, port and path) has arrived;
+    pass what this returns to :func:`request_answered`."""
+    entry = [time.monotonic(), where, None]
+    _requests.append(entry)
+    return entry
+
+
+def request_answered(entry: list) -> None:
+    entry[2] = time.monotonic()
+
+
+def watch_after(limit: float, bound: float | None = None) -> float | None:
     """When a command with deadline *limit* is reported if still pending;
-    ``None`` when it is not watched."""
+    ``None`` when it is not watched. *bound*: what is left of the navigation
+    a command without a deadline is in."""
     if limit < MIN_LIMIT:
         return None
     first = scaled(WATCH)
     if math.isinf(limit):
-        return min(first, UNBOUNDED_WATCH)
+        if bound is None:
+            return min(first, UNBOUNDED_WATCH)
+        return None if bound < MIN_LIMIT else min(first, UNBOUNDED_WATCH, SHARE * bound)
     return min(first, SHARE * limit)
 
 
@@ -132,14 +162,16 @@ def installed(config: Any = None) -> Iterator[None]:
     """The probe patched into ``Session`` and ``BrowserProcess`` for the body."""
     real_send, real_handle = Session.send, Session._handle_message
     real_spawn = BrowserProcess.spawn
+    real_navigate = navigation_module.navigate
     _state.config, _state.real_send = config, real_send
 
     async def send(self, method, params=None, timeout=None):
+        loop = asyncio.get_running_loop()
         limit = self._router.default_timeout if timeout is None else timeout
-        after = watch_after(limit)
+        deadline = _navigation_deadline.get()
+        after = watch_after(limit, None if deadline is None else deadline - loop.time())
         if after is None:
             return await real_send(self, method, params, timeout)
-        loop = asyncio.get_running_loop()
         sent_at = loop.time()
         made: list[asyncio.Task | None] = []
         answered = threading.Event()  # read by the snapshot's thread
@@ -153,12 +185,12 @@ def installed(config: Any = None) -> Iterator[None]:
         except BaseException as exc:
             watch.cancel()
             if made:  # Chrome is not closed before the report is made, for a while
-                await _end(made[0], method, type(exc).__name__, loop.time() - sent_at)
+                await _end(made[0], method, type(exc).__name__, sent_at, loop.time() - sent_at)
             raise
         watch.cancel()
         answered.set()
         if made:  # an answer is never held: the report goes on by itself
-            _note_end(method, "answered", loop.time() - sent_at, made[0])
+            _note_end(method, "answered", sent_at, loop.time() - sent_at, made[0])
         return result
 
     async def handle(self, msg):
@@ -169,12 +201,21 @@ def installed(config: Any = None) -> Iterator[None]:
         _procs.add(self)
         return await real_spawn(self, *args, **kwargs)
 
+    async def navigate(session, url, *, timeout, **kwargs):
+        token = _navigation_deadline.set(asyncio.get_running_loop().time() + timeout)
+        try:
+            return await real_navigate(session, url, timeout=timeout, **kwargs)
+        finally:
+            _navigation_deadline.reset(token)
+
     Session.send, Session._handle_message, BrowserProcess.spawn = send, handle, spawn
+    navigation_module.navigate = tab_module.navigate = navigate
     try:
         yield
     finally:
         Session.send, Session._handle_message = real_send, real_handle
         BrowserProcess.spawn = real_spawn
+        navigation_module.navigate = tab_module.navigate = real_navigate
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -212,28 +253,47 @@ def _start_report(
     reports.append(path)
     _emit(f"HANG PROBE: {method} pending for {pending:.1f}s in {_state.test} -> {path}")
     pid = getattr(getattr(proc, "process", None), "pid", None)
+    sent_wall = time.time() - pending
     task = asyncio.get_running_loop().create_task(
-        _rest(path, session, pid, method, answered), name="hang-probe-report"
+        _rest(path, session, pid, sent_wall, method, answered), name="hang-probe-report"
     )
     _running.add(task)  # it may outlive the command that started it
     task.add_done_callback(_running.discard)
     return task
 
 
-async def _end(report: asyncio.Task | None, method: str, outcome: str, took: float) -> None:
+async def _end(
+    report: asyncio.Task | None, method: str, outcome: str, sent_at: float, took: float
+) -> None:
     """A command that failed: wait a while for the report (Chrome is not closed
     before it is made), then note the end, even if this wait is cut short."""
     try:
         if report is not None:
             await asyncio.wait({report}, timeout=REPORT_WAIT)
     finally:
-        _note_end(method, outcome, took, report)
+        _note_end(method, outcome, sent_at, took, report)
 
 
-def _note_end(method: str, outcome: str, took: float, report: asyncio.Task | None) -> None:
+def _note_end(
+    method: str, outcome: str, sent_at: float, took: float, report: asyncio.Task | None
+) -> None:
+    """How the command ended (*took* seconds after it was sent), and the
+    requests the servers got since it was sent."""
     path = _state.report or _path_for(_state.test)
     late = "" if report is None or report.done() else " (the report is still being made)"
-    _append(path, f"=== end: {method} {outcome} after {took:.1f}s{late}\n")
+    lines = [f"=== end: {method} {outcome} after {took:.1f}s{late}"]
+    lines.append("--- requests to the test servers since the send, at the end:")
+    lines.extend(_requests_since(sent_at) or ["  (none)"])
+    _append(path, "\n".join(lines) + "\n")
+
+
+def _requests_since(sent_at: float) -> list[str]:
+    out = []
+    for arrived, where, answered in list(_requests):
+        if arrived >= sent_at:
+            end = "not answered" if answered is None else f"answered at {answered - sent_at:+.2f}s"
+            out.append(f"  {arrived - sent_at:+.2f}s GET {where}, {end}")
+    return out
 
 
 def _head(
@@ -246,12 +306,14 @@ def _head(
         f"{method} (session {(session.session_id or 'root')[:8]}) pending for "
         f"{now - sent_at:.1f}s, deadline {limit:g}s; test clock "
         f"{time.monotonic() - _state.test_started:.1f}s, run clock {time.monotonic() - _T0:.1f}s; "
-        f"{sys.platform}",
+        f"{sys.platform}; sent at Unix time {time.time() - (now - sent_at):.3f}",
     ]
     traffic = list(_traffic.get(router, ()))
     since = sum(1 for t, *_ in traffic if t >= sent_at)
     out.append(f"--- messages from Chrome on this pipe: {since} since the send; the last 25:")
     out.extend(f"  {t - sent_at:+8.2f}s {what} {sid}" for t, what, sid in traffic[-25:])
+    out.append("--- requests to the test servers since the send:")
+    out.extend(_requests_since(sent_at) or ["  (none)"])
     out.append(f"--- Python tasks: {tasks}")
     output = getattr(proc, "_output", None)
     if output is not None:
@@ -261,16 +323,27 @@ def _head(
 
 
 async def _rest(
-    path: Path, session: Session, pid: int | None, method: str, answered: threading.Event
+    path: Path,
+    session: Session,
+    pid: int | None,
+    sent_wall: float,
+    method: str,
+    answered: threading.Event,
 ) -> None:
-    """Chrome's snapshot (written by its own thread, which a closing loop does
-    not stop) and whether Chrome answers, again after lldb if it attached; a
-    cut-short part says so."""
+    """Chrome's snapshot and the machine's (each written by a thread of its
+    own, which a closing loop does not stop) and whether Chrome answers, again
+    after lldb if it attached; a cut-short part says so. The machine's view
+    does not queue behind Chrome's tree: on Windows the tree (full, then
+    light) may outlast ``REPORT_WAIT``, the view (with the shadow copy events)
+    fits in it alone."""
+    view = asyncio.ensure_future(asyncio.to_thread(_machine_into, path, sent_wall))
     if pid is None:
         _append(path, f"--- Chrome:\n{_NO_CHROME}\n")
         shot = None
     else:
-        shot = asyncio.ensure_future(asyncio.to_thread(_snapshot_into, path, pid, answered))
+        shot = asyncio.ensure_future(
+            asyncio.to_thread(_snapshot_into, path, pid, answered, sent_wall)
+        )
     checks = [_check("root Browser.getVersion", session._router.root, "Browser.getVersion", {})]
     if session.session_id:
         expr = "[document.readyState, document.visibilityState, location.href]"
@@ -282,19 +355,23 @@ async def _rest(
         _append(path, f"--- does Chrome answer? cut short: {type(exc).__name__}\n")
         raise
     _append(path, "--- does Chrome answer?\n" + "\n".join(answers) + "\n")
+    await view
     if shot is not None and await shot:
         await _after_detach(path, session, method, answered)
 
 
-def _snapshot_into(path: Path, pid: int, answered: threading.Event) -> bool:
-    """Chrome's snapshot, in the report before anything else is tried; then,
-    if its threads wait on a read-write lock and the command has no answer
-    yet, who holds the lock. Whether lldb attached."""
+def _snapshot_into(
+    path: Path, pid: int, answered: threading.Event, sent_wall: float | None = None
+) -> bool:
+    """Chrome's snapshot (*pid*, births in seconds from the send), in the
+    report before anything else is tried; then, if its threads wait on a
+    read-write lock and the command has no answer yet, who holds the lock.
+    Whether lldb attached."""
     try:
-        text = snapshot(pid)
+        text = snapshot(pid, since=sent_wall)
     except Exception as exc:  # noqa: BLE001 — the report says it, the test goes on
         text = f"snapshot failed: {exc!r}"
-    _append(path, f"--- Chrome {pid} (this pipe):\n{text}\n")
+    _append(path, f"--- Chrome {pid} (this pipe):\n(born=: seconds from the send)\n{text}\n")
     if not blocked_locks.parked(text):
         return False
     if answered.is_set():
@@ -306,6 +383,11 @@ def _snapshot_into(path: Path, pid: int, answered: threading.Event) -> bool:
         locks = f"read-write locks waited on (lldb):\n  lldb failed: {exc!r}"
     _append(path, f"--- {locks}\n")
     return True
+
+
+def _machine_into(path: Path, sent_wall: float) -> None:
+    """The whole machine, births in seconds from the send."""
+    _append(path, f"--- the machine:\n{machine(since=sent_wall)}\n")
 
 
 async def _after_detach(

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from tests import hang_probe as probe
 from tests.hang_probe import hang_probe, hang_probe_test  # noqa: F401 (autouse)
 from tests.timeout_scale import chrome_answer_deadlines_scaled  # noqa: F401 (autouse)
 
@@ -29,6 +30,15 @@ class _FixtureHandler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*a, directory=FIXTURES_DIR, **kw)
 
     def do_GET(self):
+        """Each request in the hang probe's log: when it came, when it was answered."""
+        host, port = self.server.server_address[:2]
+        entry = probe.request_arrived(f"{host}:{port}{self.path}")
+        try:
+            self._get()
+        finally:
+            probe.request_answered(entry)
+
+    def _get(self):
         parts = self.path.split("/")
         if len(parts) >= 3 and parts[1] == "slow":
             time.sleep(int(parts[2]) / 1000)

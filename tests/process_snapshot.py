@@ -1,6 +1,7 @@
 """What a process and its children are doing right now, for the hang probe.
 
-One row per process of the tree (``pid <n> <name> state=<s> ...``), then what
+One row per process of the tree (``pid <n> <name> state=<s> ...``) with its
+birth (``born=``: seconds from the stalled send, else the UTC clock), then what
 each system can say about where the root process is stuck:
 
 * Linux: ``/proc`` (state, wait channel and kernel stack of each thread of
@@ -11,6 +12,11 @@ each system can say about where the root process is stuck:
 * Windows: the threads of each process grouped by state and wait reason
   (``Suspended`` for a suspended one), and those of the root one by one; on a
   runner too stalled for that, the light list of ``tasklist``.
+
+:func:`machine` adds the whole machine: on Windows the processes born since
+the send, the events of shadow copies (VSS, volsnap) of the last minutes, the
+busiest over a second and the CPU and disk counters; elsewhere
+the load average (and Linux's pressure stall information).
 
 Nothing runs as root unless ``$TELLURIUM_HANG_SUDO`` is ``1`` (the CI sets
 it: the kernel stack on Linux, ``sample`` of the hardened Chrome on macOS,
@@ -39,6 +45,12 @@ COMMAND_TIMEOUT = 45.0
 #: a stalled runner did not finish the full one in 45 s (run 43391051756).
 WINDOWS_FULL_TIMEOUT = 20.0
 LIGHT_TIMEOUT = 15.0
+#: Past a command's deadline: how long ``taskkill /T`` gets to end its tree
+#: (Windows), then how long its pipes get to close.
+TASKKILL_TIMEOUT = 10.0
+PIPES_TIMEOUT = 5.0
+#: How far back the view of the machine looks for shadow copy events (Windows).
+EVENTS_WINDOW = 600.0
 #: ``1``: the commands that need root run through ``sudo -n`` (the CI only).
 SUDO_ENV = "TELLURIUM_HANG_SUDO"
 #: Threads of the root process listed (Linux, Windows).
@@ -46,18 +58,54 @@ MAX_LINES = 300
 #: Lines of ``sample``'s output kept (macOS): all of a browser process's ~60 threads.
 MAX_SAMPLE_LINES = 5000
 _TYPE = re.compile(r"--type=(\S+)")
+#: A birth (or a moment, ``at@``) as the systems' parts write it: Unix time in ms.
+_BORN = re.compile(r"\b(born|at)@(\d+)")
 
 
-def snapshot(pid: int) -> str:
-    """The tree rooted at *pid* and where its root is; never raises."""
+def snapshot(pid: int, since: float | None = None) -> str:
+    """The tree rooted at *pid* and where its root is; each birth in seconds
+    from *since* (Unix time), else on the UTC clock. Never raises."""
     try:
         if sys.platform == "win32":
-            return _windows(pid)
-        if sys.platform == "darwin":
-            return _macos(pid)
-        return _linux(pid)
+            text = _windows(pid)
+        elif sys.platform == "darwin":
+            text = _macos(pid)
+        else:
+            text = _linux(pid)
     except Exception as exc:
         return f"(no snapshot of {pid}: {exc!r})"
+    return births(text, since)
+
+
+def machine(since: float | None = None) -> str:
+    """The whole machine around the stall (births in seconds from *since*);
+    never raises."""
+    try:
+        if sys.platform == "win32":
+            text, _ = _run(_windows_machine_cmd(since), timeout=WINDOWS_FULL_TIMEOUT)
+        else:
+            text = _posix_machine()
+    except Exception as exc:
+        return f"(no view of the machine: {exc!r})"
+    return births(text.strip(), since)
+
+
+def births(text: str, since: float | None) -> str:
+    """Each ``born@<ms>`` (and ``at@<ms>``) of *text* in seconds from *since*,
+    else on the UTC clock."""
+
+    def say(match: re.Match) -> str:
+        word, at = match.group(1), int(match.group(2)) / 1000
+        if since is not None:
+            return f"{word}={at - since:+.2f}s"
+        clock = time.strftime("%H:%M:%S", time.gmtime(at))
+        return f"{word}={clock}.{int(at * 1000) % 1000:03d}Z"
+
+    return _BORN.sub(say, text)
+
+
+def _born_tag(at: float) -> str:
+    return f"born@{int(at * 1000)}"
 
 
 def _run(cmd: list[str], timeout: float = COMMAND_TIMEOUT) -> tuple[str, bool]:
@@ -79,7 +127,7 @@ def _run(cmd: list[str], timeout: float = COMMAND_TIMEOUT) -> tuple[str, bool]:
     except subprocess.TimeoutExpired:
         _end_tree(proc)
         try:
-            out, _ = proc.communicate(timeout=5)
+            out, _ = proc.communicate(timeout=PIPES_TIMEOUT)
         except subprocess.TimeoutExpired:  # a process outside the group holds the pipes
             out = ""
         return f"({cmd[0]} timed out after {timeout:g}s)\n{out or ''}".strip(), False
@@ -94,7 +142,9 @@ def _end_tree(proc: subprocess.Popen) -> None:
     if sys.platform == "win32":
         try:
             subprocess.run(
-                ["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=10
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                capture_output=True,
+                timeout=TASKKILL_TIMEOUT,
             )
         except (OSError, subprocess.SubprocessError):
             pass
@@ -182,8 +232,28 @@ def _linux_row(pid: int, depth: int) -> str:
         f" threads={fields.get('Threads', '?')} rss={fields.get('VmRSS', '?')}"
         f" wchan={_read(f'/proc/{pid}/wchan') or '-'}"
         f" switches={fields.get('voluntary_ctxt_switches', '?')}"
-        f"/{fields.get('nonvoluntary_ctxt_switches', '?')}"
+        f"/{fields.get('nonvoluntary_ctxt_switches', '?')} {_linux_born(pid)}"
     )
+
+
+def _linux_born(pid: int) -> str:
+    """``born@`` from the start of *pid* in clock ticks after boot."""
+    try:
+        text = Path(f"/proc/{pid}/stat").read_text()
+        start = int(text[text.rindex(")") + 2 :].split()[19]) / os.sysconf("SC_CLK_TCK")
+        uptime = float(Path("/proc/uptime").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return "born=?"
+    return _born_tag(time.time() - (uptime - start))
+
+
+def _posix_machine() -> str:
+    out = [f"load average {' '.join(f'{x:.2f}' for x in os.getloadavg())} (cpus {os.cpu_count()})"]
+    for kind in ("cpu", "io", "memory"):
+        some = _read(f"/proc/pressure/{kind}").splitlines()
+        if some:
+            out.append(f"pressure {kind}: {some[0]}")
+    return "\n".join(out)
 
 
 def _stat(path: str) -> tuple[str, str, int]:
@@ -242,8 +312,17 @@ def _macos_row(line: str) -> str:
     name = Path(command.split(" --", 1)[0]).name
     return (
         f"pid {pid} {name}{' ' + kind.group(1) if kind else ''} state={state}"
-        f" cpu={cpu}% rss={rss}K elapsed={etime}"
+        f" cpu={cpu}% rss={rss}K elapsed={etime} {_born_tag(time.time() - _seconds(etime))}"
     )
+
+
+def _seconds(etime: str) -> int:
+    """``[[dd-]hh:]mm:ss`` of ``ps`` in seconds."""
+    days, _, clock = etime.rpartition("-")
+    total = 0
+    for part in clock.split(":"):
+        total = total * 60 + int(part)
+    return total + int(days or 0) * 86400
 
 
 def _sample(pid: int) -> str:
@@ -275,7 +354,8 @@ def trimmed_sample(text: str) -> str:
 
 _POWERSHELL = r"""
 $root = {pid}
-$all = @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine)
+$all = @(Get-CimInstance Win32_Process |
+  Select-Object ProcessId,ParentProcessId,Name,CommandLine,CreationDate)
 if (-not ($all | Where-Object {{ $_.ProcessId -eq $root }})) {{ "no process $root"; exit }}
 $queue = New-Object System.Collections.Generic.List[object]
 $queue.Add(@($root, 0))
@@ -288,8 +368,9 @@ while ($i -lt $queue.Count) {{
   if ($p) {{
     $groups = ($p.Threads | Group-Object ThreadState,WaitReason |
       ForEach-Object {{ '{{0}}x{{1}}' -f $_.Count, ($_.Name -replace ', ', '/') }}) -join ' '
-    '{{0}}pid {{1}} {{2}}{{3}} cpu={{4:N1}}s ws={{5}}MB threads: {{6}}' -f ('  ' * $depth), $id,
-      $info.Name, $kind, $p.CPU, [int]($p.WorkingSet64 / 1MB), $groups
+    $born = ([DateTimeOffset]$info.CreationDate).ToUnixTimeMilliseconds()
+    '{{0}}pid {{1}} {{2}}{{3}} cpu={{4:N1}}s ws={{5}}MB born@{{6}} threads: {{7}}' -f ('  ' * $depth),
+      $id, $info.Name, $kind, $p.CPU, [int]($p.WorkingSet64 / 1MB), $born, $groups
   }}
   foreach ($c in ($all | Where-Object {{ $_.ParentProcessId -eq $id }})) {{
     $queue.Add(@($c.ProcessId, ($depth + 1)))
@@ -310,6 +391,72 @@ def _windows(pid: int) -> str:
         return full.strip()
     light, _ = _run(_TASKLIST, timeout=LIGHT_TIMEOUT)
     return f"{full.strip()}\nthe light list instead ({' '.join(_TASKLIST)}):\n{light.strip()}"
+
+
+#: The processes born on the machine since __SINCE__ (Unix ms), the events of
+#: shadow copies (VSS, volsnap) since __EVENTS_SINCE__, the busiest processes
+#: over a second, and the CPU, disk and memory counters.
+_MACHINE = r"""
+$since = [DateTimeOffset]::FromUnixTimeMilliseconds(__SINCE__).UtcDateTime
+"processes born on the machine since __WHEN__:"
+Get-CimInstance Win32_Process |
+  Where-Object { $_.CreationDate -and $_.CreationDate.ToUniversalTime() -ge $since } |
+  Sort-Object CreationDate | ForEach-Object {
+    '  pid {0} {1} parent={2} born@{3}' -f $_.ProcessId, $_.Name, $_.ParentProcessId,
+      ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() }
+"shadow copy events since __EVENTS_WHEN__ (Application and System logs):"
+$from = [DateTimeOffset]::FromUnixTimeMilliseconds(__EVENTS_SINCE__).LocalDateTime
+$copies = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application', 'System'; StartTime = $from } `
+  -ErrorAction SilentlyContinue |
+  Where-Object { $_.ProviderName -match 'VSS|volsnap|Shadow|VolumeSnapshot' })
+if (-not $copies) { '  (none)' }
+$copies | Sort-Object TimeCreated | Select-Object -Last 20 | ForEach-Object {
+  $said = ("$($_.Message)" -split "`r?`n")[0].Trim()
+  if ($said.Length -gt 120) { $said = $said.Substring(0, 120) }
+  '  {0} {1} id={2} {3} at@{4} {5}' -f $_.LogName, $_.ProviderName, $_.Id, $_.LevelDisplayName,
+    ([DateTimeOffset]$_.TimeCreated).ToUnixTimeMilliseconds(), $said }
+$services = @{}
+Get-CimInstance Win32_Service -Filter "State='Running'" | ForEach-Object {
+  $services[[int]$_.ProcessId] += @($_.Name) }
+"busiest processes over 1 s (CPU seconds used):"
+$before = @{}
+Get-Process | ForEach-Object { $before[$_.Id] = $_.CPU }
+Start-Sleep -Milliseconds 1000
+Get-Process | ForEach-Object { [pscustomobject]@{ Id = $_.Id; Name = $_.Name;
+  Used = ($_.CPU - $before[$_.Id]) } } | Sort-Object Used -Descending | Select-Object -First 8 |
+  ForEach-Object { '  pid {0} {1} cpu={2:N2}s {3}' -f $_.Id, $_.Name, $_.Used,
+    ($services[[int]$_.Id] -join ',') }
+"busiest processes on the disk (bytes/s, all I/O):"
+$io = (Get-Counter '\Process(*)\IO Data Bytes/sec', '\Process(*)\ID Process' `
+  -ErrorAction SilentlyContinue).CounterSamples
+$ids = @{}
+$io | Where-Object { $_.Path -like '*\id process' } |
+  ForEach-Object { $ids[$_.InstanceName] = [int]$_.CookedValue }
+$io | Where-Object { $_.Path -like '*\io data bytes/sec' -and $_.InstanceName -ne '_total' } |
+  Sort-Object CookedValue -Descending | Select-Object -First 6 | ForEach-Object {
+    $id = $ids[$_.InstanceName]
+    '  pid {0} {1} io={2:N0}B/s {3}' -f $id, $_.InstanceName, $_.CookedValue,
+      ($services[$id] -join ',') }
+"counters:"
+$names = '\Processor(_Total)\% Processor Time', '\PhysicalDisk(_Total)\Current Disk Queue Length',
+  '\PhysicalDisk(_Total)\% Disk Time', '\Memory\Available MBytes'
+(Get-Counter $names -ErrorAction SilentlyContinue).CounterSamples |
+  ForEach-Object { '  {0} {1:N1}' -f $_.Path, $_.CookedValue }
+"""
+
+
+def _windows_machine_cmd(since: float | None) -> list[str]:
+    now = time.time() if since is None else since
+    start = (now - 60.0) if since is None else since - 5.0
+    when = "a minute ago" if since is None else "5 s before the send"
+    events_when = "10 minutes before " + ("now" if since is None else "the send")
+    script = (
+        _MACHINE.replace("__SINCE__", str(int(start * 1000)))
+        .replace("__WHEN__", when)
+        .replace("__EVENTS_SINCE__", str(int((now - EVENTS_WINDOW) * 1000)))
+        .replace("__EVENTS_WHEN__", events_when)
+    )
+    return ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
 
 
 #: Every Chrome process with its state, CPU time and memory, without CIM.

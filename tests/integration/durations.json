@@ -24,6 +24,7 @@
  "test_multiplexer_admin.py": 6.2,
  "test_multiplexer_playwright.py": 0.3,
  "test_multiplexer_proxy_auth.py": 0.0,
+ "test_navigation_stall.py": 80.0,
  "test_navigation_timeout.py": 44.1,
  "test_oopif_navigation.py": 38.3,
  "test_oopif_transform.py": 213.4,

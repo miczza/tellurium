@@ -93,7 +93,7 @@ async def test_lldb_attaches_to_the_hardened_chrome_and_the_report_says_it_answe
     pid = browser._proc.process.pid
     parked = "    + 1 __psynch_rw_wrlock  (in libsystem_kernel.dylib) + 8  [0x1]"
     real = hang_probe.snapshot
-    monkeypatch.setattr(hang_probe, "snapshot", lambda p: f"{real(p)}\n{parked}")
+    monkeypatch.setattr(hang_probe, "snapshot", lambda p, since=None: f"{real(p, since)}\n{parked}")
     report, unanswered = tmp_path / "report.txt", threading.Event()
     assert await asyncio.to_thread(hang_probe._snapshot_into, report, pid, unanswered)
     await hang_probe._after_detach(report, browser._router.root, "Page.navigate", unanswered)

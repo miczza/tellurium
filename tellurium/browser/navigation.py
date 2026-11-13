@@ -28,6 +28,13 @@ WAIT_UNTIL_EVENTS: dict[str, str | None] = {
     "networkidle": "networkIdle",
 }
 
+#: The deadline of a :meth:`Tab.get` given no ``timeout``, read at each call: a
+#: machine that freezes for seconds (a CI runner, probably taking a shadow copy)
+#: may raise it for a run.
+NAVIGATION_TIMEOUT = 30.0
+#: Bounds ``Page.enable`` and ``Page.setLifecycleEventsEnabled`` before a navigation.
+LIFECYCLE_TIMEOUT = 10.0
+
 # Bounds the cleanup and bookkeeping calls around a navigation.
 _SHORT_TIMEOUT = 5.0
 # Share of the deadline kept for Page.stopLoading once a navigation gives up.
@@ -72,6 +79,30 @@ def check_wait_until(wait_until: str) -> str | None:
             f"Unknown wait_until {wait_until!r}; expected one of {sorted(WAIT_UNTIL_EVENTS)}"
         )
     return WAIT_UNTIL_EVENTS[wait_until]
+
+
+def navigation_timeout(timeout: float | None) -> float:
+    """*timeout*, else :data:`NAVIGATION_TIMEOUT` as it is now."""
+    return NAVIGATION_TIMEOUT if timeout is None else timeout
+
+
+class LifecycleEvents:
+    """The ``Page`` domain and its lifecycle events of a session, which a
+    navigation waits on: enabled once, by the first :meth:`enable` that succeeds."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+        self._enabled = False
+
+    async def enable(self) -> None:
+        if self._enabled:
+            return
+        await self._session.send("Page.enable", {}, timeout=LIFECYCLE_TIMEOUT)
+        params = {"enabled": True}
+        await self._session.send(
+            "Page.setLifecycleEventsEnabled", params, timeout=LIFECYCLE_TIMEOUT
+        )
+        self._enabled = True
 
 
 def url_matches(pattern: str, url: str) -> bool:

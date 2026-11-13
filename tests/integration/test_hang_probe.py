@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import re
 import sys
 
 import pytest
@@ -45,6 +46,10 @@ async def test_a_frozen_chrome_leaves_python_tasks_and_its_own_state(browser, mo
     assert FROZEN_MARK[sys.platform] in chrome
     if sys.platform == "darwin":
         assert "Call graph" in chrome or "Thread_" in chrome, chrome[:2000]
+    # Chrome's browser process was born before the stalled send.
+    assert re.search(rf"pid {pid} .*born=-\d+\.\d\ds", chrome), chrome[:2000]
+    machine = text.split("--- the machine:", 1)[1]
+    assert ("on the disk" if sys.platform == "win32" else "load average") in machine
     assert "=== end: Browser.getVersion TimeoutError after 6." in text
 
 

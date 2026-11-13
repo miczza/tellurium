@@ -66,7 +66,7 @@ async def _navigate(pool: Any, args: dict[str, Any]) -> Reply:
     before = await page_state.read_or_none(tab)
     if how == "url":
         url = urls.check(args["url"], allow_local=pool.config.allow_local_urls)
-        await tab.get(url, timeout=30)
+        await tab.get(url)
     elif args["history"] == "back":
         await tab.back()
     elif args["history"] == "forward":

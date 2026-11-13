@@ -33,11 +33,11 @@ from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 from mcp.shared._httpx_utils import create_mcp_http_client  # noqa: E402
 from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS  # noqa: E402
 
+from tellurium.browser import navigation  # noqa: E402
 from tests.console_signals import NEW_GROUP, terminate  # noqa: E402
-from tests.tellurium_cli import TELLURIUM_CLI  # noqa: E402
+from tests.scaled_cli import command  # noqa: E402
 from tests.timeout_scale import scaled  # noqa: E402
 
-_TELLURIUM = TELLURIUM_CLI
 _LISTENING = re.compile(r"listening on (http://\S+/mcp)")
 _INIT = {
     "jsonrpc": "2.0",
@@ -77,9 +77,7 @@ class _Server:
 
 async def _spawn(home: Path, *options: str) -> asyncio.subprocess.Process:
     return await asyncio.create_subprocess_exec(
-        str(_TELLURIUM),
-        "mcp",
-        *options,
+        *command("mcp", *options),
         env={**os.environ, "TELLURIUM_HOME": str(home)},
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.DEVNULL,
@@ -471,6 +469,20 @@ async def test_two_clients_do_not_see_each_other(local_server, tmp_path):
             await _call(a, "session-close", sessionId="github")
             reopened = await _call(b, "session-open", name="github")
             assert reopened["created"] is True
+
+
+async def test_a_navigation_takes_the_default_deadline_of_the_tests_process(
+    local_server, tmp_path, monkeypatch
+):
+    """The server starts through ``tests.scaled_cli``: its navigation takes
+    ``Tab.get``'s default deadline as the test's own process has it (stretched
+    on the slow runners, here cut short), not a deadline of its own."""
+    monkeypatch.setattr(navigation, "NAVIGATION_TIMEOUT", 1.0)
+    async with _server(tmp_path / "home") as server:
+        async with _client(server) as client:
+            tid = (await _call(client, "session-open"))["targetId"]
+            text = await _error(client, "navigate", targetId=tid, url=f"{local_server}/slow/5000/x")
+    assert "within 1.0s" in text, text
 
 
 class _Raw:

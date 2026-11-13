@@ -79,7 +79,7 @@ def test_lldb_that_fails_is_a_line_not_an_error(monkeypatch):
     assert "lldb failed: PermissionError" in text
 
 
-def _parked_snapshot(pid):
+def _parked_snapshot(pid, since=None):
     return f"pid {pid} Google Chrome state=S\nsample of {pid}, 3 s:\n{_PARKED}"
 
 
@@ -116,6 +116,8 @@ def test_lldb_is_not_attached_once_the_command_has_its_answer(tmp_path, monkeypa
 
 def test_no_thread_on_a_rwlock_leaves_the_report_without_a_lock_line(tmp_path, monkeypatch):
     path = tmp_path / "report.txt"
-    monkeypatch.setattr(hang_probe, "snapshot", lambda pid: f"sample of {pid}, 3 s:\n{_IDLE}")
+    monkeypatch.setattr(
+        hang_probe, "snapshot", lambda pid, since=None: f"sample of {pid}, 3 s:\n{_IDLE}"
+    )
     assert hang_probe._snapshot_into(path, 4771, threading.Event()) is False
     assert "read-write locks" not in path.read_text()

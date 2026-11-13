@@ -23,8 +23,10 @@ from tellurium.browser.handles import (
 )
 from tellurium.browser.human import Until
 from tellurium.browser.navigation import (
+    LifecycleEvents,
     check_wait_until,
     navigate,
+    navigation_timeout,
     poll_url,
     step_history,
     url_matches,
@@ -119,7 +121,7 @@ class Tab:
         self._target_id = target_id
         self._url: str = ""
         self._title: str = ""
-        self._lifecycle_enabled = False
+        self._lifecycle = LifecycleEvents(session)
         self._closed = False
         self._mouse_pos: tuple[float, float] = (0, 0)  # Track current mouse position
         self._action_timer = None  # ActionTimer, created on first human action
@@ -155,7 +157,9 @@ class Tab:
     # Navigation
     # ------------------------------------------------------------------
 
-    async def get(self, url: str, *, wait_until: str = "load", timeout: float = 30) -> None:
+    async def get(
+        self, url: str, *, wait_until: str = "load", timeout: float | None = None
+    ) -> None:
         """Navigate to *url* and wait for the page to reach *wait_until*.
 
         ``wait_until``:
@@ -165,29 +169,28 @@ class Tab:
         * ``"load"`` — the ``load`` event fired (all subresources done)
         * ``"networkidle"`` — no network activity for 500 ms after load
 
-        A same-document navigation (``#fragment``) returns right away: there
-        is no new document to wait for. *timeout* covers the whole navigation;
-        on expiry :class:`NavigationTimeoutError` (a ``TimeoutError``) names
-        the URL and the phase. A refused navigation raises ``NavigationError``;
-        with ``Browser.launch(respect_robots=True)`` a URL robots.txt disallows
-        raises :class:`RobotsDisallowedError` before any request.
+        A same-document navigation (``#fragment``) returns at once. *timeout*
+        (default ``navigation.NAVIGATION_TIMEOUT``, 30 s) covers it all; on expiry
+        :class:`NavigationTimeoutError` (a ``TimeoutError``) names the URL and the
+        phase. A refused navigation raises ``NavigationError``; with
+        ``Browser.launch(respect_robots=True)`` a URL robots.txt disallows raises
+        :class:`RobotsDisallowedError` before any request.
         """
         check_wait_until(wait_until)
-        timeout = await robots.guard(self, url, timeout)
+        timeout = await robots.guard(self, url, navigation_timeout(timeout))
         info = await navigate(
             self._session,
             url,
             wait_until=wait_until,
             timeout=timeout,
             dialogs=self._dialogs,
-            prepare=self._enable_lifecycle_events,
+            prepare=self._lifecycle.enable,
         )
         self._url = url
         if info is not None:
             self._title, self._url = info[0], info[1] or url
         if self._action_timer is not None:
-            # Design doc 05: navigate -> click / navigate -> type carry their
-            # own (longer) transition delays.
+            # Design doc 05: navigate -> click/type carry their own, longer delays.
             self._action_timer.mark("navigate")
 
     async def is_allowed(self, url: str, *, timeout: float = 30.0) -> bool:
@@ -196,13 +199,6 @@ class Tab:
         origin per day). Use it before following a link or clicking. Not known
         within *timeout*: :class:`NavigationTimeoutError` (phase ``"robots.txt"``)."""
         return await robots.of(self._browser).allowed(self, url, timeout)
-
-    async def _enable_lifecycle_events(self) -> None:
-        if self._lifecycle_enabled:
-            return
-        await self._session.send("Page.enable", {}, timeout=10)
-        await self._session.send("Page.setLifecycleEventsEnabled", {"enabled": True}, timeout=10)
-        self._lifecycle_enabled = True
 
     async def close(self) -> None:
         """Close this tab. Further commands on it raise ``ConnectionError``."""
@@ -253,7 +249,7 @@ class Tab:
         when it contains ``*`` or ``?``, substring match otherwise. Iframe
         navigations are ignored. Raises :class:`NavigationTimeoutError`.
         """
-        await self._enable_lifecycle_events()
+        await self._lifecycle.enable()
         self._url = await wait_for_main_frame(self._session, url, timeout=timeout)
 
     # ------------------------------------------------------------------
