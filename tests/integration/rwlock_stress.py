@@ -13,14 +13,20 @@ lock itself. Not part of the suite: run it by path on a macOS runner
 from __future__ import annotations
 
 import os
+import select
 import shutil
 import subprocess
 import sys
 
 import pytest
 
+from tests.blocked_locks import rwlocks
+from tests.process_snapshot import snapshot
+
 SECONDS = int(os.environ.get("TELLURIUM_RWLOCK_SECONDS", "240"))
 STALL = 5
+#: How long the program gets past its run to join its threads and say how it went.
+JOIN_GRACE = 30
 
 _C = r"""
 #include <pthread.h>
@@ -75,17 +81,30 @@ def test_a_contended_rwlock_never_parks_its_writers_for_good(tmp_path, threads):
     src, exe = tmp_path / "stress.c", tmp_path / "stress"
     src.write_text(_C)
     subprocess.run([cc, "-O2", "-o", str(exe), str(src)], check=True)
-    proc = subprocess.Popen(
-        [str(exe), str(threads), str(SECONDS // 2), str(STALL)], stdout=subprocess.PIPE, text=True
-    )
-    first = proc.stdout.readline()
-    if first.startswith("STALL"):
-        from tests.process_snapshot import snapshot
+    cmd = [str(exe), str(threads), str(SECONDS // 2), str(STALL)]
+    print(_outcome(cmd, deadline=SECONDS // 2 + JOIN_GRACE))
 
-        report = snapshot(proc.pid)
-        proc.kill()
-        proc.wait()
-        pytest.fail(f"{first.strip()}\n{report}")
-    proc.wait()
-    print(first.strip())
-    assert first.startswith("ok"), first
+
+def _outcome(cmd: list[str], deadline: float) -> str:
+    """The first line the stress prints within *deadline*, ``ok ...``; a stall
+    or silence (a final join that never ends) fails the test with the
+    program's snapshot. The program never outlives this."""
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
+    try:
+        ready, _, _ = select.select([proc.stdout], [], [], deadline)
+        first = proc.stdout.readline() if ready else ""  # a whole line, flushed by the program
+        if not first.startswith("ok"):
+            what = first.strip() or f"no word in {deadline:g}s (exit code {proc.poll()})"
+            pytest.fail(f"{what}\n{_report(proc.pid)}")
+        return first.strip()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(10)
+        proc.stdout.close()
+
+
+def _report(pid: int) -> str:
+    """Where the program's threads are, and who holds the lock they wait on."""
+    text = snapshot(pid)
+    return f"{text}\n{rwlocks(pid, text)}"
