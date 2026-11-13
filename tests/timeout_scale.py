@@ -20,8 +20,9 @@ its ``Page.enable`` (``navigation.NAVIGATION_TIMEOUT``, ``LIFECYCLE_TIMEOUT``:
 a Windows runner taking a shadow copy held a request 25 s, shown by
 ``test_navigation_stall.py``), all module globals read at call time; and
 the tests' own answer bounds that go through :func:`scaled`. A ``tellurium``
-command a test starts (the MCP server of ``test_mcp_http.py``) gets the values
-of the test's process through ``tests.scaled_cli``.
+command a test starts (the MCP server of ``test_mcp_http.py``) gets the
+navigation's two from the test's process through ``tests.scaled_cli``; its
+other deadlines are the command's own.
 Not scaled: every deadline a test makes expire on purpose and asserts on
 (``test_navigation_timeout.py``, explicit short ``timeout=`` in tests,
 ``_bounded``, the MCP's deadlines), and defaults of arguments, which are fixed
