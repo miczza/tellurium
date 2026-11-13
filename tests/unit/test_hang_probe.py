@@ -372,6 +372,7 @@ async def test_the_report_lists_the_requests_to_the_test_servers_around_the_send
     reader = asyncio.create_task(router.run())
     early = hang_probe.request_arrived("127.0.0.1:1/early.html")
     hang_probe.request_answered(early)
+    await asyncio.sleep(0.05)  # past a tick of Windows' monotonic clock (15.6 ms)
     loop = asyncio.get_running_loop()
 
     def serve(path: str, answer: bool) -> None:
@@ -419,3 +420,17 @@ async def test_a_navigation_shorter_than_the_watch_is_watched_within_its_own_dea
         await tab_module.navigate(router.root, "about:blank", wait_until="load", timeout=1.0)
     [report] = probe.iterdir()
     assert re.search(r"Page.navigate \(session root\) pending for 0\.[78]s", report.read_text())
+
+
+async def test_the_end_says_how_long_the_command_took_not_the_report(probe, monkeypatch, sleeper):
+    """A slow snapshot (seconds on Windows and macOS) does not stretch the
+    duration of the command in the end line."""
+    monkeypatch.setattr(
+        hang_probe, "snapshot", lambda pid, since=None: time.sleep(1.5) or "a slow snapshot"
+    )
+    router = SessionRouter(SilentChrome())
+    hang_probe._procs.add(_AChrome(router._transport, sleeper))
+    with pytest.raises(TimeoutError):
+        await router.root.send("Page.enable", timeout=0.6)
+    [report] = probe.iterdir()
+    assert "=== end: Page.enable TimeoutError after 0.6s" in report.read_text()

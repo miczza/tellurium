@@ -176,11 +176,11 @@ def installed(config: Any = None) -> Iterator[None]:
         except BaseException as exc:
             watch.cancel()
             if made:  # Chrome is not closed before the report is made, for a while
-                await _end(made[0], method, type(exc).__name__, sent_at)
+                await _end(made[0], method, type(exc).__name__, sent_at, loop.time() - sent_at)
             raise
         watch.cancel()
         if made:  # an answer is never held: the report goes on by itself
-            _note_end(method, "answered", sent_at, made[0])
+            _note_end(method, "answered", sent_at, loop.time() - sent_at, made[0])
         return result
 
     async def handle(self, msg):
@@ -252,20 +252,24 @@ def _start_report(
     return task
 
 
-async def _end(report: asyncio.Task | None, method: str, outcome: str, sent_at: float) -> None:
+async def _end(
+    report: asyncio.Task | None, method: str, outcome: str, sent_at: float, took: float
+) -> None:
     """A command that failed: wait a while for the report (Chrome is not closed
     before it is made), then note the end, even if this wait is cut short."""
     try:
         if report is not None:
             await asyncio.wait({report}, timeout=REPORT_WAIT)
     finally:
-        _note_end(method, outcome, sent_at, report)
+        _note_end(method, outcome, sent_at, took, report)
 
 
-def _note_end(method: str, outcome: str, sent_at: float, report: asyncio.Task | None) -> None:
-    """How the command ended, and the requests the servers got since it was sent."""
+def _note_end(
+    method: str, outcome: str, sent_at: float, took: float, report: asyncio.Task | None
+) -> None:
+    """How the command ended (*took* seconds after it was sent), and the
+    requests the servers got since it was sent."""
     path = _state.report or _path_for(_state.test)
-    took = time.monotonic() - sent_at
     late = "" if report is None or report.done() else " (the report is still being made)"
     lines = [f"=== end: {method} {outcome} after {took:.1f}s{late}"]
     lines.append("--- requests to the test servers since the send, at the end:")
