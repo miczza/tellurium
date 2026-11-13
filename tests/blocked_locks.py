@@ -121,11 +121,27 @@ def _sudo() -> list[str]:
     return process_snapshot._sudo()
 
 
+def parked(sample: str) -> bool:
+    """Whether a thread of *sample* waits on a read-write lock."""
+    return PARKED in sample
+
+
 def rwlocks(pid: int, sample: str) -> str:
     """The read-write locks that *sample*'s parked threads of *pid* wait
-    for, and who holds them; ``""`` when no thread waits on one."""
-    if PARKED not in sample:
+    for, and who holds them; ``""`` when no thread waits on one. Never
+    raises: what went wrong is a line of the answer."""
+    if not parked(sample):
         return ""
+    try:
+        said = _attach(pid)
+    except Exception as exc:  # noqa: BLE001 — the report says it, the sample stays
+        said = f"lldb failed: {exc!r}"
+    return "read-write locks waited on (lldb):\n" + "\n".join(
+        "  " + line for line in said.strip().splitlines()
+    )
+
+
+def _attach(pid: int) -> str:
     with tempfile.TemporaryDirectory(prefix="tellurium_locks_") as tmp:
         path = os.path.join(tmp, "lock_owner.py")
         with open(path, "w", encoding="utf-8") as fh:
@@ -133,7 +149,4 @@ def rwlocks(pid: int, sample: str) -> str:
         os.chmod(tmp, 0o755)
         cmd = [*_sudo(), "lldb", "-p", str(pid), "--batch"]
         cmd += ["-o", f"command script import {path}", "-o", "process detach"]
-        said, _ = _run(cmd)
-    return "read-write locks waited on (lldb):\n" + "\n".join(
-        "  " + line for line in said.strip().splitlines()
-    )
+        return _run(cmd)[0]

@@ -5,9 +5,9 @@ each system can say about where the root process is stuck:
 
 * Linux: ``/proc`` (state, wait channel and kernel stack of each thread of
   the root);
-* macOS: ``sample`` (the user-space call graph of every thread of the root)
-  and, when threads wait on a read-write lock, who holds it
-  (``tests.blocked_locks``);
+* macOS: ``sample`` (the user-space call graph of every thread of the root);
+  who holds a read-write lock its threads wait on is the hang probe's to ask
+  (``tests.blocked_locks``), once the sample is in its report;
 * Windows: the threads of each process grouped by state and wait reason
   (``Suspended`` for a suspended one), and those of the root one by one; on a
   runner too stalled for that, the light list of ``tasklist``.
@@ -30,8 +30,6 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-
-from tests import blocked_locks
 
 #: How long ``sample`` watches the root process (macOS).
 SAMPLE_SECONDS = 3
@@ -100,7 +98,7 @@ def _end_tree(proc: subprocess.Popen) -> None:
             )
         except (OSError, subprocess.SubprocessError):
             pass
-        proc.kill()
+        _kill(proc)
         return
     for sig, grace in ((signal.SIGTERM, 2.0), (signal.SIGKILL, 5.0)):
         try:
@@ -113,7 +111,16 @@ def _end_tree(proc: subprocess.Popen) -> None:
                 time.sleep(0.2)  # what it started may still be ending
         except subprocess.TimeoutExpired:
             continue
-    proc.kill()
+    _kill(proc)
+
+
+def _kill(proc: subprocess.Popen) -> None:
+    """The last word on *proc*; a ``sudo`` running as root may refuse it, and
+    the snapshot goes on without it."""
+    try:
+        proc.kill()
+    except OSError:
+        pass
 
 
 def _sudo() -> list[str]:
@@ -225,11 +232,7 @@ def _macos(pid: int) -> str:
         kids = sorted((c for c, (pp, _) in procs.items() if pp == p), reverse=True)
         stack.extend((c, depth + 1) for c in kids)
     out.append(f"sample of {pid}, {SAMPLE_SECONDS} s:")
-    sample = _sample(pid)
-    out.append(sample)
-    locks = blocked_locks.rwlocks(pid, sample)
-    if locks:
-        out.append(locks)
+    out.append(_sample(pid))
     return "\n".join(out)
 
 

@@ -10,7 +10,12 @@ it hangs, not as the test's teardown leaves it):
 * the messages Chrome sent on that pipe around the command, and whether
   Chrome still answers the root and the command's session;
 * the process tree of that Chrome and where its browser process is
-  (``tests.process_snapshot``), and the tail of Chrome's output.
+  (``tests.process_snapshot``), and the tail of Chrome's output;
+* on macOS, when its threads are parked on a read-write lock and the command
+  is still unanswered once the sample is written, who holds that lock
+  (``tests.blocked_locks``: lldb stops all of Chrome for seconds, so not for
+  a command that came back), then whether Chrome answers after lldb let it
+  go (an attach can wake a thread that missed its wakeup).
 
 The report goes to ``$TELLURIUM_HANG_REPORTS/<test>.txt`` (the CI uploads the
 folder, red job or not; unset, a folder of this run), its path to the
@@ -44,6 +49,7 @@ import pytest
 
 from tellurium.browser.process import BrowserProcess
 from tellurium.cdp.transport._session import Session
+from tests import blocked_locks
 from tests.await_chain import tasks_report
 from tests.process_snapshot import COMMAND_TIMEOUT, snapshot
 from tests.timeout_scale import scaled
@@ -136,9 +142,10 @@ def installed(config: Any = None) -> Iterator[None]:
         loop = asyncio.get_running_loop()
         sent_at = loop.time()
         made: list[asyncio.Task | None] = []
+        answered = threading.Event()  # read by the snapshot's thread
 
         def fire() -> None:
-            made.append(_start_report(self, method, sent_at, limit))
+            made.append(_start_report(self, method, sent_at, limit, answered))
 
         watch = loop.call_later(after, fire)
         try:
@@ -149,6 +156,7 @@ def installed(config: Any = None) -> Iterator[None]:
                 await _end(made[0], method, type(exc).__name__, loop.time() - sent_at)
             raise
         watch.cancel()
+        answered.set()
         if made:  # an answer is never held: the report goes on by itself
             _note_end(method, "answered", loop.time() - sent_at, made[0])
         return result
@@ -183,7 +191,7 @@ def hang_probe_test(request):
 
 
 def _start_report(
-    session: Session, method: str, sent_at: float, limit: float
+    session: Session, method: str, sent_at: float, limit: float, answered: threading.Event
 ) -> asyncio.Task | None:
     """The full report of the test's first stall, a line for the next ones.
 
@@ -205,7 +213,7 @@ def _start_report(
     _emit(f"HANG PROBE: {method} pending for {pending:.1f}s in {_state.test} -> {path}")
     pid = getattr(getattr(proc, "process", None), "pid", None)
     task = asyncio.get_running_loop().create_task(
-        _rest(path, session, pid), name="hang-probe-report"
+        _rest(path, session, pid, method, answered), name="hang-probe-report"
     )
     _running.add(task)  # it may outlive the command that started it
     task.add_done_callback(_running.discard)
@@ -252,14 +260,17 @@ def _head(
     return "\n".join(out) + "\n"
 
 
-async def _rest(path: Path, session: Session, pid: int | None) -> None:
+async def _rest(
+    path: Path, session: Session, pid: int | None, method: str, answered: threading.Event
+) -> None:
     """Chrome's snapshot (written by its own thread, which a closing loop does
-    not stop) and whether Chrome answers; a cut-short part says so."""
+    not stop) and whether Chrome answers, again after lldb if it attached; a
+    cut-short part says so."""
     if pid is None:
         _append(path, f"--- Chrome:\n{_NO_CHROME}\n")
         shot = None
     else:
-        shot = asyncio.ensure_future(asyncio.to_thread(_snapshot_into, path, pid))
+        shot = asyncio.ensure_future(asyncio.to_thread(_snapshot_into, path, pid, answered))
     checks = [_check("root Browser.getVersion", session._router.root, "Browser.getVersion", {})]
     if session.session_id:
         expr = "[document.readyState, document.visibilityState, location.href]"
@@ -271,16 +282,46 @@ async def _rest(path: Path, session: Session, pid: int | None) -> None:
         _append(path, f"--- does Chrome answer? cut short: {type(exc).__name__}\n")
         raise
     _append(path, "--- does Chrome answer?\n" + "\n".join(answers) + "\n")
-    if shot is not None:
-        await shot
+    if shot is not None and await shot:
+        await _after_detach(path, session, method, answered)
 
 
-def _snapshot_into(path: Path, pid: int) -> None:
+def _snapshot_into(path: Path, pid: int, answered: threading.Event) -> bool:
+    """Chrome's snapshot, in the report before anything else is tried; then,
+    if its threads wait on a read-write lock and the command has no answer
+    yet, who holds the lock. Whether lldb attached."""
     try:
         text = snapshot(pid)
     except Exception as exc:  # noqa: BLE001 — the report says it, the test goes on
         text = f"snapshot failed: {exc!r}"
     _append(path, f"--- Chrome {pid} (this pipe):\n{text}\n")
+    if not blocked_locks.parked(text):
+        return False
+    if answered.is_set():
+        _append(path, "--- read-write locks: not looked at: the command was answered\n")
+        return False
+    try:
+        locks = blocked_locks.rwlocks(pid, text)
+    except Exception as exc:  # noqa: BLE001 — a line of the report, the sample stays
+        locks = f"read-write locks waited on (lldb):\n  lldb failed: {exc!r}"
+    _append(path, f"--- {locks}\n")
+    return True
+
+
+async def _after_detach(
+    path: Path, session: Session, method: str, answered: threading.Event
+) -> None:
+    """Whether Chrome answers once lldb has let it go, and the watched command."""
+    head = "--- does Chrome answer after lldb detached?"
+    try:
+        line = await _check(
+            "root Browser.getVersion", session._router.root, "Browser.getVersion", {}
+        )
+    except BaseException as exc:
+        _append(path, f"{head} cut short: {type(exc).__name__}\n")
+        raise
+    state = "answered" if answered.is_set() else "not answered"
+    _append(path, f"{head}\n{line}\n  the watched {method}: {state}\n")
 
 
 async def _check(label: str, session: Session, method: str, params: dict) -> str:
