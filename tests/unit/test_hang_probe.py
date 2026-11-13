@@ -390,9 +390,14 @@ async def test_the_report_lists_the_requests_to_the_test_servers_around_the_send
     text = report.read_text()
     head, end = text.split("=== end", 1)
     assert "early.html" not in text
-    assert re.search(r"\+0\.1\ds GET 127.0.0.1:1/frame.html, answered at \+0\.1\ds", head)
+    # Windows' loop fires timers on its 15.6 ms clock: a range, not digits.
+    [(came, went)] = re.findall(
+        r"\+([\d.]+)s GET 127.0.0.1:1/frame.html, answered at \+([\d.]+)s", head
+    )
+    assert 0.05 < float(came) <= float(went) < 0.3
     assert "late.html" not in head
-    assert re.search(r"\+0\.4\ds GET 127.0.0.1:1/late.html, not answered", end)
+    [late] = re.findall(r"\+([\d.]+)s GET 127.0.0.1:1/late.html, not answered", end)
+    assert 0.3 < float(late) < 0.6
 
 
 async def test_the_report_says_when_the_send_was_on_the_clock_of_the_snapshot(probe):
