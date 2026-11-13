@@ -154,3 +154,17 @@ def test_the_session_cookie_calls_are_scaled(monkeypatch):
         assert login_command.CALL_TIMEOUT == 30.0
     assert session_cookies.TIMEOUT == login_command.CALL_TIMEOUT == 5.0  # given back
     assert session.LIVE_SAVE_TIMEOUT == 10.0
+
+
+def test_the_default_navigation_deadline_is_scaled(monkeypatch):
+    """A Windows runner froze the disk for a shadow copy (VSSVC born 0.4 s
+    before the send): the navigation's request left Chrome only 25.5 s after
+    ``Page.navigate`` (run 43429848268), against ``Tab.get``'s 30 s."""
+    from tellurium.browser import navigation
+
+    monkeypatch.setenv(timeout_scale.ENV, "3")
+    with pytest.MonkeyPatch.context() as mp:
+        timeout_scale.stretch(mp)
+        assert navigation.NAVIGATION_TIMEOUT == 90.0
+        assert navigation.LIFECYCLE_TIMEOUT == 30.0  # Page.enable of the mute renderer
+    assert navigation.NAVIGATION_TIMEOUT == 30.0  # given back

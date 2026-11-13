@@ -15,7 +15,10 @@ Scaled: :attr:`SessionRouter.default_timeout` (read at each send),
 ``process`` and ``raw_chrome`` (how long Chrome gets to exit on its own after
 ``Browser.close``), the cookie calls of a session (``session_cookies.TIMEOUT``,
 ``session.LIVE_SAVE_TIMEOUT``) and the login's CDP calls
-(``login_command.CALL_TIMEOUT``), all module globals read at call time; and
+(``login_command.CALL_TIMEOUT``), the default deadline of a navigation and of
+its ``Page.enable`` (``navigation.NAVIGATION_TIMEOUT``, ``LIFECYCLE_TIMEOUT``:
+a Windows runner taking a shadow copy held a request 25 s), all module
+globals read at call time; and
 the tests' own answer bounds that go through :func:`scaled`.
 Not scaled: every deadline a test makes expire on purpose and asserts on
 (``test_navigation_timeout.py``, explicit short ``timeout=`` in tests,
@@ -33,8 +36,8 @@ import os
 
 import pytest
 
+from tellurium.browser import navigation, raw_chrome, robots
 from tellurium.browser import process as process_module
-from tellurium.browser import raw_chrome, robots
 from tellurium.cdp.transport._session import SessionRouter
 from tellurium.session import login_command, session, session_cookies
 
@@ -57,6 +60,8 @@ SCALED: tuple[tuple[object, str], ...] = (
     (session_cookies, "TIMEOUT"),
     (session, "LIVE_SAVE_TIMEOUT"),
     (login_command, "CALL_TIMEOUT"),
+    (navigation, "NAVIGATION_TIMEOUT"),
+    (navigation, "LIFECYCLE_TIMEOUT"),
 )
 
 

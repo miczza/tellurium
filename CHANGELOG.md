@@ -505,6 +505,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `Tab.get(timeout=None)`: without a timeout a navigation takes
+  `tellurium.browser.navigation.NAVIGATION_TIMEOUT` (30 s, unchanged), read at each call,
+  and `Page.enable` before it `LIFECYCLE_TIMEOUT` (10 s, unchanged): a machine whose disk
+  freezes for seconds (a Windows CI runner taking a volume shadow copy held a navigation's
+  request 25 s) may raise them for a run. The tests' `TELLURIUM_TEST_TIMEOUT_SCALE`
+  stretches both.
+
 - `RawChrome.kill()` ends Chrome at once through its process object (SIGKILL,
   `TerminateProcess` on Windows); the multiplexer uses it. `RawChrome.launch` waits for
   Chrome's first answer once, in the process start (`READY_TIMEOUT` is now that wait's 60 s,
