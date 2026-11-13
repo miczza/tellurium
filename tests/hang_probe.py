@@ -92,6 +92,8 @@ _procs: weakref.WeakSet = weakref.WeakSet()
 _T0 = time.monotonic()
 _UNSAFE = re.compile(r"[^A-Za-z0-9_.-]+")
 _write_lock = threading.Lock()
+#: Reports still being made, held until they end.
+_running: set[asyncio.Task] = set()
 #: Without the variable: read once, before any test points ``tempfile`` elsewhere.
 _RUN_DIR = Path(tempfile.gettempdir(), "tellurium-hang-reports", f"{time.time_ns()}-{os.getpid()}")
 _NO_CHROME = "no Chrome process for this pipe (none started by BrowserProcess)"
@@ -139,16 +141,17 @@ def installed(config: Any = None) -> Iterator[None]:
             made.append(_start_report(self, method, sent_at, limit))
 
         watch = loop.call_later(after, fire)
-        outcome = "answered"
         try:
-            return await real_send(self, method, params, timeout)
+            result = await real_send(self, method, params, timeout)
         except BaseException as exc:
-            outcome = type(exc).__name__
-            raise
-        finally:
             watch.cancel()
-            if made:
-                await _end(made[0], method, outcome, loop.time() - sent_at)
+            if made:  # Chrome is not closed before the report is made, for a while
+                await _end(made[0], method, type(exc).__name__, loop.time() - sent_at)
+            raise
+        watch.cancel()
+        if made:  # an answer is never held: the report goes on by itself
+            _note_end(method, "answered", loop.time() - sent_at, made[0])
+        return result
 
     async def handle(self, msg):
         _note(self._router, msg)
@@ -201,22 +204,28 @@ def _start_report(
     reports.append(path)
     _emit(f"HANG PROBE: {method} pending for {pending:.1f}s in {_state.test} -> {path}")
     pid = getattr(getattr(proc, "process", None), "pid", None)
-    return asyncio.get_running_loop().create_task(
+    task = asyncio.get_running_loop().create_task(
         _rest(path, session, pid), name="hang-probe-report"
     )
+    _running.add(task)  # it may outlive the command that started it
+    task.add_done_callback(_running.discard)
+    return task
 
 
 async def _end(report: asyncio.Task | None, method: str, outcome: str, took: float) -> None:
-    """Wait a while for the report (Chrome is not closed before it is made),
-    then note the end, even if this wait is cut short."""
-    path = _state.report or _path_for(_state.test)
-    late = ""
+    """A command that failed: wait a while for the report (Chrome is not closed
+    before it is made), then note the end, even if this wait is cut short."""
     try:
         if report is not None:
             await asyncio.wait({report}, timeout=REPORT_WAIT)
-            late = "" if report.done() else " (the report is still being made)"
     finally:
-        _append(path, f"=== end: {method} {outcome} after {took:.1f}s{late}\n")
+        _note_end(method, outcome, took, report)
+
+
+def _note_end(method: str, outcome: str, took: float, report: asyncio.Task | None) -> None:
+    path = _state.report or _path_for(_state.test)
+    late = "" if report is None or report.done() else " (the report is still being made)"
+    _append(path, f"=== end: {method} {outcome} after {took:.1f}s{late}\n")
 
 
 def _head(

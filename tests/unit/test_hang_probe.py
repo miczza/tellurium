@@ -8,6 +8,7 @@ import math
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -342,3 +343,20 @@ def test_the_end_of_a_command_waits_for_a_snapshot_as_long_as_its_commands_may_t
     from tests import process_snapshot
 
     assert hang_probe.REPORT_WAIT > process_snapshot.COMMAND_TIMEOUT + 10
+
+
+async def test_an_answer_after_the_warning_comes_back_at_once(probe, monkeypatch, sleeper):
+    """The probe never holds an answer: Chrome answers at 0.5 s, the report's
+    snapshot takes 3 s, and a caller's wait_for of 1.5 s still has the answer."""
+    monkeypatch.setattr(hang_probe, "snapshot", lambda pid: time.sleep(3) or "a slow snapshot")
+    router = SessionRouter(LateChrome(0.5))
+    chrome = _AChrome(router._transport, sleeper)
+    hang_probe._procs.add(chrome)
+    reader = asyncio.create_task(router.run())
+    try:
+        navigate = router.root.send("Page.navigate", {"url": "about:blank"}, timeout=math.inf)
+        assert await asyncio.wait_for(navigate, 1.5) == {}
+    finally:
+        reader.cancel()
+    [report] = probe.iterdir()
+    assert "=== end: Page.navigate answered after 0.5" in report.read_text()
