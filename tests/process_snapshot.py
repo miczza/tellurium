@@ -5,7 +5,9 @@ each system can say about where the root process is stuck:
 
 * Linux: ``/proc`` (state, wait channel and kernel stack of each thread of
   the root);
-* macOS: ``sample`` (the user-space call graph of every thread of the root);
+* macOS: ``sample`` (the user-space call graph of every thread of the root)
+  and, when threads wait on a read-write lock, who holds it
+  (``tests.blocked_locks``);
 * Windows: the threads of each process grouped by state and wait reason
   (``Suspended`` for a suspended one), and those of the root one by one; on a
   runner too stalled for that, the light list of ``tasklist``.
@@ -28,6 +30,8 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+from tests import blocked_locks
 
 #: How long ``sample`` watches the root process (macOS).
 SAMPLE_SECONDS = 3
@@ -221,7 +225,11 @@ def _macos(pid: int) -> str:
         kids = sorted((c for c, (pp, _) in procs.items() if pp == p), reverse=True)
         stack.extend((c, depth + 1) for c in kids)
     out.append(f"sample of {pid}, {SAMPLE_SECONDS} s:")
-    out.append(_sample(pid))
+    sample = _sample(pid)
+    out.append(sample)
+    locks = blocked_locks.rwlocks(pid, sample)
+    if locks:
+        out.append(locks)
     return "\n".join(out)
 
 
