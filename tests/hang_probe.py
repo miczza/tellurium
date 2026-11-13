@@ -62,8 +62,9 @@ WATCH = 10.0
 #: ...but before this share of its own deadline, so that it is still pending...
 SHARE = 0.8
 #: ...and before this when it has none (``Page.navigate`` inside a navigation,
-#: bounded by ``Tab.get``'s 30 s, which is not stretched; a shorter navigation
-#: is watched at its share).
+#: bounded by the navigation's deadline: ``navigation.NAVIGATION_TIMEOUT``,
+#: stretched like the others, or the test's own; a shorter one is watched at
+#: its share).
 UNBOUNDED_WATCH = 20.0
 #: Deadlines shorter than this are not watched: they are the tests' own, made
 #: to expire on frozen pages; Chrome's waits are 10 s and longer.
