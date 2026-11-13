@@ -12,7 +12,12 @@ it hangs, not as the test's teardown leaves it):
   whether Chrome still answers the root and the command's session;
 * the process tree of that Chrome with the birth of each process, where its
   browser process is, the whole machine (``tests.process_snapshot``), and
-  the tail of Chrome's output.
+  the tail of Chrome's output;
+* on macOS, when its threads are parked on a read-write lock and the command
+  is still unanswered once the sample is written, who holds that lock
+  (``tests.blocked_locks``: lldb stops all of Chrome for seconds, so not for
+  a command that came back), then whether Chrome answers after lldb let it
+  go (an attach can wake a thread that missed its wakeup).
 
 The report goes to ``$TELLURIUM_HANG_REPORTS/<test>.txt`` (the CI uploads the
 folder, red job or not; unset, a folder of this run), its path to the
@@ -49,6 +54,7 @@ from tellurium.browser import navigation as navigation_module
 from tellurium.browser import tab as tab_module
 from tellurium.browser.process import BrowserProcess
 from tellurium.cdp.transport._session import Session
+from tests import blocked_locks
 from tests.await_chain import tasks_report
 from tests.process_snapshot import COMMAND_TIMEOUT, machine, snapshot
 from tests.timeout_scale import scaled
@@ -168,9 +174,10 @@ def installed(config: Any = None) -> Iterator[None]:
             return await real_send(self, method, params, timeout)
         sent_at = loop.time()
         made: list[asyncio.Task | None] = []
+        answered = threading.Event()  # read by the snapshot's thread
 
         def fire() -> None:
-            made.append(_start_report(self, method, sent_at, limit))
+            made.append(_start_report(self, method, sent_at, limit, answered))
 
         watch = loop.call_later(after, fire)
         try:
@@ -181,6 +188,7 @@ def installed(config: Any = None) -> Iterator[None]:
                 await _end(made[0], method, type(exc).__name__, sent_at, loop.time() - sent_at)
             raise
         watch.cancel()
+        answered.set()
         if made:  # an answer is never held: the report goes on by itself
             _note_end(method, "answered", sent_at, loop.time() - sent_at, made[0])
         return result
@@ -224,7 +232,7 @@ def hang_probe_test(request):
 
 
 def _start_report(
-    session: Session, method: str, sent_at: float, limit: float
+    session: Session, method: str, sent_at: float, limit: float, answered: threading.Event
 ) -> asyncio.Task | None:
     """The full report of the test's first stall, a line for the next ones.
 
@@ -247,7 +255,7 @@ def _start_report(
     pid = getattr(getattr(proc, "process", None), "pid", None)
     sent_wall = time.time() - pending
     task = asyncio.get_running_loop().create_task(
-        _rest(path, session, pid, sent_wall), name="hang-probe-report"
+        _rest(path, session, pid, sent_wall, method, answered), name="hang-probe-report"
     )
     _running.add(task)  # it may outlive the command that started it
     task.add_done_callback(_running.discard)
@@ -314,18 +322,28 @@ def _head(
     return "\n".join(out) + "\n"
 
 
-async def _rest(path: Path, session: Session, pid: int | None, sent_wall: float) -> None:
+async def _rest(
+    path: Path,
+    session: Session,
+    pid: int | None,
+    sent_wall: float,
+    method: str,
+    answered: threading.Event,
+) -> None:
     """Chrome's snapshot and the machine's (each written by a thread of its
-    own, which a closing loop does not stop) and whether Chrome answers; a
-    cut-short part says so. The machine's view does not queue behind Chrome's
-    tree: on Windows the tree (full, then light) may outlast ``REPORT_WAIT``,
-    the view (with the shadow copy events) fits in it alone."""
+    own, which a closing loop does not stop) and whether Chrome answers, again
+    after lldb if it attached; a cut-short part says so. The machine's view
+    does not queue behind Chrome's tree: on Windows the tree (full, then
+    light) may outlast ``REPORT_WAIT``, the view (with the shadow copy events)
+    fits in it alone."""
+    view = asyncio.ensure_future(asyncio.to_thread(_machine_into, path, sent_wall))
     if pid is None:
         _append(path, f"--- Chrome:\n{_NO_CHROME}\n")
-    shots = [asyncio.to_thread(_machine_into, path, sent_wall)]
-    if pid is not None:
-        shots.append(asyncio.to_thread(_tree_into, path, pid, sent_wall))
-    shot = asyncio.ensure_future(asyncio.gather(*shots))
+        shot = None
+    else:
+        shot = asyncio.ensure_future(
+            asyncio.to_thread(_snapshot_into, path, pid, answered, sent_wall)
+        )
     checks = [_check("root Browser.getVersion", session._router.root, "Browser.getVersion", {})]
     if session.session_id:
         expr = "[document.readyState, document.visibilityState, location.href]"
@@ -337,21 +355,55 @@ async def _rest(path: Path, session: Session, pid: int | None, sent_wall: float)
         _append(path, f"--- does Chrome answer? cut short: {type(exc).__name__}\n")
         raise
     _append(path, "--- does Chrome answer?\n" + "\n".join(answers) + "\n")
-    await shot
+    await view
+    if shot is not None and await shot:
+        await _after_detach(path, session, method, answered)
 
 
-def _tree_into(path: Path, pid: int, sent_wall: float) -> None:
-    """Chrome's tree (*pid*), births in seconds from the send."""
+def _snapshot_into(
+    path: Path, pid: int, answered: threading.Event, sent_wall: float | None = None
+) -> bool:
+    """Chrome's snapshot (*pid*, births in seconds from the send), in the
+    report before anything else is tried; then, if its threads wait on a
+    read-write lock and the command has no answer yet, who holds the lock.
+    Whether lldb attached."""
     try:
         text = snapshot(pid, since=sent_wall)
     except Exception as exc:  # noqa: BLE001 — the report says it, the test goes on
         text = f"snapshot failed: {exc!r}"
     _append(path, f"--- Chrome {pid} (this pipe):\n(born=: seconds from the send)\n{text}\n")
+    if not blocked_locks.parked(text):
+        return False
+    if answered.is_set():
+        _append(path, "--- read-write locks: not looked at: the command was answered\n")
+        return False
+    try:
+        locks = blocked_locks.rwlocks(pid, text)
+    except Exception as exc:  # noqa: BLE001 — a line of the report, the sample stays
+        locks = f"read-write locks waited on (lldb):\n  lldb failed: {exc!r}"
+    _append(path, f"--- {locks}\n")
+    return True
 
 
 def _machine_into(path: Path, sent_wall: float) -> None:
     """The whole machine, births in seconds from the send."""
     _append(path, f"--- the machine:\n{machine(since=sent_wall)}\n")
+
+
+async def _after_detach(
+    path: Path, session: Session, method: str, answered: threading.Event
+) -> None:
+    """Whether Chrome answers once lldb has let it go, and the watched command."""
+    head = "--- does Chrome answer after lldb detached?"
+    try:
+        line = await _check(
+            "root Browser.getVersion", session._router.root, "Browser.getVersion", {}
+        )
+    except BaseException as exc:
+        _append(path, f"{head} cut short: {type(exc).__name__}\n")
+        raise
+    state = "answered" if answered.is_set() else "not answered"
+    _append(path, f"{head}\n{line}\n  the watched {method}: {state}\n")
 
 
 async def _check(label: str, session: Session, method: str, params: dict) -> str:

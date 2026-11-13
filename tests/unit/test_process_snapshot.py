@@ -9,6 +9,8 @@ import subprocess
 import sys
 import time
 
+import pytest
+
 from tests import process_snapshot
 
 #: A child that starts a grandchild, which writes *path* after 3 s if still alive.
@@ -84,3 +86,21 @@ def test_the_machine_view_names_the_load_of_the_whole_machine():
 def test_a_moment_of_the_machine_view_is_given_from_the_send_like_a_birth():
     text = process_snapshot.births("pid 7 x born@1000500\n  System volsnap at@999000 x", 1000.0)
     assert text == "pid 7 x born=+0.50s\n  System volsnap at=-1.00s x"
+
+
+class _RootCommand:
+    """A command run as root past its deadline: deaf to signals, ``kill`` refused."""
+
+    pid = 2**22 - 1  # no such process group: ``killpg`` finds nothing
+
+    def wait(self, timeout=None):
+        raise subprocess.TimeoutExpired("sudo", timeout)
+
+    def kill(self):
+        raise PermissionError(1, "Operation not permitted")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the POSIX path of the process group")
+def test_a_command_that_refuses_to_be_ended_does_not_end_the_snapshot(monkeypatch):
+    monkeypatch.setattr(process_snapshot.time, "sleep", lambda s: None)
+    process_snapshot._end_tree(_RootCommand())  # no PermissionError
