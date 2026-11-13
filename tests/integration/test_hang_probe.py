@@ -49,7 +49,7 @@ async def test_a_frozen_chrome_leaves_python_tasks_and_its_own_state(browser, mo
     # Chrome's browser process was born before the stalled send.
     assert re.search(rf"pid {pid} .*born=-\d+\.\d\ds", chrome), chrome[:2000]
     machine = text.split("--- the machine:", 1)[1]
-    assert ("busiest processes" if sys.platform == "win32" else "load average") in machine
+    assert ("on the disk" if sys.platform == "win32" else "load average") in machine
     assert "=== end: Browser.getVersion TimeoutError after 6." in text
 
 

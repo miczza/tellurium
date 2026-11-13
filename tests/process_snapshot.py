@@ -382,13 +382,28 @@ Get-CimInstance Win32_Process |
   Sort-Object CreationDate | ForEach-Object {
     '  pid {0} {1} parent={2} born@{3}' -f $_.ProcessId, $_.Name, $_.ParentProcessId,
       ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() }
+$services = @{}
+Get-CimInstance Win32_Service -Filter "State='Running'" | ForEach-Object {
+  $services[[int]$_.ProcessId] += @($_.Name) }
 "busiest processes over 1 s (CPU seconds used):"
 $before = @{}
 Get-Process | ForEach-Object { $before[$_.Id] = $_.CPU }
 Start-Sleep -Milliseconds 1000
 Get-Process | ForEach-Object { [pscustomobject]@{ Id = $_.Id; Name = $_.Name;
   Used = ($_.CPU - $before[$_.Id]) } } | Sort-Object Used -Descending | Select-Object -First 8 |
-  ForEach-Object { '  pid {0} {1} cpu={2:N2}s' -f $_.Id, $_.Name, $_.Used }
+  ForEach-Object { '  pid {0} {1} cpu={2:N2}s {3}' -f $_.Id, $_.Name, $_.Used,
+    ($services[[int]$_.Id] -join ',') }
+"busiest processes on the disk (bytes/s, all I/O):"
+$io = (Get-Counter '\Process(*)\IO Data Bytes/sec', '\Process(*)\ID Process' `
+  -ErrorAction SilentlyContinue).CounterSamples
+$ids = @{}
+$io | Where-Object { $_.Path -like '*\id process' } |
+  ForEach-Object { $ids[$_.InstanceName] = [int]$_.CookedValue }
+$io | Where-Object { $_.Path -like '*\io data bytes/sec' -and $_.InstanceName -ne '_total' } |
+  Sort-Object CookedValue -Descending | Select-Object -First 6 | ForEach-Object {
+    $id = $ids[$_.InstanceName]
+    '  pid {0} {1} io={2:N0}B/s {3}' -f $id, $_.InstanceName, $_.CookedValue,
+      ($services[$id] -join ',') }
 "counters:"
 $names = '\Processor(_Total)\% Processor Time', '\PhysicalDisk(_Total)\Current Disk Queue Length',
   '\PhysicalDisk(_Total)\% Disk Time', '\Memory\Available MBytes'
