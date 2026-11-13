@@ -3,8 +3,11 @@ something even on a stalled Windows runner."""
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import time
+
+import pytest
 
 from tests import process_snapshot
 
@@ -47,3 +50,21 @@ def test_a_windows_snapshot_that_times_out_falls_back_to_a_light_list(monkeypatc
     assert [c[0] for c in calls] == ["powershell", "tasklist"]
     assert "powershell timed out" in text
     assert '"chrome.exe","4368"' in text
+
+
+class _RootCommand:
+    """A command run as root past its deadline: deaf to signals, ``kill`` refused."""
+
+    pid = 2**22 - 1  # no such process group: ``killpg`` finds nothing
+
+    def wait(self, timeout=None):
+        raise subprocess.TimeoutExpired("sudo", timeout)
+
+    def kill(self):
+        raise PermissionError(1, "Operation not permitted")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the POSIX path of the process group")
+def test_a_command_that_refuses_to_be_ended_does_not_end_the_snapshot(monkeypatch):
+    monkeypatch.setattr(process_snapshot.time, "sleep", lambda s: None)
+    process_snapshot._end_tree(_RootCommand())  # no PermissionError
