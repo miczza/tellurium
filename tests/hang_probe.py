@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import contextvars
 import math
 import os
 import re
@@ -44,6 +45,8 @@ from typing import Any
 
 import pytest
 
+from tellurium.browser import navigation as navigation_module
+from tellurium.browser import tab as tab_module
 from tellurium.browser.process import BrowserProcess
 from tellurium.cdp.transport._session import Session
 from tests.await_chain import tasks_report
@@ -59,7 +62,8 @@ WATCH = 10.0
 #: ...but before this share of its own deadline, so that it is still pending...
 SHARE = 0.8
 #: ...and before this when it has none (``Page.navigate`` inside a navigation,
-#: bounded by ``Tab.get``'s 30 s, which is not stretched).
+#: bounded by ``Tab.get``'s 30 s, which is not stretched; a shorter navigation
+#: is watched at its share).
 UNBOUNDED_WATCH = 20.0
 #: Deadlines shorter than this are not watched: they are the tests' own, made
 #: to expire on frozen pages; Chrome's waits are 10 s and longer.
@@ -99,6 +103,10 @@ _running: set[asyncio.Task] = set()
 #: Without the variable: read once, before any test points ``tempfile`` elsewhere.
 _RUN_DIR = Path(tempfile.gettempdir(), "tellurium-hang-reports", f"{time.time_ns()}-{os.getpid()}")
 _NO_CHROME = "no Chrome process for this pipe (none started by BrowserProcess)"
+#: The deadline (loop clock) of the navigation the next ``Page.navigate`` is in.
+_navigation_deadline: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "hang_probe_navigation_deadline", default=None
+)
 #: Requests to the tests' HTTP servers: ``[arrived, where, answered or None]``
 #: on the loop's clock (``time.monotonic``), written by the servers' threads.
 _requests: collections.deque = collections.deque(maxlen=500)
@@ -116,14 +124,17 @@ def request_answered(entry: list) -> None:
     entry[2] = time.monotonic()
 
 
-def watch_after(limit: float) -> float | None:
+def watch_after(limit: float, bound: float | None = None) -> float | None:
     """When a command with deadline *limit* is reported if still pending;
-    ``None`` when it is not watched."""
+    ``None`` when it is not watched. *bound*: what is left of the navigation
+    a command without a deadline is in."""
     if limit < MIN_LIMIT:
         return None
     first = scaled(WATCH)
     if math.isinf(limit):
-        return min(first, UNBOUNDED_WATCH)
+        if bound is None:
+            return min(first, UNBOUNDED_WATCH)
+        return None if bound < MIN_LIMIT else min(first, UNBOUNDED_WATCH, SHARE * bound)
     return min(first, SHARE * limit)
 
 
@@ -143,14 +154,16 @@ def installed(config: Any = None) -> Iterator[None]:
     """The probe patched into ``Session`` and ``BrowserProcess`` for the body."""
     real_send, real_handle = Session.send, Session._handle_message
     real_spawn = BrowserProcess.spawn
+    real_navigate = navigation_module.navigate
     _state.config, _state.real_send = config, real_send
 
     async def send(self, method, params=None, timeout=None):
+        loop = asyncio.get_running_loop()
         limit = self._router.default_timeout if timeout is None else timeout
-        after = watch_after(limit)
+        deadline = _navigation_deadline.get()
+        after = watch_after(limit, None if deadline is None else deadline - loop.time())
         if after is None:
             return await real_send(self, method, params, timeout)
-        loop = asyncio.get_running_loop()
         sent_at = loop.time()
         made: list[asyncio.Task | None] = []
 
@@ -178,12 +191,21 @@ def installed(config: Any = None) -> Iterator[None]:
         _procs.add(self)
         return await real_spawn(self, *args, **kwargs)
 
+    async def navigate(session, url, *, timeout, **kwargs):
+        token = _navigation_deadline.set(asyncio.get_running_loop().time() + timeout)
+        try:
+            return await real_navigate(session, url, timeout=timeout, **kwargs)
+        finally:
+            _navigation_deadline.reset(token)
+
     Session.send, Session._handle_message, BrowserProcess.spawn = send, handle, spawn
+    navigation_module.navigate = tab_module.navigate = navigate
     try:
         yield
     finally:
         Session.send, Session._handle_message = real_send, real_handle
         BrowserProcess.spawn = real_spawn
+        navigation_module.navigate = tab_module.navigate = real_navigate
 
 
 @pytest.fixture(scope="session", autouse=True)

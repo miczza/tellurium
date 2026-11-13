@@ -402,3 +402,20 @@ async def test_the_report_says_when_the_send_was_on_the_clock_of_the_snapshot(pr
     [report] = probe.iterdir()
     [sent] = re.findall(r"sent at Unix time ([\d.]+)", report.read_text())
     assert before - 0.1 < float(sent) < before + 0.1
+
+
+async def test_a_navigation_shorter_than_the_watch_is_watched_within_its_own_deadline(
+    probe, monkeypatch
+):
+    """``Page.navigate`` has no deadline of its own: the navigation's bounds it,
+    and a ``tab.get(timeout=1)`` is watched within it, not at the fixed watch."""
+    from tellurium.browser import tab as tab_module
+    from tellurium.browser.navigation import NavigationTimeoutError
+
+    monkeypatch.setattr(hang_probe, "WATCH", 10.0)
+    monkeypatch.setattr(hang_probe, "UNBOUNDED_WATCH", 10.0)
+    router = SessionRouter(SilentChrome())
+    with pytest.raises(NavigationTimeoutError):
+        await tab_module.navigate(router.root, "about:blank", wait_until="load", timeout=1.0)
+    [report] = probe.iterdir()
+    assert re.search(r"Page.navigate \(session root\) pending for 0\.[78]s", report.read_text())
