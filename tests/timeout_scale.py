@@ -17,7 +17,7 @@ Scaled: :attr:`SessionRouter.default_timeout` (read at each send),
 ``session.LIVE_SAVE_TIMEOUT``) and the login's CDP calls
 (``login_command.CALL_TIMEOUT``), the default deadline of a navigation and of
 its ``Page.enable`` (``navigation.NAVIGATION_TIMEOUT``, ``LIFECYCLE_TIMEOUT``:
-a Windows runner taking a shadow copy held a request 25 s, shown by
+a Windows runner, probably taking a shadow copy, held a request 25 s, shown by
 ``test_navigation_stall.py``), all module globals read at call time; and
 the tests' own answer bounds that go through :func:`scaled`. A ``tellurium``
 command a test starts (the MCP server of ``test_mcp_http.py``) gets the

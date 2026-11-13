@@ -1,7 +1,7 @@
 """A navigation through a stall of Chrome longer than the default deadline.
 
-A Windows runner taking a volume shadow copy held a navigation's request
-25 s, and a red went past 29.5 s: with nothing wrong in tellurium, the 30 s
+A Windows runner held a navigation's request 25 s (probably while taking a
+volume shadow copy: seen in one stall), and a red went past 29.5 s: with nothing wrong in tellurium, the 30 s
 of ``Tab.get`` without a timeout expired. The CI stretches that default
 (``tests.timeout_scale``, factor 3: 90 s), read at each call. Here Chrome's
 browser process is frozen (``SIGSTOP``, on Windows ``NtSuspendProcess``) for

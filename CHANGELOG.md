@@ -508,8 +508,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `Tab.get(timeout=None)`: without a timeout a navigation takes
   `tellurium.browser.navigation.NAVIGATION_TIMEOUT` (30 s, unchanged), read at each call,
   and `Page.enable` before it `LIFECYCLE_TIMEOUT` (10 s, unchanged): a machine whose disk
-  freezes for seconds (a Windows CI runner taking a volume shadow copy held a navigation's
-  request 25 s) may raise them for a run. The tests' `TELLURIUM_TEST_TIMEOUT_SCALE`
+  freezes for seconds (a Windows CI runner held a navigation's request 25 s, probably
+  while taking a volume shadow copy: seen with one such stall) may raise them for a run. The tests' `TELLURIUM_TEST_TIMEOUT_SCALE`
   stretches both.
 - MCP `navigate` with a `url` takes that same default deadline
   (`navigation.NAVIGATION_TIMEOUT`, 30 s as before) instead of a fixed 30 s; the tool's

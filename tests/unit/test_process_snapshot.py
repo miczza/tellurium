@@ -77,7 +77,7 @@ def test_the_machine_view_names_the_load_of_the_whole_machine():
     assert text.strip()
     if sys.platform != "win32":
         assert "load average" in text
-    else:  # a shadow copy freezes the disk: its events, "(none)" included, are there
+    else:  # a shadow copy probably froze a runner: its events, "(none)" included, are there
         assert "shadow copy events since" in text, text
 
 

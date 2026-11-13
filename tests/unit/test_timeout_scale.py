@@ -157,8 +157,8 @@ def test_the_session_cookie_calls_are_scaled(monkeypatch):
 
 
 def test_the_default_navigation_deadline_is_scaled(monkeypatch):
-    """A Windows runner froze the disk for a shadow copy (VSSVC born 0.4 s
-    before the send): the navigation's request left Chrome only 25.5 s after
+    """A Windows runner stalled, probably for a shadow copy (VSSVC born 0.4 s
+    before the send, one stall seen): the navigation's request left Chrome only 25.5 s after
     ``Page.navigate`` (run 43429848268), against ``Tab.get``'s 30 s."""
     from tellurium.browser import navigation
 

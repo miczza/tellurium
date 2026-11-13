@@ -29,8 +29,8 @@ WAIT_UNTIL_EVENTS: dict[str, str | None] = {
 }
 
 #: The deadline of a :meth:`Tab.get` given no ``timeout``, read at each call: a
-#: machine whose disk freezes for seconds (a CI runner taking a shadow copy) may
-#: raise it for a run.
+#: machine that freezes for seconds (a CI runner, probably taking a shadow copy)
+#: may raise it for a run.
 NAVIGATION_TIMEOUT = 30.0
 #: Bounds ``Page.enable`` and ``Page.setLifecycleEventsEnabled`` before a navigation.
 LIFECYCLE_TIMEOUT = 10.0
