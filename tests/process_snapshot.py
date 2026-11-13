@@ -4,13 +4,17 @@ One row per process of the tree (``pid <n> <name> state=<s> ...``), then what
 each system can say about where the root process is stuck:
 
 * Linux: ``/proc`` (state, wait channel and kernel stack of each thread of
-  the root, the kernel stack through ``sudo -n`` when not readable);
-* macOS: ``sample`` (the user-space call graph of every thread of the root,
-  through ``sudo -n`` when it can: Chrome is a hardened binary);
+  the root);
+* macOS: ``sample`` (the user-space call graph of every thread of the root);
 * Windows: the threads of each process grouped by state and wait reason
-  (``Suspended`` for a suspended one), and those of the root one by one.
+  (``Suspended`` for a suspended one), and those of the root one by one; on a
+  runner too stalled for that, the light list of ``tasklist``.
 
-Blocking (files, subprocesses with their own deadlines): call it in a thread.
+Nothing runs as root unless ``$TELLURIUM_HANG_SUDO`` is ``1`` (the CI sets
+it: the kernel stack on Linux, ``sample`` of the hardened Chrome on macOS,
+through ``sudo -n``). A command past its deadline is ended with every process
+it started. Blocking (files, subprocesses with their own deadlines): call it
+in a thread.
 """
 
 from __future__ import annotations
@@ -18,15 +22,23 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 #: How long ``sample`` watches the root process (macOS).
 SAMPLE_SECONDS = 3
 #: Deadline of each subprocess: a stalled runner froze even ``Get-Process`` for 20 s.
 COMMAND_TIMEOUT = 45.0
+#: Deadline of the full Windows snapshot (CIM, PowerShell), then of the light list:
+#: a stalled runner did not finish the full one in 45 s (run 43391051756).
+WINDOWS_FULL_TIMEOUT = 20.0
+LIGHT_TIMEOUT = 15.0
+#: ``1``: the commands that need root run through ``sudo -n`` (the CI only).
+SUDO_ENV = "TELLURIUM_HANG_SUDO"
 #: Threads of the root process listed (Linux, Windows).
 MAX_LINES = 300
 #: Lines of ``sample``'s output kept (macOS): all of a browser process's ~60 threads.
@@ -46,17 +58,64 @@ def snapshot(pid: int) -> str:
         return f"(no snapshot of {pid}: {exc!r})"
 
 
-def _run(cmd: list[str]) -> str:
+def _run(cmd: list[str], timeout: float = COMMAND_TIMEOUT) -> tuple[str, bool]:
+    """What *cmd* printed, and whether it ended well within *timeout*; past
+    it, *cmd* is ended with every process it started."""
+    group = (
+        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        if sys.platform == "win32"
+        else {"start_new_session": True}
+    )
     try:
-        done = subprocess.run(cmd, capture_output=True, text=True, timeout=COMMAND_TIMEOUT)
-    except (OSError, subprocess.SubprocessError) as exc:
-        return f"({cmd[0]} failed: {exc!r})"
-    return done.stdout + (f"\n(stderr) {done.stderr.strip()}" if done.stderr.strip() else "")
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **group
+        )
+    except OSError as exc:
+        return f"({cmd[0]} failed: {exc!r})", False
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _end_tree(proc)
+        try:
+            out, _ = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:  # a process outside the group holds the pipes
+            out = ""
+        return f"({cmd[0]} timed out after {timeout:g}s)\n{out or ''}".strip(), False
+    said = (out or "") + (f"\n(stderr) {err.strip()}" if err and err.strip() else "")
+    return said, proc.returncode == 0
+
+
+def _end_tree(proc: subprocess.Popen) -> None:
+    """End *proc* and what it started: ``taskkill /T`` on Windows; on POSIX
+    its process group, ``SIGTERM`` first (``sudo`` passes it on to a command
+    it runs as root), then ``SIGKILL``."""
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=10
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+        proc.kill()
+        return
+    for sig, grace in ((signal.SIGTERM, 2.0), (signal.SIGKILL, 5.0)):
+        try:
+            os.killpg(proc.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            proc.wait(grace)
+            if sig == signal.SIGTERM:
+                time.sleep(0.2)  # what it started may still be ending
+        except subprocess.TimeoutExpired:
+            continue
+    proc.kill()
 
 
 def _sudo() -> list[str]:
-    """``sudo -n`` when it needs no password (the CI runners), else nothing."""
-    if shutil.which("sudo") is None:
+    """``sudo -n`` when the CI asks for it and it needs no password, else nothing:
+    never root on a developer's machine."""
+    if os.environ.get(SUDO_ENV) != "1" or shutil.which("sudo") is None:
         return []
     try:
         ok = subprocess.run(["sudo", "-n", "true"], capture_output=True, timeout=10).returncode
@@ -138,14 +197,14 @@ def _kernel_stack(pid: int) -> str:
         sudo = _sudo()
         if not sudo:
             return f"(not readable: {exc.strerror})"
-        return _run([*sudo, "cat", f"/proc/{pid}/stack"]).strip() or "(empty)"
+        return _run([*sudo, "cat", f"/proc/{pid}/stack"])[0].strip() or "(empty)"
 
 
 # --- macOS ------------------------------------------------------------------
 
 
 def _macos(pid: int) -> str:
-    rows = _run(["ps", "-A", "-o", "pid=,ppid=,state=,pcpu=,rss=,etime=,command="])
+    rows, _ = _run(["ps", "-A", "-o", "pid=,ppid=,state=,pcpu=,rss=,etime=,command="])
     procs: dict[int, tuple[int, str]] = {}
     for line in rows.splitlines():
         parts = line.split(None, 2)
@@ -180,7 +239,7 @@ def _sample(pid: int) -> str:
     with tempfile.TemporaryDirectory(prefix="tellurium_sample_") as tmp:
         path = os.path.join(tmp, "sample.txt")
         cmd = ["sample", str(pid), str(SAMPLE_SECONDS), "-mayDie", "-file", path]
-        said = _run([*_sudo(), *cmd])
+        said, _ = _run([*_sudo(), *cmd])
         try:
             text = Path(path).read_text(errors="replace")
         except OSError:
@@ -234,4 +293,13 @@ while ($i -lt $queue.Count) {{
 
 def _windows(pid: int) -> str:
     script = _POWERSHELL.format(pid=int(pid), max_lines=MAX_LINES)
-    return _run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script]).strip()
+    cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
+    full, ok = _run(cmd, timeout=WINDOWS_FULL_TIMEOUT)
+    if ok:
+        return full.strip()
+    light, _ = _run(_TASKLIST, timeout=LIGHT_TIMEOUT)
+    return f"{full.strip()}\nthe light list instead ({' '.join(_TASKLIST)}):\n{light.strip()}"
+
+
+#: Every Chrome process with its state, CPU time and memory, without CIM.
+_TASKLIST = ["tasklist", "/v", "/fo", "csv", "/fi", "IMAGENAME eq chrome.exe"]

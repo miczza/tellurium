@@ -76,7 +76,8 @@ run, and a manual run does not cancel it. Every job installs the `geoip`,
   unanswered well inside its deadline makes `tests/hang_probe.py` write where
   every asyncio task waits and what Chrome's processes are doing (`/proc` on
   Linux, `sample` on macOS, threads and wait reasons on Windows) to
-  `$TELLURIUM_HANG_REPORTS/<test>.txt`; the integration jobs upload that
+  `$TELLURIUM_HANG_REPORTS/<test>.txt` (`TELLURIUM_HANG_SUDO=1` lets it use
+  `sudo -n` there, never elsewhere); the integration jobs upload that
   folder as `hang-reports-<os>[-<shard>]`, red job or not, when it is not
   empty. The diagnostic step does not run
   `chrome.exe --version`: on Windows it opens a browser window and never

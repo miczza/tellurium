@@ -127,6 +127,8 @@ jobs:
         env:
           TESTS: ${{ inputs.tests }}
           TELLURIUM_HANG_REPORTS: ${{ runner.temp }}/hang-reports
+          # The probe's root-only views (kernel stack, sample of Chrome): runners only.
+          TELLURIUM_HANG_SUDO: "1"
         run: xvfb-run -a pytest ${TESTS:-tests/integration tests/stealth} -q -rfE --durations=15
       - name: Upload hang reports
         # tests/hang_probe.py: where tellurium and Chrome were when a command to
@@ -276,6 +278,8 @@ jobs:
           STOCK_CHROME: ${{ steps.chrome.outputs.chrome-path }}
           TESTS: ${{ inputs.tests }}
           TELLURIUM_HANG_REPORTS: ${{ runner.temp }}/hang-reports
+          # The probe's root-only views (kernel stack, sample of Chrome): runners only.
+          TELLURIUM_HANG_SUDO: "1"
         run: |
           files=${TESTS:-$(python -m tests.shard ${{ matrix.shard }} 4 tests/integration)}
           pytest $files -v -rfEs --timeout=300 --junitxml=junit-integration.xml
