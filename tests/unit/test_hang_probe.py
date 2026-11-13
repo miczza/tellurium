@@ -6,6 +6,7 @@ import asyncio
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -348,7 +349,9 @@ def test_the_end_of_a_command_waits_for_a_snapshot_as_long_as_its_commands_may_t
 async def test_an_answer_after_the_warning_comes_back_at_once(probe, monkeypatch, sleeper):
     """The probe never holds an answer: Chrome answers at 0.5 s, the report's
     snapshot takes 3 s, and a caller's wait_for of 1.5 s still has the answer."""
-    monkeypatch.setattr(hang_probe, "snapshot", lambda pid: time.sleep(3) or "a slow snapshot")
+    monkeypatch.setattr(
+        hang_probe, "snapshot", lambda pid, since=None: time.sleep(3) or "a slow snapshot"
+    )
     router = SessionRouter(LateChrome(0.5))
     chrome = _AChrome(router._transport, sleeper)
     hang_probe._procs.add(chrome)
@@ -360,3 +363,42 @@ async def test_an_answer_after_the_warning_comes_back_at_once(probe, monkeypatch
         reader.cancel()
     [report] = probe.iterdir()
     assert "=== end: Page.navigate answered after 0.5" in report.read_text()
+
+
+async def test_the_report_lists_the_requests_to_the_test_servers_around_the_send(probe):
+    """Whether the server got the navigation's request, and when it answered:
+    a stall before the request is not one after the response (R4-B)."""
+    router = SessionRouter(LateChrome(0.6))
+    reader = asyncio.create_task(router.run())
+    early = hang_probe.request_arrived("127.0.0.1:1/early.html")
+    hang_probe.request_answered(early)
+    loop = asyncio.get_running_loop()
+
+    def serve(path: str, answer: bool) -> None:
+        entry = hang_probe.request_arrived(path)
+        if answer:
+            hang_probe.request_answered(entry)
+
+    loop.call_later(0.1, serve, "127.0.0.1:1/frame.html", True)
+    loop.call_later(0.4, serve, "127.0.0.1:1/late.html", False)
+    try:
+        await router.root.send("Page.navigate", {"url": "about:blank"}, timeout=2.0)
+    finally:
+        reader.cancel()
+    [report] = probe.iterdir()
+    text = report.read_text()
+    head, end = text.split("=== end", 1)
+    assert "early.html" not in text
+    assert re.search(r"\+0\.1\ds GET 127.0.0.1:1/frame.html, answered at \+0\.1\ds", head)
+    assert "late.html" not in head
+    assert re.search(r"\+0\.4\ds GET 127.0.0.1:1/late.html, not answered", end)
+
+
+async def test_the_report_says_when_the_send_was_on_the_clock_of_the_snapshot(probe):
+    router = SessionRouter(SilentChrome())
+    before = time.time()
+    with pytest.raises(TimeoutError):
+        await router.root.send("Page.enable", timeout=0.6)
+    [report] = probe.iterdir()
+    [sent] = re.findall(r"sent at Unix time ([\d.]+)", report.read_text())
+    assert before - 0.1 < float(sent) < before + 0.1
