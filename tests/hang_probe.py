@@ -74,6 +74,7 @@ LIVENESS_TIMEOUT = 5.0
 #: How long a command that ended waits for its report still being made: as
 #: long as the snapshot's commands may take (``sample`` of a frozen Chrome on
 #: macOS takes over 20 s), so only a snapshot stuck past them is left behind.
+#: The machine's view, in a thread of its own, ends within it even on Windows.
 REPORT_WAIT = COMMAND_TIMEOUT + 15.0
 #: Full reports in a session at most: a Chrome gone mute for good stalls every test after.
 MAX_REPORTS = 20
@@ -314,12 +315,17 @@ def _head(
 
 
 async def _rest(path: Path, session: Session, pid: int | None, sent_wall: float) -> None:
-    """Chrome's snapshot and the machine's (written by their own thread, which
-    a closing loop does not stop) and whether Chrome answers; a cut-short part
-    says so."""
+    """Chrome's snapshot and the machine's (each written by a thread of its
+    own, which a closing loop does not stop) and whether Chrome answers; a
+    cut-short part says so. The machine's view does not queue behind Chrome's
+    tree: on Windows the tree (full, then light) may outlast ``REPORT_WAIT``,
+    the view (with the shadow copy events) fits in it alone."""
     if pid is None:
         _append(path, f"--- Chrome:\n{_NO_CHROME}\n")
-    shot = asyncio.ensure_future(asyncio.to_thread(_snapshot_into, path, pid, sent_wall))
+    shots = [asyncio.to_thread(_machine_into, path, sent_wall)]
+    if pid is not None:
+        shots.append(asyncio.to_thread(_tree_into, path, pid, sent_wall))
+    shot = asyncio.ensure_future(asyncio.gather(*shots))
     checks = [_check("root Browser.getVersion", session._router.root, "Browser.getVersion", {})]
     if session.session_id:
         expr = "[document.readyState, document.visibilityState, location.href]"
@@ -334,14 +340,17 @@ async def _rest(path: Path, session: Session, pid: int | None, sent_wall: float)
     await shot
 
 
-def _snapshot_into(path: Path, pid: int | None, sent_wall: float) -> None:
-    """Chrome's tree (*pid*), then the machine, births in seconds from the send."""
-    if pid is not None:
-        try:
-            text = snapshot(pid, since=sent_wall)
-        except Exception as exc:  # noqa: BLE001 — the report says it, the test goes on
-            text = f"snapshot failed: {exc!r}"
-        _append(path, f"--- Chrome {pid} (this pipe):\n(born=: seconds from the send)\n{text}\n")
+def _tree_into(path: Path, pid: int, sent_wall: float) -> None:
+    """Chrome's tree (*pid*), births in seconds from the send."""
+    try:
+        text = snapshot(pid, since=sent_wall)
+    except Exception as exc:  # noqa: BLE001 — the report says it, the test goes on
+        text = f"snapshot failed: {exc!r}"
+    _append(path, f"--- Chrome {pid} (this pipe):\n(born=: seconds from the send)\n{text}\n")
+
+
+def _machine_into(path: Path, sent_wall: float) -> None:
+    """The whole machine, births in seconds from the send."""
     _append(path, f"--- the machine:\n{machine(since=sent_wall)}\n")
 
 

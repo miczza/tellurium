@@ -43,6 +43,10 @@ COMMAND_TIMEOUT = 45.0
 #: a stalled runner did not finish the full one in 45 s (run 43391051756).
 WINDOWS_FULL_TIMEOUT = 20.0
 LIGHT_TIMEOUT = 15.0
+#: Past a command's deadline: how long ``taskkill /T`` gets to end its tree
+#: (Windows), then how long its pipes get to close.
+TASKKILL_TIMEOUT = 10.0
+PIPES_TIMEOUT = 5.0
 #: How far back the view of the machine looks for shadow copy events (Windows).
 EVENTS_WINDOW = 600.0
 #: ``1``: the commands that need root run through ``sudo -n`` (the CI only).
@@ -121,7 +125,7 @@ def _run(cmd: list[str], timeout: float = COMMAND_TIMEOUT) -> tuple[str, bool]:
     except subprocess.TimeoutExpired:
         _end_tree(proc)
         try:
-            out, _ = proc.communicate(timeout=5)
+            out, _ = proc.communicate(timeout=PIPES_TIMEOUT)
         except subprocess.TimeoutExpired:  # a process outside the group holds the pipes
             out = ""
         return f"({cmd[0]} timed out after {timeout:g}s)\n{out or ''}".strip(), False
@@ -136,7 +140,9 @@ def _end_tree(proc: subprocess.Popen) -> None:
     if sys.platform == "win32":
         try:
             subprocess.run(
-                ["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=10
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                capture_output=True,
+                timeout=TASKKILL_TIMEOUT,
             )
         except (OSError, subprocess.SubprocessError):
             pass

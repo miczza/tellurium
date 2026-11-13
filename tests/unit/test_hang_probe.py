@@ -439,3 +439,34 @@ async def test_the_end_says_how_long_the_command_took_not_the_report(probe, monk
         await router.root.send("Page.enable", timeout=0.6)
     [report] = probe.iterdir()
     assert "=== end: Page.enable TimeoutError after 0.6s" in report.read_text()
+
+
+async def test_the_view_of_the_machine_comes_within_the_wait_while_chromes_tree_is_slow(
+    probe, monkeypatch, sleeper
+):
+    """On Windows Chrome's tree (full, then light) may outlast the wait for the
+    report: the machine's view (the shadow copy events) does not queue behind
+    it, it is in the report before the end line."""
+    monkeypatch.setattr(
+        hang_probe, "snapshot", lambda pid, since=None: time.sleep(3) or "a slow tree"
+    )
+    monkeypatch.setattr(hang_probe, "machine", lambda since=None: "a quick view")
+    monkeypatch.setattr(hang_probe, "REPORT_WAIT", 1.0)
+    router = SessionRouter(SilentChrome())
+    chrome = _AChrome(router._transport, sleeper)  # held: the probe keeps it weakly
+    hang_probe._procs.add(chrome)
+    with pytest.raises(TimeoutError):
+        await router.root.send("Page.enable", timeout=0.6)
+    [report] = probe.iterdir()
+    text = report.read_text()
+    assert "a slow tree" not in text
+    assert text.index("--- the machine:\na quick view") < text.index("=== end: Page.enable")
+
+
+def test_the_view_of_the_machine_on_windows_ends_within_the_wait_for_the_report():
+    """Its PowerShell runs alone in its thread: its own deadline, then the
+    ending of what it started past it, fit in the wait."""
+    from tests import process_snapshot as ps
+
+    worst = ps.WINDOWS_FULL_TIMEOUT + ps.TASKKILL_TIMEOUT + ps.PIPES_TIMEOUT
+    assert hang_probe.REPORT_WAIT > worst + 5
