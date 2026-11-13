@@ -17,8 +17,9 @@ import tempfile
 
 from tests import process_snapshot
 
-#: ``_PTHREAD_RWLOCK_SIG``: the first word of an initialised ``pthread_rwlock_t``.
-RWLOCK_SIG = 0x2DA8B3B4
+#: The first word of a ``pthread_rwlock_t``: ``'RWLK'`` once used, then the
+#: static initialiser's (libpthread's ``_PTHREAD_RWLOCK_SIG`` and ``_SIG_init``).
+RWLOCK_SIGS = (0x52574C4B, 0x2DA8B3B4)
 #: A frame of ``sample`` that waits on a read-write lock.
 PARKED = "__psynch_rw_"
 
@@ -26,7 +27,7 @@ PARKED = "__psynch_rw_"
 LLDB_SCRIPT = f'''
 import lldb
 
-SIG = {hex(RWLOCK_SIG)}
+SIGS = ({", ".join(hex(sig) for sig in RWLOCK_SIGS)})
 PARKED = "{PARKED}"
 SAVED = ("x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28",
          "rbx", "r12", "r13", "r14", "r15")
@@ -55,7 +56,7 @@ def _lock_of(process, frames):
                 continue
             addr = reg.GetValueAsUnsigned()
             first = _read(process, addr, 8) if addr else None
-            if first is not None and first & 0xFFFFFFFF == SIG:
+            if first is not None and first & 0xFFFFFFFF in SIGS:
                 return addr
     return None
 
@@ -86,6 +87,16 @@ def __lldb_init_module(debugger, _dict):
         for row in range(0, WORDS, 8):
             print("  +%03x: %s" % (4 * row, " ".join(
                 "????????" if w is None else "%08x" % w for w in words[row:row + 8])))
+        # The sequence words L, S, U sit at the first 16-byte boundary past +32;
+        # counts step by 0x100, the low byte of L is its state (libpthread).
+        seq = (lock + 32 + 0xF) & ~0xF
+        lcntval, rwseq, ucntval = (_read(process, seq + 4 * i, 4) for i in range(3))
+        if None not in (lcntval, rwseq, ucntval):
+            bits = [b for b, m in (("K", 1), ("E", 2), ("W", 4), ("U", 0x40), ("I", 0x80))
+                    if lcntval & m]
+            print("  lcntval %08x (%s) rw_seq %08x ucntval %08x: %d grant(s) or wait(s)"
+                  " not unlocked" % (lcntval, "".join(bits) or "-", rwseq, ucntval,
+                  ((lcntval & ~0xFF) - (ucntval & ~0xFF)) % (1 << 32) >> 8))
         owners = set()
         for i in range(WORDS - 1):
             value = _read(process, lock + 4 * i, 8)

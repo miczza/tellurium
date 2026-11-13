@@ -46,7 +46,10 @@ def test_a_thread_on_a_rwlock_attaches_lldb_and_detaches(monkeypatch):
 def test_the_lldb_script_finds_the_lock_and_its_owner_by_thread_id():
     script = blocked_locks.LLDB_SCRIPT
     compile(script, "lock_owner.py", "exec")  # lldb's own Python runs it
-    assert hex(blocked_locks.RWLOCK_SIG) in script
+    # a lock used once is signed 'RWLK'; one never used yet, by its static initialiser
+    assert set(blocked_locks.RWLOCK_SIGS) == {0x52574C4B, 0x2DA8B3B4}
+    assert all(hex(sig) in script for sig in blocked_locks.RWLOCK_SIGS)
+    assert "lcntval" in script  # the sequence words are decoded
     assert "__psynch_rw_" in script and "GetThreadID" in script
 
 
