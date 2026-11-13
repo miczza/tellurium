@@ -12,7 +12,8 @@ each system can say about where the root process is stuck:
   runner too stalled for that, the light list of ``tasklist``.
 
 :func:`machine` adds the whole machine: on Windows the processes born since
-the send, the busiest over a second and the CPU and disk counters; elsewhere
+the send, the events of shadow copies (VSS, volsnap) of the last minutes, the
+busiest over a second and the CPU and disk counters; elsewhere
 the load average (and Linux's pressure stall information).
 
 Nothing runs as root unless ``$TELLURIUM_HANG_SUDO`` is ``1`` (the CI sets
@@ -42,6 +43,8 @@ COMMAND_TIMEOUT = 45.0
 #: a stalled runner did not finish the full one in 45 s (run 43391051756).
 WINDOWS_FULL_TIMEOUT = 20.0
 LIGHT_TIMEOUT = 15.0
+#: How far back the view of the machine looks for shadow copy events (Windows).
+EVENTS_WINDOW = 600.0
 #: ``1``: the commands that need root run through ``sudo -n`` (the CI only).
 SUDO_ENV = "TELLURIUM_HANG_SUDO"
 #: Threads of the root process listed (Linux, Windows).
@@ -49,8 +52,8 @@ MAX_LINES = 300
 #: Lines of ``sample``'s output kept (macOS): all of a browser process's ~60 threads.
 MAX_SAMPLE_LINES = 5000
 _TYPE = re.compile(r"--type=(\S+)")
-#: A birth as the systems' parts write it: Unix time in milliseconds.
-_BORN = re.compile(r"born@(\d+)")
+#: A birth (or a moment, ``at@``) as the systems' parts write it: Unix time in ms.
+_BORN = re.compile(r"\b(born|at)@(\d+)")
 
 
 def snapshot(pid: int, since: float | None = None) -> str:
@@ -82,14 +85,15 @@ def machine(since: float | None = None) -> str:
 
 
 def births(text: str, since: float | None) -> str:
-    """Each ``born@<ms>`` of *text* in seconds from *since*, else on the UTC clock."""
+    """Each ``born@<ms>`` (and ``at@<ms>``) of *text* in seconds from *since*,
+    else on the UTC clock."""
 
     def say(match: re.Match) -> str:
-        at = int(match.group(1)) / 1000
+        word, at = match.group(1), int(match.group(2)) / 1000
         if since is not None:
-            return f"born={at - since:+.2f}s"
+            return f"{word}={at - since:+.2f}s"
         clock = time.strftime("%H:%M:%S", time.gmtime(at))
-        return f"born={clock}.{int(at * 1000) % 1000:03d}Z"
+        return f"{word}={clock}.{int(at * 1000) % 1000:03d}Z"
 
     return _BORN.sub(say, text)
 
@@ -372,7 +376,8 @@ def _windows(pid: int) -> str:
     return f"{full.strip()}\nthe light list instead ({' '.join(_TASKLIST)}):\n{light.strip()}"
 
 
-#: The processes born on the machine since __SINCE__ (Unix ms), the busiest
+#: The processes born on the machine since __SINCE__ (Unix ms), the events of
+#: shadow copies (VSS, volsnap) since __EVENTS_SINCE__, the busiest processes
 #: over a second, and the CPU, disk and memory counters.
 _MACHINE = r"""
 $since = [DateTimeOffset]::FromUnixTimeMilliseconds(__SINCE__).UtcDateTime
@@ -382,6 +387,17 @@ Get-CimInstance Win32_Process |
   Sort-Object CreationDate | ForEach-Object {
     '  pid {0} {1} parent={2} born@{3}' -f $_.ProcessId, $_.Name, $_.ParentProcessId,
       ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() }
+"shadow copy events since __EVENTS_WHEN__ (Application and System logs):"
+$from = [DateTimeOffset]::FromUnixTimeMilliseconds(__EVENTS_SINCE__).LocalDateTime
+$copies = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application', 'System'; StartTime = $from } `
+  -ErrorAction SilentlyContinue |
+  Where-Object { $_.ProviderName -match 'VSS|volsnap|Shadow|VolumeSnapshot' })
+if (-not $copies) { '  (none)' }
+$copies | Sort-Object TimeCreated | Select-Object -Last 20 | ForEach-Object {
+  $said = ("$($_.Message)" -split "`r?`n")[0].Trim()
+  if ($said.Length -gt 120) { $said = $said.Substring(0, 120) }
+  '  {0} {1} id={2} {3} at@{4} {5}' -f $_.LogName, $_.ProviderName, $_.Id, $_.LevelDisplayName,
+    ([DateTimeOffset]$_.TimeCreated).ToUnixTimeMilliseconds(), $said }
 $services = @{}
 Get-CimInstance Win32_Service -Filter "State='Running'" | ForEach-Object {
   $services[[int]$_.ProcessId] += @($_.Name) }
@@ -413,9 +429,16 @@ $names = '\Processor(_Total)\% Processor Time', '\PhysicalDisk(_Total)\Current D
 
 
 def _windows_machine_cmd(since: float | None) -> list[str]:
-    start = (time.time() - 60.0) if since is None else since - 5.0
+    now = time.time() if since is None else since
+    start = (now - 60.0) if since is None else since - 5.0
     when = "a minute ago" if since is None else "5 s before the send"
-    script = _MACHINE.replace("__SINCE__", str(int(start * 1000))).replace("__WHEN__", when)
+    events_when = "10 minutes before " + ("now" if since is None else "the send")
+    script = (
+        _MACHINE.replace("__SINCE__", str(int(start * 1000)))
+        .replace("__WHEN__", when)
+        .replace("__EVENTS_SINCE__", str(int((now - EVENTS_WINDOW) * 1000)))
+        .replace("__EVENTS_WHEN__", events_when)
+    )
     return ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
 
 

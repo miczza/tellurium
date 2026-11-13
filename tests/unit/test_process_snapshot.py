@@ -77,3 +77,10 @@ def test_the_machine_view_names_the_load_of_the_whole_machine():
     assert text.strip()
     if sys.platform != "win32":
         assert "load average" in text
+    else:  # a shadow copy freezes the disk: its events, "(none)" included, are there
+        assert "shadow copy events since" in text, text
+
+
+def test_a_moment_of_the_machine_view_is_given_from_the_send_like_a_birth():
+    text = process_snapshot.births("pid 7 x born@1000500\n  System volsnap at@999000 x", 1000.0)
+    assert text == "pid 7 x born=+0.50s\n  System volsnap at=-1.00s x"
