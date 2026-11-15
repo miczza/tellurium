@@ -333,9 +333,9 @@ async def _rest(
     """Chrome's snapshot and the machine's (each written by a thread of its
     own, which a closing loop does not stop) and whether Chrome answers, again
     after lldb if it attached; a cut-short part says so. The machine's view
-    does not queue behind Chrome's tree: on Windows the tree (full, then
-    light) may outlast ``REPORT_WAIT``, the view (with the shadow copy events)
-    fits in it alone."""
+    does not queue behind Chrome's tree: on Windows the tree (kernel, then
+    PowerShell) and the view (kernel, ``wevtutil``, PowerShell, ``wevtutil``
+    again) each fit in ``REPORT_WAIT`` alone."""
     view = asyncio.ensure_future(asyncio.to_thread(_machine_into, path, sent_wall))
     if pid is None:
         _append(path, f"--- Chrome:\n{_NO_CHROME}\n")

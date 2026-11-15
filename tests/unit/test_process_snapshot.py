@@ -38,20 +38,49 @@ def test_no_command_runs_as_root_unless_the_ci_asks(monkeypatch):
     assert process_snapshot._sudo() == []
 
 
-def test_a_windows_snapshot_that_times_out_falls_back_to_a_light_list(monkeypatch):
+def test_a_windows_snapshot_starts_with_the_kernel_view_before_powershell(monkeypatch):
+    """A frozen runner did not start PowerShell, nor ``tasklist``, in 20 s (run
+    43496669198): the tree read in this process comes first, whatever PowerShell does."""
     calls: list[list[str]] = []
 
     def run(cmd, timeout=process_snapshot.COMMAND_TIMEOUT):
         calls.append(cmd)
-        if cmd[0] == "powershell":
-            return "(powershell timed out after 20s)", False
-        return '"chrome.exe","4368","Console","1","165,000 K","Unknown"', True
+        return "(powershell timed out after 20s)", False
 
     monkeypatch.setattr(process_snapshot, "_run", run)
+    monkeypatch.setattr(
+        process_snapshot.windows_processes,
+        "tree",
+        lambda pid, **kw: f"pid {pid} chrome.exe threads: 3xWaiting/Suspended",
+    )
     text = process_snapshot._windows(4368)
-    assert [c[0] for c in calls] == ["powershell", "tasklist"]
-    assert "powershell timed out" in text
-    assert '"chrome.exe","4368"' in text
+    assert [c[0] for c in calls] == ["powershell"]
+    assert text.index("3xWaiting/Suspended") < text.index("powershell timed out")
+
+
+def test_the_windows_machine_view_needs_no_powershell(monkeypatch):
+    """Births from the kernel and shadow copy events from ``wevtutil``; a log
+    that timed out is asked again after PowerShell."""
+    calls: list[str] = []
+
+    def run(cmd, timeout=process_snapshot.COMMAND_TIMEOUT):
+        calls.append(cmd[0])
+        if cmd[0] == "wevtutil" and calls.count("wevtutil") <= 2:
+            return "(wevtutil timed out after 8s)", False
+        return ("" if cmd[0] == "wevtutil" else "(powershell timed out after 20s)"), cmd[
+            0
+        ] == "wevtutil"
+
+    monkeypatch.setattr(process_snapshot, "_run", run)
+    monkeypatch.setattr(
+        process_snapshot.windows_processes,
+        "born_since",
+        lambda start: ["  pid 950 VSSVC.exe parent=4 born@1001000"],
+    )
+    text = process_snapshot._windows_machine(since=1000.0)
+    assert calls == ["wevtutil", "wevtutil", "powershell", "wevtutil", "wevtutil"]
+    assert "pid 950 VSSVC.exe parent=4 born@1001000" in text
+    assert "shadow copy events since" in text and "asked again" in text
 
 
 def test_each_process_says_when_it_was_born_from_the_send(tmp_path):

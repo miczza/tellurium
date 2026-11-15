@@ -10,12 +10,15 @@ each system can say about where the root process is stuck:
   who holds a read-write lock its threads wait on is the hang probe's to ask
   (``tests.blocked_locks``), once the sample is in its report;
 * Windows: the threads of each process grouped by state and wait reason
-  (``Suspended`` for a suspended one), and those of the root one by one; on a
-  runner too stalled for that, the light list of ``tasklist``.
+  (``Suspended`` for a suspended one), and those of the root one by one, read
+  at once from the kernel in this process (``tests.windows_processes``: a
+  frozen runner did not even start PowerShell); then the same through
+  PowerShell, with each process's kind (``--type``).
 
 :func:`machine` adds the whole machine: on Windows the processes born since
-the send, the events of shadow copies (VSS, volsnap) of the last minutes, the
-busiest over a second and the CPU and disk counters; elsewhere
+the send (from the kernel), the events of shadow copies (VSS, volsnap) of the
+last minutes (``tests.shadow_copy_events``), the busiest over a second and the
+CPU and disk counters (PowerShell); elsewhere
 the load average (and Linux's pressure stall information).
 
 Nothing runs as root unless ``$TELLURIUM_HANG_SUDO`` is ``1`` (the CI sets
@@ -37,14 +40,15 @@ import tempfile
 import time
 from pathlib import Path
 
+from tests import shadow_copy_events, windows_processes
+
 #: How long ``sample`` watches the root process (macOS).
 SAMPLE_SECONDS = 3
 #: Deadline of each subprocess: a stalled runner froze even ``Get-Process`` for 20 s.
 COMMAND_TIMEOUT = 45.0
-#: Deadline of the full Windows snapshot (CIM, PowerShell), then of the light list:
-#: a stalled runner did not finish the full one in 45 s (run 43391051756).
+#: Deadline of the Windows snapshot and machine view through PowerShell: a
+#: stalled runner did not finish it in 45 s (run 43391051756).
 WINDOWS_FULL_TIMEOUT = 20.0
-LIGHT_TIMEOUT = 15.0
 #: Past a command's deadline: how long ``taskkill /T`` gets to end its tree
 #: (Windows), then how long its pipes get to close.
 TASKKILL_TIMEOUT = 10.0
@@ -82,7 +86,7 @@ def machine(since: float | None = None) -> str:
     never raises."""
     try:
         if sys.platform == "win32":
-            text, _ = _run(_windows_machine_cmd(since), timeout=WINDOWS_FULL_TIMEOUT)
+            text = _windows_machine(since)
         else:
             text = _posix_machine()
     except Exception as exc:
@@ -384,37 +388,47 @@ while ($i -lt $queue.Count) {{
 
 
 def _windows(pid: int) -> str:
+    """The tree from the kernel at once, then through PowerShell (kinds too)."""
+    try:
+        kernel = windows_processes.tree(pid, max_lines=MAX_LINES)
+    except Exception as exc:  # noqa: BLE001 — PowerShell may still say it
+        kernel = f"(no list from the kernel: {exc!r})"
+    if kernel.startswith("no process"):
+        return kernel
     script = _POWERSHELL.format(pid=int(pid), max_lines=MAX_LINES)
     cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
-    full, ok = _run(cmd, timeout=WINDOWS_FULL_TIMEOUT)
-    if ok:
-        return full.strip()
-    light, _ = _run(_TASKLIST, timeout=LIGHT_TIMEOUT)
-    return f"{full.strip()}\nthe light list instead ({' '.join(_TASKLIST)}):\n{light.strip()}"
+    full, _ = _run(cmd, timeout=WINDOWS_FULL_TIMEOUT)
+    return (
+        f"from the kernel, at once:\n{kernel}\nthrough PowerShell, with the kinds:\n{full.strip()}"
+    )
 
 
-#: The processes born on the machine since __SINCE__ (Unix ms), the events of
-#: shadow copies (VSS, volsnap) since __EVENTS_SINCE__, the busiest processes
-#: over a second, and the CPU, disk and memory counters.
+def _windows_machine(since: float | None) -> str:
+    """Births from the kernel and shadow copy events (``wevtutil``) first,
+    then PowerShell's view; a log of events that timed out is asked again
+    last."""
+    now = time.time() if since is None else since
+    start = (now - 60.0) if since is None else since - 5.0
+    when = "a minute ago" if since is None else "5 s before the send"
+    try:
+        born = windows_processes.born_since(start) or ["  (none)"]
+    except Exception as exc:  # noqa: BLE001 — the rest of the view goes on
+        born = [f"  (no list from the kernel: {exc!r})"]
+    out = [f"processes born on the machine since {when} (from the kernel):", *born]
+    events = shadow_copy_events.Events(window=EVENTS_WINDOW + max(0.0, time.time() - now))
+    out.append(
+        f"shadow copy events since 10 minutes before {'now' if since is None else 'the send'}"
+        " (Application and System logs, wevtutil):"
+    )
+    out.append(events.read())
+    view, _ = _run(_windows_machine_cmd(), timeout=WINDOWS_FULL_TIMEOUT)
+    out.append(view.strip())
+    out.append(events.read_missed())
+    return "\n".join(line for line in out if line)
+
+
+#: The busiest processes over a second, and the CPU, disk and memory counters.
 _MACHINE = r"""
-$since = [DateTimeOffset]::FromUnixTimeMilliseconds(__SINCE__).UtcDateTime
-"processes born on the machine since __WHEN__:"
-Get-CimInstance Win32_Process |
-  Where-Object { $_.CreationDate -and $_.CreationDate.ToUniversalTime() -ge $since } |
-  Sort-Object CreationDate | ForEach-Object {
-    '  pid {0} {1} parent={2} born@{3}' -f $_.ProcessId, $_.Name, $_.ParentProcessId,
-      ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() }
-"shadow copy events since __EVENTS_WHEN__ (Application and System logs):"
-$from = [DateTimeOffset]::FromUnixTimeMilliseconds(__EVENTS_SINCE__).LocalDateTime
-$copies = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application', 'System'; StartTime = $from } `
-  -ErrorAction SilentlyContinue |
-  Where-Object { $_.ProviderName -match 'VSS|volsnap|Shadow|VolumeSnapshot' })
-if (-not $copies) { '  (none)' }
-$copies | Sort-Object TimeCreated | Select-Object -Last 20 | ForEach-Object {
-  $said = ("$($_.Message)" -split "`r?`n")[0].Trim()
-  if ($said.Length -gt 120) { $said = $said.Substring(0, 120) }
-  '  {0} {1} id={2} {3} at@{4} {5}' -f $_.LogName, $_.ProviderName, $_.Id, $_.LevelDisplayName,
-    ([DateTimeOffset]$_.TimeCreated).ToUnixTimeMilliseconds(), $said }
 $services = @{}
 Get-CimInstance Win32_Service -Filter "State='Running'" | ForEach-Object {
   $services[[int]$_.ProcessId] += @($_.Name) }
@@ -445,19 +459,5 @@ $names = '\Processor(_Total)\% Processor Time', '\PhysicalDisk(_Total)\Current D
 """
 
 
-def _windows_machine_cmd(since: float | None) -> list[str]:
-    now = time.time() if since is None else since
-    start = (now - 60.0) if since is None else since - 5.0
-    when = "a minute ago" if since is None else "5 s before the send"
-    events_when = "10 minutes before " + ("now" if since is None else "the send")
-    script = (
-        _MACHINE.replace("__SINCE__", str(int(start * 1000)))
-        .replace("__WHEN__", when)
-        .replace("__EVENTS_SINCE__", str(int((now - EVENTS_WINDOW) * 1000)))
-        .replace("__EVENTS_WHEN__", events_when)
-    )
-    return ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
-
-
-#: Every Chrome process with its state, CPU time and memory, without CIM.
-_TASKLIST = ["tasklist", "/v", "/fo", "csv", "/fi", "IMAGENAME eq chrome.exe"]
+def _windows_machine_cmd() -> list[str]:
+    return ["powershell", "-NoProfile", "-NonInteractive", "-Command", _MACHINE]
