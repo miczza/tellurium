@@ -31,10 +31,14 @@ class Canary:
         folder: str | None = None,
         on_stall: Callable[[float, float], None] | None = None,
         over: float = 2.0,
+        sync: Callable[[int], None] | None = None,
     ) -> None:
         """*on_stall(late, since)*: a beat *late* seconds past its due, due at
-        the wall-clock time *since*; called from the canary's thread."""
+        the wall-clock time *since*; called from the canary's thread. *sync*
+        (``os.fsync`` by default) flushes each beat: a test holds its own
+        canary's writes with it, not every canary's in the process."""
         self._folder = folder or tempfile.gettempdir()
+        self._sync = sync or os.fsync
         self._on_stall = on_stall
         self._over = over
         self._done = threading.Event()
@@ -73,7 +77,7 @@ class Canary:
             while not self._done.wait(BEAT):
                 os.lseek(fd, 0, os.SEEK_SET)
                 os.write(fd, str(time.time()).encode())
-                os.fsync(fd)
+                self._sync(fd)
                 now = time.monotonic()
                 with self._lock:
                     late = now - self._last - BEAT

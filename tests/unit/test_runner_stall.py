@@ -4,7 +4,21 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from tests import runner_stall
+
+
+@pytest.fixture
+def another_canary():
+    """A canary beating beside the one under test, as the session's does with
+    ``TELLURIUM_HANG_REPORTS`` (:mod:`tests.stall_log`): a write held for the
+    canary under test must not be held for it, nor told as a runner stall."""
+    told = []
+    with runner_stall.Canary(on_stall=lambda late, since: told.append(late), over=1.0) as other:
+        yield
+    assert other.stall < 1.0, other.stall
+    assert not told, told
 
 
 def test_a_quiet_runner_shows_no_stall():
@@ -13,7 +27,7 @@ def test_a_quiet_runner_shows_no_stall():
     assert canary.stall < 0.5
 
 
-def test_a_held_write_shows_as_a_stall(monkeypatch):
+def test_a_held_write_shows_as_a_stall(another_canary):
     real = runner_stall.os.fsync
     held = []
 
@@ -23,20 +37,18 @@ def test_a_held_write_shows_as_a_stall(monkeypatch):
             time.sleep(1.5)  # a shadow copy holds the write
         real(fd)
 
-    monkeypatch.setattr(runner_stall.os, "fsync", fsync)
-    with runner_stall.Canary() as canary:
+    with runner_stall.Canary(sync=fsync) as canary:
         time.sleep(2.5)
     assert 1.2 < canary.stall < 2.5
 
 
-def test_a_write_still_held_at_the_end_counts(monkeypatch):
-    monkeypatch.setattr(runner_stall.os, "fsync", lambda fd: time.sleep(3.0))
-    with runner_stall.Canary() as canary:
+def test_a_write_still_held_at_the_end_counts(another_canary):
+    with runner_stall.Canary(sync=lambda fd: time.sleep(3.0)) as canary:
         time.sleep(1.5)
     assert canary.stall > 1.0
 
 
-def test_each_stall_over_the_mark_is_told_with_its_moment(monkeypatch):
+def test_each_stall_over_the_mark_is_told_with_its_moment(another_canary):
     real = runner_stall.os.fsync
     held, told = [], []
 
@@ -46,8 +58,10 @@ def test_each_stall_over_the_mark_is_told_with_its_moment(monkeypatch):
             time.sleep(1.5)
         real(fd)
 
-    monkeypatch.setattr(runner_stall.os, "fsync", fsync)
-    with runner_stall.Canary(on_stall=lambda late, since: told.append((late, since)), over=1.0):
+    def on_stall(late, since):
+        told.append((late, since))
+
+    with runner_stall.Canary(on_stall=on_stall, over=1.0, sync=fsync):
         time.sleep(2.5)
     assert len(told) == 1
     late, since = told[0]
