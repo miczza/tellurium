@@ -94,8 +94,9 @@ def test_each_process_says_when_it_was_born_from_the_send(tmp_path):
     finally:
         child.kill()
         child.wait(10)
-    [born] = re.findall(rf"pid {child.pid} .*born=([+-][\d.]+)s", text)
-    assert 25.0 < float(born) < 30.5, text
+    # Windows lists it twice: from the kernel, then through PowerShell
+    borns = re.findall(rf"pid {child.pid} .*born=([+-][\d.]+)s", text)
+    assert borns and all(25.0 < float(b) < 30.5 for b in borns), text
 
 
 def test_a_snapshot_without_a_send_gives_the_utc_clock():
