@@ -51,6 +51,7 @@ from typing import Any
 import pytest
 
 from tellurium.browser import navigation as navigation_module
+from tellurium.browser import snapshot as snapshot_module
 from tellurium.browser import tab as tab_module
 from tellurium.browser.process import BrowserProcess
 from tellurium.cdp.transport._session import Session
@@ -409,10 +410,27 @@ async def _after_detach(
 async def _check(label: str, session: Session, method: str, params: dict) -> str:
     started = time.monotonic()
     try:
-        result = await _state.real_send(session, method, params, LIVENESS_TIMEOUT)
+        result = await _unseen_send(session, method, params)
     except Exception as exc:
         return f"  {label}: {type(exc).__name__} after {time.monotonic() - started:.1f}s"
     return f"  {label}: ok in {time.monotonic() - started:.2f}s {str(result)[:200]}"
+
+
+async def _unseen_send(session: Session, method: str, params: dict) -> dict:
+    """*method* sent as a snapshot sends its own commands: a snapshot that finds
+    a tree request in flight shares it only if nothing that may change the page
+    went out since (``tellurium.browser.snapshot._full_tree``), and the report's
+    questions change nothing. Counted like a snapshot's, they leave the
+    watched test as it was."""
+    router, msg_id = session.router, session.router._next_msg_id + 1
+    pending = snapshot_module._OWN_PENDING.setdefault(router, set())
+    snapshot_module._OWN_COMMANDS[router] = snapshot_module._OWN_COMMANDS.get(router, 0) + 1
+    pending.add(msg_id)
+    try:
+        return await _state.real_send(session, method, params, LIVENESS_TIMEOUT)
+    finally:
+        if msg_id not in getattr(session, "_pending", ()):
+            pending.discard(msg_id)
 
 
 def _note(router: Any, msg: dict) -> None:

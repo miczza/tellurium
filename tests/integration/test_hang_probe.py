@@ -85,3 +85,49 @@ async def test_a_navigation_cut_short_on_a_frozen_chrome_still_leaves_the_report
             await asyncio.sleep(0.2)
             text = path.read_text(encoding="utf-8")
     assert FROZEN_MARK[sys.platform] in text.split(marker, 1)[1], text[-2000:]
+
+
+async def test_the_reports_own_commands_leave_a_tree_in_flight_shared(
+    browser, local_server, monkeypatch
+):
+    """The report asks Chrome whether it answers on the test's own pipe. A
+    snapshot that finds a tree request in flight shares it only if nothing that
+    may change the page went out since: the report's ``Runtime.evaluate`` must
+    not count as such, or the test it watches sees two ``getFullAXTree``
+    (``test_snapshot_inflight``, fallen once in a loaded gate)."""
+    from tellurium.browser.refs import RefMap
+    from tellurium.browser.snapshot import take_snapshot
+
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/snapshot_shadow.html")
+    sent: list[str] = []
+    send = tab._session.send
+
+    async def counting(method, params=None, timeout=None):
+        if method == "Accessibility.getFullAXTree":
+            sent.append(method)
+        return await send(method, params, timeout)
+
+    monkeypatch.setattr(tab._session, "send", counting)
+    first = asyncio.ensure_future(
+        take_snapshot(tab._session, RefMap(), selector="h1", snapshot_timeout=scaled(60))
+    )
+    while not sent:
+        await asyncio.sleep(0)
+    expr = {"expression": "document.readyState", "returnByValue": True}
+    router = tab._session.router
+    before = router._next_msg_id
+    checks = asyncio.gather(
+        hang_probe._check("root", router.root, "Browser.getVersion", {}),
+        hang_probe._check("session", tab._session, "Runtime.evaluate", expr),
+    )
+    while router._next_msg_id < before + 2:  # both sent, as the report sends them
+        await asyncio.sleep(0)
+    second = await take_snapshot(
+        tab._session, RefMap(), selector="body", snapshot_timeout=scaled(60)
+    )
+    checks = await checks
+    assert (await first).startswith('- heading "Web component"')
+    assert "Shadow 39999" in second
+    assert all(" ok in " in line for line in checks), checks
+    assert len(sent) == 1
