@@ -17,7 +17,7 @@ from urllib.parse import quote
 import pytest
 
 from tellurium.browser.navigation import NavigationError, NavigationTimeoutError
-from tests.timeout_scale import scaled
+from tests.timeout_scale import beyond_navigation, scaled
 
 GUARD = 20
 FIXTURES = str(Path(__file__).parent / "fixtures")
@@ -68,7 +68,8 @@ def server():
 
 
 async def _guard(coro):
-    return await asyncio.wait_for(coro, timeout=scaled(GUARD))
+    """*coro* bounded past a navigation with the default deadline, as stretched."""
+    return await asyncio.wait_for(coro, timeout=beyond_navigation(GUARD))
 
 
 # ---------------------------------------------------------------------------

@@ -168,3 +168,20 @@ def test_the_default_navigation_deadline_is_scaled(monkeypatch):
         assert navigation.NAVIGATION_TIMEOUT == 90.0
         assert navigation.LIFECYCLE_TIMEOUT == 30.0  # Page.enable of the mute renderer
     assert navigation.NAVIGATION_TIMEOUT == 30.0  # given back
+
+
+def test_a_wait_around_a_navigation_outlasts_its_default_deadline(monkeypatch):
+    """A download the page starts is awaited from before ``tab.get``: on a
+    runner that held the navigation 59 s (run 43496669198) a 45 s wait for the
+    download had expired when the page came. Its bound is the navigation's
+    default deadline, as it is now, plus its own."""
+    from tellurium.browser import navigation
+
+    monkeypatch.setenv(timeout_scale.ENV, "3")
+    with pytest.MonkeyPatch.context() as mp:
+        timeout_scale.stretch(mp)
+        assert timeout_scale.beyond_navigation(15) == 90.0 + 45.0
+        mp.setattr(navigation, "NAVIGATION_TIMEOUT", 2.0)
+        assert timeout_scale.beyond_navigation(15) == 2.0 + 45.0
+    monkeypatch.delenv(timeout_scale.ENV)
+    assert timeout_scale.beyond_navigation(15) == 30.0 + 15.0

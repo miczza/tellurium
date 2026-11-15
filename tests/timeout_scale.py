@@ -20,9 +20,11 @@ its ``Page.enable`` (``navigation.NAVIGATION_TIMEOUT``, ``LIFECYCLE_TIMEOUT``:
 a Windows runner, probably taking a shadow copy, held a request 25 s, shown by
 ``test_navigation_stall.py``), all module globals read at call time; and
 the tests' own answer bounds that go through :func:`scaled`. A ``tellurium``
-command a test starts (the MCP server of ``test_mcp_http.py``) gets the
-navigation's two from the test's process through ``tests.scaled_cli``; its
-other deadlines are the command's own.
+command a test starts (the MCP server) gets the navigation's two and
+robots.txt's two from the test's process through ``tests.scaled_cli``; its
+other deadlines are the command's own. A script of the tests run as a child
+(``session_child.py``) gets them all, through ``scaled_cli.script``. A wait
+around a navigation with the default deadline is :func:`beyond_navigation`.
 Not scaled: every deadline a test makes expire on purpose and asserts on
 (``test_navigation_timeout.py``, explicit short ``timeout=`` in tests,
 ``_bounded``, the MCP's deadlines), and defaults of arguments, which are fixed
@@ -88,6 +90,16 @@ def scaled(seconds: float) -> float:
     :data:`CEILING` when the factor is above 1: a test's own bound on an
     answer from Chrome."""
     return _stretched(seconds, factor())
+
+
+def beyond_navigation(seconds: float) -> float:
+    """A test's bound on a wait that starts before a navigation with the
+    default deadline and ends after it (a download the page starts, a guard
+    around ``tab.get``): that deadline as it is now, stretched or patched,
+    plus :func:`scaled` *seconds*. A wait shorter than the navigation's own
+    expires first on a runner that holds the navigation (59 s, run
+    43496669198) and fails the test for the wrong reason."""
+    return navigation.NAVIGATION_TIMEOUT + scaled(seconds)
 
 
 def _stretched(seconds: float, times: float) -> float:

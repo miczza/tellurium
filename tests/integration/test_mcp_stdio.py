@@ -30,16 +30,16 @@ from mcp import Client, StdioServerParameters  # noqa: E402
 
 from tests.integration.conftest import DOWNLOAD_BODY  # noqa: E402
 from tests.private_temp import child_temp_env, short_mkdtemp  # noqa: E402
-from tests.tellurium_cli import TELLURIUM_CLI  # noqa: E402
+from tests.scaled_cli import command  # noqa: E402
 from tests.timeout_scale import scaled  # noqa: E402
-
-_TELLURIUM = TELLURIUM_CLI
 
 
 def _server(home: Path, *options: str) -> Client:
+    """The server with the test's navigation and robots.txt deadlines (``tests.scaled_cli``)."""
+    argv = command("mcp", *options)
     params = StdioServerParameters(
-        command=str(_TELLURIUM),
-        args=["mcp", *options],
+        command=argv[0],
+        args=argv[1:],
         env={**os.environ, "TELLURIUM_HOME": str(home)},
     )
     return Client(params)
@@ -348,7 +348,7 @@ def short_tmp():
 
 def _start(home: Path, tmp: Path) -> subprocess.Popen:
     proc = subprocess.Popen(
-        [str(_TELLURIUM), "mcp"],
+        command("mcp"),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
