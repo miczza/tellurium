@@ -6,7 +6,8 @@ bounds how long Chrome takes can subtract what the runner itself lost: a
 thread writes and syncs a small file every :data:`BEAT` seconds, and
 :attr:`Canary.stall` is the longest a beat took past its due (a write held,
 or the thread not scheduled). It measures the runner, not Chrome: a Chrome
-slow on its own leaves it near zero.
+slow on its own leaves it near zero. With *on_stall*, each beat late by
+*over* seconds or more is told as it ends (:mod:`tests.stall_log`).
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import os
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from types import TracebackType
 
 #: Seconds between two beats.
@@ -24,8 +26,17 @@ BEAT = 0.25
 class Canary:
     """``with Canary() as canary:`` then :attr:`stall` (seconds)."""
 
-    def __init__(self, folder: str | None = None) -> None:
+    def __init__(
+        self,
+        folder: str | None = None,
+        on_stall: Callable[[float, float], None] | None = None,
+        over: float = 2.0,
+    ) -> None:
+        """*on_stall(late, since)*: a beat *late* seconds past its due, due at
+        the wall-clock time *since*; called from the canary's thread."""
         self._folder = folder or tempfile.gettempdir()
+        self._on_stall = on_stall
+        self._over = over
         self._done = threading.Event()
         self._stall = 0.0
         self._lock = threading.Lock()
@@ -65,8 +76,11 @@ class Canary:
                 os.fsync(fd)
                 now = time.monotonic()
                 with self._lock:
-                    self._stall = max(self._stall, now - self._last - BEAT)
+                    late = now - self._last - BEAT
+                    self._stall = max(self._stall, late)
                     self._last = now
+                if self._on_stall is not None and late >= self._over:
+                    self._on_stall(late, time.time() - late)
         finally:
             os.close(fd)
             try:

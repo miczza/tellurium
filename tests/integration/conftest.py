@@ -8,6 +8,7 @@ import pytest
 
 from tests import hang_probe as probe
 from tests.hang_probe import hang_probe, hang_probe_test  # noqa: F401 (autouse)
+from tests.stall_log import runner_stall_log, runner_stall_test  # noqa: F401 (autouse)
 from tests.timeout_scale import chrome_answer_deadlines_scaled  # noqa: F401 (autouse)
 
 FIXTURES_DIR = str(Path(__file__).parent / "fixtures")
