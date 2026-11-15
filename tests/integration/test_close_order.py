@@ -12,6 +12,7 @@ import pytest
 
 from tellurium import Browser
 from tellurium.browser import process as process_module
+from tests.timeout_scale import scaled
 
 #: SIGTERM alone loses the last cookie about one time in four (docs/gotchas.md).
 ROUNDS = 20
@@ -30,10 +31,22 @@ async def test_a_cookie_written_right_before_close_survives_a_relaunch(tmp_path,
             if round_ < ROUNDS:
                 tab = await browser.get(f"{local_server}/basic.html")
                 await tab.eval(f"document.cookie = 'late{round_}=1; path=/; max-age=3600'")
-                await asyncio.sleep(0.05)
+                await _until_in_the_store(browser, f"late{round_}")
         finally:
             await browser.close()
     assert not lost, f"lost at relaunch: {lost}"
+
+
+async def _until_in_the_store(browser: Browser, name: str) -> None:
+    """The renderer hands ``document.cookie`` to the cookie store on its own
+    channel, after the eval has answered: a runner stalled for seconds (8.4 s,
+    run 43735970643) closed Chrome before the store had it. What close must
+    keep is a cookie the store has, so the test waits for that, then closes."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + scaled(5)
+    while not any(c.name == name for c in await browser.get_cookies("127.0.0.1")):
+        assert loop.time() < deadline, f"{name} never reached the cookie store"
+        await asyncio.sleep(0.01)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="SIGSTOP")
