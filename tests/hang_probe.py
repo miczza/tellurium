@@ -97,6 +97,7 @@ class _State:
     full_reports: int = 0
     config: Any = None
     real_send: Any = None
+    installed: bool = False
 
 
 _state = _State()
@@ -160,7 +161,15 @@ def report_dir() -> Path:
 
 @contextmanager
 def installed(config: Any = None) -> Iterator[None]:
-    """The probe patched into ``Session`` and ``BrowserProcess`` for the body."""
+    """The probe patched into ``Session`` and ``BrowserProcess`` for the body.
+
+    Inside another install (the integration tests' lasts until the session
+    ends, past the unit tests run after them) it changes nothing: patched
+    twice, each command would be watched twice and the outer probe's own
+    sends (``_state.real_send``) watched too."""
+    if _state.installed:
+        yield
+        return
     real_send, real_handle = Session.send, Session._handle_message
     real_spawn = BrowserProcess.spawn
     real_navigate = navigation_module.navigate
@@ -211,9 +220,11 @@ def installed(config: Any = None) -> Iterator[None]:
 
     Session.send, Session._handle_message, BrowserProcess.spawn = send, handle, spawn
     navigation_module.navigate = tab_module.navigate = navigate
+    _state.installed = True
     try:
         yield
     finally:
+        _state.installed = False
         Session.send, Session._handle_message = real_send, real_handle
         BrowserProcess.spawn = real_spawn
         navigation_module.navigate = tab_module.navigate = real_navigate
