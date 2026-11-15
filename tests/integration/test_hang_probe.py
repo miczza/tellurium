@@ -115,8 +115,7 @@ async def test_the_reports_own_commands_leave_a_tree_in_flight_shared(
     first = asyncio.ensure_future(
         take_snapshot(tab._session, RefMap(), selector="h1", snapshot_timeout=scaled(60))
     )
-    while not sent:
-        await asyncio.sleep(0)
+    await _spin_until(lambda: sent, "the first getFullAXTree")
     expr = {"expression": "document.readyState", "returnByValue": True}
     router = tab._session.router
     before = router._next_msg_id
@@ -124,8 +123,8 @@ async def test_the_reports_own_commands_leave_a_tree_in_flight_shared(
         hang_probe._check("root", router.root, "Browser.getVersion", {}),
         hang_probe._check("session", tab._session, "Runtime.evaluate", expr),
     )
-    while router._next_msg_id < before + 2:  # both sent, as the report sends them
-        await asyncio.sleep(0)
+    # Both sent, as the report sends them.
+    await _spin_until(lambda: router._next_msg_id >= before + 2, "the report's two commands")
     second = await take_snapshot(
         tab._session, RefMap(), selector="body", snapshot_timeout=scaled(60)
     )
@@ -134,3 +133,15 @@ async def test_the_reports_own_commands_leave_a_tree_in_flight_shared(
     assert "Shadow 39999" in second
     assert all(" ok in " in line for line in checks), checks
     assert len(sent) == 1
+
+
+async def _spin_until(predicate, what: str) -> None:
+    """Every turn of the loop until *predicate* holds (the moment a request
+    goes out), at most :func:`scaled` 10 s: a command that never goes out
+    fails the test instead of hanging it."""
+    loop = asyncio.get_running_loop()
+    timeout = scaled(10)
+    deadline = loop.time() + timeout
+    while not predicate():
+        assert loop.time() < deadline, f"{what}: not sent within {timeout:g} s"
+        await asyncio.sleep(0)
