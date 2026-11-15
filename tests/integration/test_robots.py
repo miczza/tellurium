@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 from pathlib import Path
 
 import pytest
@@ -217,6 +218,14 @@ async def test_load_network_resource_sends_no_client_hints_even_with_an_override
 TEXT = {"Content-Type": "text/plain"}
 
 
+@pytest.fixture(autouse=True)
+def robots_log(caplog):
+    """Why a download of robots.txt gave "nothing allowed" (its INFO lines) in a
+    red's report: on Windows one came within a second where the file is held
+    5 s (run 43434138312, ``test_a_navigation_timeout_bounds_the_robots_wait``)."""
+    caplog.set_level(logging.INFO, logger="tellurium.browser.robots")
+
+
 @pytest.fixture
 async def site():
     """A proxy playing ``site.test`` (robots.txt: ``/private`` disallowed) and a
@@ -363,7 +372,11 @@ async def test_a_navigation_timeout_bounds_the_robots_wait(site, monkeypatch):
     loop = asyncio.get_running_loop()
     start = loop.time()
     with pytest.raises(TimeoutError) as caught:
-        await tab.get("http://late.test/page", timeout=1)
+        try:
+            await tab.get("http://late.test/page", timeout=1)
+        except RobotsDisallowedError as exc:
+            seen = [line for line, _ in proxy.seen]
+            pytest.fail(f"{exc} after {loop.time() - start:.2f}s; the proxy saw {seen}")
     assert loop.time() - start < 3
     assert caught.value.phase == "robots.txt"
     assert proxy.hits("late.test/page") == 0
