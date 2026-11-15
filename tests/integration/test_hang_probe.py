@@ -85,3 +85,63 @@ async def test_a_navigation_cut_short_on_a_frozen_chrome_still_leaves_the_report
             await asyncio.sleep(0.2)
             text = path.read_text(encoding="utf-8")
     assert FROZEN_MARK[sys.platform] in text.split(marker, 1)[1], text[-2000:]
+
+
+async def test_the_reports_own_commands_leave_a_tree_in_flight_shared(
+    browser, local_server, monkeypatch
+):
+    """The report asks Chrome whether it answers on the test's own pipe. A
+    snapshot that finds a tree request in flight shares it only if nothing that
+    may change the page went out since: the report's ``Runtime.evaluate`` must
+    not count as such, or the test it watches sees two ``getFullAXTree``
+    (``test_snapshot_inflight``, fallen once in a loaded gate)."""
+    from tellurium.browser.refs import RefMap
+    from tellurium.browser.snapshot import take_snapshot
+
+    tab = browser.main_tab
+    await tab.get(f"{local_server}/snapshot_shadow.html")
+    sent: list[str] = []
+    send = tab._session.send
+
+    async def counting(method, params=None, timeout=None):
+        if method == "Accessibility.getFullAXTree":
+            sent.append(method)
+        return await send(method, params, timeout)
+
+    monkeypatch.setattr(tab._session, "send", counting)
+    # The session's evaluate waits in the renderer behind the tree: ~3 s here,
+    # past the probe's 5 s on a slow macOS runner (43709697878).
+    monkeypatch.setattr(hang_probe, "LIVENESS_TIMEOUT", scaled(60))
+    first = asyncio.ensure_future(
+        take_snapshot(tab._session, RefMap(), selector="h1", snapshot_timeout=scaled(60))
+    )
+    await _spin_until(lambda: sent, "the first getFullAXTree")
+    expr = {"expression": "document.readyState", "returnByValue": True}
+    router = tab._session.router
+    before = router._next_msg_id
+    checks = asyncio.gather(
+        hang_probe._check("root", router.root, "Browser.getVersion", {}),
+        hang_probe._check("session", tab._session, "Runtime.evaluate", expr),
+    )
+    # Both sent, as the report sends them.
+    await _spin_until(lambda: router._next_msg_id >= before + 2, "the report's two commands")
+    second = await take_snapshot(
+        tab._session, RefMap(), selector="body", snapshot_timeout=scaled(60)
+    )
+    checks = await checks
+    assert (await first).startswith('- heading "Web component"')
+    assert "Shadow 39999" in second
+    assert all(" ok in " in line for line in checks), checks
+    assert len(sent) == 1
+
+
+async def _spin_until(predicate, what: str) -> None:
+    """Every turn of the loop until *predicate* holds (the moment a request
+    goes out), at most :func:`scaled` 10 s: a command that never goes out
+    fails the test instead of hanging it."""
+    loop = asyncio.get_running_loop()
+    timeout = scaled(10)
+    deadline = loop.time() + timeout
+    while not predicate():
+        assert loop.time() < deadline, f"{what}: not sent within {timeout:g} s"
+        await asyncio.sleep(0)

@@ -15,7 +15,7 @@ import sys
 import pytest
 
 from tellurium.cdp.types import TargetCrashedError
-from tests.timeout_scale import scaled
+from tests.timeout_scale import beyond_navigation, scaled
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="kills renderers with SIGKILL")
 
@@ -109,7 +109,9 @@ async def test_main_tab_does_not_stay_on_a_crashed_tab(browser, local_server):
     await _kill_renderers(browser)
     assert await _wait_until(lambda: dead.closed)
 
-    fresh = await asyncio.wait_for(browser.get(f"{local_server}/basic.html"), timeout=scaled(30))
+    fresh = await asyncio.wait_for(
+        browser.get(f"{local_server}/basic.html"), timeout=beyond_navigation(30)
+    )
     assert fresh is not dead
     assert browser.main_tab is fresh
     assert await asyncio.wait_for(fresh.eval("1 + 1"), timeout=scaled(10)) == 2

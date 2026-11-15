@@ -9,7 +9,9 @@ on SIGTERM). ``python session_child.py read PATH`` opens it again and prints
 its cookies as a JSON object, name to value. ``python session_child.py hold
 PATH`` opens it, prints ``ready`` and waits until it is killed.
 
-The tests start it with :func:`child_env`: killed with SIGKILL, it cannot
+The tests start it through ``tests.scaled_cli.script``, so it waits for its
+Chrome as long as the test's own process does (its navigations, cookie calls,
+close), and with :func:`child_env`: killed with SIGKILL, it cannot
 remove its temporary folders, so they go in the test's own tmp_path.
 :func:`start_holder` and :func:`kill_holder` run a ``hold`` child on every system.
 """
@@ -52,13 +54,11 @@ _SELF = os.path.abspath(__file__)
 
 async def start_holder(path: str) -> asyncio.subprocess.Process:
     """A ``hold`` child of the session at *path*, once it has printed ``ready``."""
-    from tests.timeout_scale import scaled  # the parent's only: the child cannot import tests
+    from tests.scaled_cli import script  # the parent's only: the child cannot import tests
+    from tests.timeout_scale import scaled
 
     proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        _SELF,
-        "hold",
-        path,
+        *script(_SELF, "hold", path),
         env=child_env(path),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,

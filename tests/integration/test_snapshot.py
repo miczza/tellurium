@@ -207,6 +207,22 @@ _COUNT_NODES = """(() => {
 #: many times the CPU it spends on receiving Chrome's AX tree alone: a guard
 #: against a gross slowdown; the work itself is bounded by its count below.
 OWN_OVER_AX_TREE = 3.0
+#: Where the CPU clock counts in coarse ticks, each round measures this many
+#: calls together, in fewer rounds: Windows counts a process's CPU time in
+#: 15.6 ms ticks, about the AX tree's own time, and a test there compared
+#: 62.5 with 15.6 ms, whole ticks (run 43429848268). Eight calls span a
+#: few ticks or more: a tick is then 2 ms of a call, not 15.6.
+COARSE_BATCH = 8
+COARSE_ROUNDS = 4
+
+
+def _cpu_tick() -> float:
+    """The smallest step of ``time.process_time``, found by spinning until it
+    moves: Windows says 100 ns (``get_clock_info``) but steps 15.6 ms."""
+    start = time.process_time()
+    while (now := time.process_time()) == start:
+        pass
+    return now - start
 
 
 async def test_five_thousand_node_page_snapshot_time(browser, local_server):
@@ -230,14 +246,17 @@ async def test_five_thousand_node_page_snapshot_time(browser, local_server):
     session = tab._session
     await take_snapshot(session, refs)  # warm-up: Chrome builds its AX tree once
     references, snapshots, runs = [], [], []
-    for _ in range(16):
+    batch, rounds = (1, 16) if _cpu_tick() < 1e-3 else (COARSE_BATCH, COARSE_ROUNDS)
+    for _ in range(rounds):
         cpu = time.process_time()
-        await session.send("Accessibility.getFullAXTree", {})
-        references.append((time.process_time() - cpu) * 1000)
+        for _ in range(batch):
+            await session.send("Accessibility.getFullAXTree", {})
+        references.append((time.process_time() - cpu) * 1000 / batch)
         start, cpu = time.perf_counter(), time.process_time()
-        text = await take_snapshot(session, refs)
-        snapshots.append((time.process_time() - cpu) * 1000)
-        runs.append((time.perf_counter() - start) * 1000)
+        for _ in range(batch):
+            text = await take_snapshot(session, refs)
+        snapshots.append((time.process_time() - cpu) * 1000 / batch)
+        runs.append((time.perf_counter() - start) * 1000 / batch)
     # the best of each: a busy machine only ever adds time, never takes it away
     reference = min(references)
     own = min(snapshots) - reference
@@ -257,6 +276,7 @@ async def test_five_thousand_node_page_snapshot_time(browser, local_server):
                 "cpu_own_ms": round(own, 1),
                 "own_ratio": round(own / reference, 3),
                 "limit_ratio": OWN_OVER_AX_TREE,
+                "batch": batch,
             }
         )
     )

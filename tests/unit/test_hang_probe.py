@@ -356,6 +356,25 @@ async def test_the_report_lists_the_requests_to_the_test_servers_around_the_send
     assert 0.3 < float(late) < 0.6
 
 
+async def test_an_install_inside_another_watches_each_command_once(probe):
+    """The integration tests' probe stays installed until the session ends: a
+    unit test run after them installs it again inside that one, and must not
+    watch its commands twice, nor leave the outer probe's own sends watched."""
+    outer_send = hang_probe._state.real_send
+    with hang_probe.installed():
+        router = SessionRouter(LateChrome(0.6))
+        reader = asyncio.create_task(router.run())
+        try:
+            await router.root.send("Page.navigate", {"url": "about:blank"}, timeout=2.0)
+        finally:
+            reader.cancel()
+    [report] = probe.iterdir()
+    text = report.read_text()
+    assert text.count("=== end") == 1
+    assert "also pending" not in text
+    assert hang_probe._state.real_send is outer_send
+
+
 async def test_the_report_says_when_the_send_was_on_the_clock_of_the_snapshot(probe):
     router = SessionRouter(SilentChrome())
     before = time.time()
