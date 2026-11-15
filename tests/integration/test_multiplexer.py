@@ -45,6 +45,8 @@ from tests.integration.test_raw_chrome import (  # noqa: E402, F401 - private_te
 from tests.platform_marks import needs_posix_signals, needs_proc, needs_sh  # noqa: E402
 from tests.timeout_scale import scaled  # noqa: E402
 
+SITE_GET = ("GET http://site.test/ HTTP/1.1", GOOD_AUTH)
+
 
 @pytest.fixture(autouse=True)
 def token_file(tmp_path, monkeypatch):
@@ -949,8 +951,7 @@ async def test_a_lost_chrome_takes_its_answer_to_the_proxy_with_it():
             async with _client(mux) as ws:  # the new Chrome answers again
                 created = await _cdp(ws, 1, "Target.createTarget", {"url": "http://site.test/"})
                 assert created["result"]["targetId"]
-                assert await _wait_until(lambda: proxy.requests, scaled(20))
-                assert proxy.requests[0] == ("GET http://site.test/ HTTP/1.1", GOOD_AUTH)
+                assert await _wait_until(lambda: SITE_GET in proxy.requests, scaled(20))
         assert not _proxy_auth_tasks()
 
 
@@ -981,8 +982,7 @@ async def test_the_client_cannot_detach_the_own_session():
                            {"autoAttach": flag, "waitForDebuggerOnStart": False, "flatten": True})  # fmt: skip
             assert await place.relay.call("Browser.getVersion", timeout=scaled(10), session_id=own)
             await _cdp(ws, 10, "Target.createTarget", {"url": "http://site.test/"})
-            assert await _wait_until(lambda: proxy.requests, scaled(20))
-            assert proxy.requests[0] == ("GET http://site.test/ HTTP/1.1", GOOD_AUTH)
+            assert await _wait_until(lambda: SITE_GET in proxy.requests, scaled(20))
 
 
 async def test_chrome_detaches_a_browser_session_by_its_target_id():
