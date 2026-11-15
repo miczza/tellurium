@@ -255,9 +255,12 @@ async def test_get_returns_within_timeout_when_the_page_freezes_after_commit(bro
 async def test_timeout_with_a_frozen_page_stays_within_the_deadline(browser):
     tab = browser.main_tab
     tab._dialogs.policy = "manual"
+    # Scaled: the alert must open inside the deadline for the message to name
+    # it; a runner stalled 2.2 + 2.7 s (run 43735970643) expired 2 s first.
+    deadline = scaled(2)
     start = time.monotonic()
     with pytest.raises(NavigationTimeoutError) as info:
-        await _guard(tab.get(_LOAD_ALERT, wait_until="load", timeout=2), 2)
-    assert time.monotonic() - start < 2.5
+        await _guard(tab.get(_LOAD_ALERT, wait_until="load", timeout=deadline), deadline)
+    assert time.monotonic() - start < deadline + 0.5
     assert "alert dialog is still open: 'open'" in str(info.value)
     await tab._dialogs.last.dismiss()
