@@ -67,9 +67,30 @@ def server():
     httpd.shutdown()
 
 
-async def _guard(coro):
-    """*coro* bounded past a navigation with the default deadline, as stretched."""
-    return await asyncio.wait_for(coro, timeout=beyond_navigation(GUARD))
+async def _guard(coro, deadline: float | None = None):
+    """*coro* bounded past its *deadline* (the ``timeout=`` it was given) or,
+    without one, past a navigation with the default deadline, as stretched."""
+    return await asyncio.wait_for(coro, timeout=_bound(deadline))
+
+
+def _bound(deadline: float | None) -> float:
+    if deadline is None:
+        return beyond_navigation(GUARD)
+    return deadline + scaled(GUARD)
+
+
+def test_a_guard_adds_the_default_deadline_only_to_a_call_without_one(monkeypatch):
+    """Two guards of a test, at the CI's factor 3, end before pytest-timeout
+    (300 s) does: one that ends kills the shard with no report on Windows."""
+    from tellurium.browser import navigation
+    from tests import timeout_scale
+
+    monkeypatch.setenv(timeout_scale.ENV, "3")
+    # As the session stretches it at factor 3 (30 s x 3), whatever this run's factor.
+    monkeypatch.setattr(navigation, "NAVIGATION_TIMEOUT", 90.0)
+    assert _bound(None) == navigation.NAVIGATION_TIMEOUT + scaled(GUARD) == 90.0 + 60.0
+    assert _bound(1) == 1 + 60.0
+    assert _bound(1) + _bound(scaled(10)) < 300
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +102,7 @@ async def test_held_response_times_out_within_the_deadline(browser, server):
     tab = browser.main_tab
     start = time.monotonic()
     with pytest.raises(NavigationTimeoutError) as info:
-        await _guard(tab.get(f"{server}/hang", timeout=2))
+        await _guard(tab.get(f"{server}/hang", timeout=2), 2)
     assert time.monotonic() - start < 6
     err = info.value
     assert isinstance(err, TimeoutError)
@@ -92,9 +113,11 @@ async def test_held_response_times_out_within_the_deadline(browser, server):
 
 async def test_tab_is_usable_after_a_navigation_timeout(browser, server):
     tab = browser.main_tab
-    with pytest.raises(TimeoutError):
-        await _guard(tab.get(f"{server}/hang", timeout=1))
-    await _guard(tab.get(f"{server}/basic.html", timeout=scaled(10)))
+    # Not any TimeoutError: the guard's, had the deadline been ignored, would pass.
+    with pytest.raises(NavigationTimeoutError):
+        await _guard(tab.get(f"{server}/hang", timeout=1), 1)
+    deadline = scaled(10)
+    await _guard(tab.get(f"{server}/basic.html", timeout=deadline), deadline)
     assert tab.title == "Basic Test Page"
 
 
@@ -127,7 +150,7 @@ async def test_timeout_while_waiting_for_load_names_the_phase(browser, server):
 async def test_no_content_response_raises_navigation_error_with_url(browser, server):
     tab = browser.main_tab
     with pytest.raises(NavigationError) as info:
-        await _guard(tab.get(f"{server}/204", timeout=scaled(10)))
+        await _guard(tab.get(f"{server}/204", timeout=scaled(10)), scaled(10))
     err = info.value
     assert isinstance(err, RuntimeError)
     assert err.url == f"{server}/204"
@@ -137,7 +160,8 @@ async def test_no_content_response_raises_navigation_error_with_url(browser, ser
 
 async def test_download_raises_navigation_error(browser, server):
     with pytest.raises(NavigationError, match="ERR_ABORTED"):
-        await _guard(browser.main_tab.get(f"{server}/download", timeout=scaled(10)))
+        tab = browser.main_tab
+        await _guard(tab.get(f"{server}/download", timeout=scaled(10)), scaled(10))
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +180,7 @@ async def test_wait_for_navigation_ignores_iframe_navigations(browser, server):
     await asyncio.sleep(1)
     assert not waiter.done(), "resolved on an iframe navigation"
     await tab.eval(f"location.href = '{server}/tree.html'; 1")
-    await _guard(waiter)
+    await _guard(waiter, scaled(10))
     assert tab.url == f"{server}/tree.html"
     assert await tab.eval("document.readyState") == "complete"
 
@@ -169,7 +193,7 @@ async def test_wait_for_navigation_matches_the_url_pattern(browser, server):
     await asyncio.sleep(1)
     assert not waiter.done()
     await tab.eval(f"location.href = '{server}/tree.html'; 1")
-    await _guard(waiter)
+    await _guard(waiter, scaled(10))
     assert tab.url.endswith("/tree.html")
 
 
@@ -177,7 +201,7 @@ async def test_wait_for_navigation_timeout_is_a_builtin_timeout_error(browser, s
     tab = browser.main_tab
     await _guard(tab.get(f"{server}/basic.html"))
     with pytest.raises(NavigationTimeoutError) as info:
-        await _guard(tab.wait_for_navigation("*/never*", timeout=0.5))
+        await _guard(tab.wait_for_navigation("*/never*", timeout=0.5), 0.5)
     assert isinstance(info.value, TimeoutError)
     assert "*/never*" in str(info.value)
 
@@ -188,7 +212,7 @@ async def test_wait_for_navigation_returns_on_a_back_forward_cache_restore(brows
     waiter = asyncio.ensure_future(tab.wait_for_navigation(timeout=scaled(8)))
     await asyncio.sleep(0.1)
     await tab.back()
-    await _guard(waiter)
+    await _guard(waiter, scaled(8))
     assert tab.url == f"{server}/basic.html"
 
 
@@ -199,7 +223,7 @@ async def test_wait_for_navigation_waits_for_the_load_of_the_matching_document(
     await _guard(tab.get(f"{local_server}/basic.html"))
     waiter = asyncio.ensure_future(tab.wait_for_navigation("*redirect_final*", timeout=scaled(10)))
     await tab.eval("location.href = '/redirect_step.html'; 1")
-    await _guard(waiter)
+    await _guard(waiter, scaled(10))
     assert tab.url.endswith("/redirect_final.html")
     assert await tab.eval("document.readyState") == "complete"
 
@@ -223,7 +247,7 @@ async def test_get_returns_within_timeout_when_the_page_freezes_after_commit(bro
     tab._dialogs.policy = "manual"  # the alert stays open and freezes the page
     deadline = scaled(3)  # a wait for Chrome: the alert opens only after the event
     start = time.monotonic()
-    await _guard(tab.get(_DCL_ALERT, wait_until="domcontentloaded", timeout=deadline))
+    await _guard(tab.get(_DCL_ALERT, wait_until="domcontentloaded", timeout=deadline), deadline)
     assert time.monotonic() - start < deadline + 0.5
     await tab._dialogs.last.dismiss()
 
@@ -233,7 +257,7 @@ async def test_timeout_with_a_frozen_page_stays_within_the_deadline(browser):
     tab._dialogs.policy = "manual"
     start = time.monotonic()
     with pytest.raises(NavigationTimeoutError) as info:
-        await _guard(tab.get(_LOAD_ALERT, wait_until="load", timeout=2))
+        await _guard(tab.get(_LOAD_ALERT, wait_until="load", timeout=2), 2)
     assert time.monotonic() - start < 2.5
     assert "alert dialog is still open: 'open'" in str(info.value)
     await tab._dialogs.last.dismiss()
