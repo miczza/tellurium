@@ -407,14 +407,19 @@ async def test_cancelled_geoip_lookups_do_not_starve_close(private_tempdir, monk
     each returns at once, and another Chrome closes while the lookups given up
     on still run.
 
-    The lookups are kept alive until the proxy goes (their own timeouts made
-    long): a close that waited for them would never end, so the test needs no
-    bound on how long a close takes. A fixed 10 s did not hold on Windows,
-    where a runner stall stretched one close to 13.1 s (R4-D)."""
+    The lookups are kept alive until the proxy goes: the deadline the launch
+    gives them (``launch_plan.GEOIP_TIMEOUT``) and each request's own timeout
+    are made long. A close that waited for them would never end, so the test
+    needs no bound on how long a close takes. A fixed 10 s did not hold on
+    Windows, where a runner stall stretched one close to 13.1 s (R4-D)."""
+    from tellurium.browser import launch_plan
     from tellurium.stealth import geoip
     from tests.unit.test_launch_plan import SilentProxy
 
-    monkeypatch.setattr(geoip, "_LOOKUP_TIMEOUT", 600.0)
+    # The launch passes GEOIP_TIMEOUT as the lookup's deadline, and every request
+    # is cut to the deadline and to _REQUEST_TIMEOUT: both, or the lookups end
+    # after 10 s and a slow launch and close prove nothing.
+    monkeypatch.setattr(launch_plan, "GEOIP_TIMEOUT", 600.0)
     monkeypatch.setattr(geoip, "_REQUEST_TIMEOUT", 600.0)
     launches = 40
     async with SilentProxy() as proxy:
@@ -436,9 +441,15 @@ async def test_cancelled_geoip_lookups_do_not_starve_close(private_tempdir, monk
         raw = await asyncio.wait_for(RawChrome.launch(headless=True), scaled(30))
         await asyncio.wait_for(raw.close(), scaled(30))
         assert not raw.alive
-        lookups = [t for t in threading.enumerate() if t.name == "tellurium-geoip"]
+        lookups = _geoip_threads()
         assert len(lookups) == launches, "the lookups ended before the close: nothing proven"
+    # With the proxy gone they end: their long timeouts do not outlive the test.
+    assert await _wait_until(lambda: not _geoip_threads(), scaled(10)), _geoip_threads()
     assert not _profiles(private_tempdir)
+
+
+def _geoip_threads() -> list[threading.Thread]:
+    return [t for t in threading.enumerate() if t.name == "tellurium-geoip"]
 
 
 async def _page_time_zone(raw: RawChrome) -> str:
