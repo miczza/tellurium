@@ -10,6 +10,7 @@ import asyncio
 import glob
 import json
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ from tellurium.browser.raw_chrome import RawChrome
 from tests.integration.test_authenticated_proxy import GOOD_AUTH, PASSWORD, USER, FakeProxy
 from tests.platform_marks import needs_proc, needs_sh, needs_tz_env
 from tests.private_temp import private_temp
+from tests.runner_stall import Canary
 from tests.timeout_scale import scaled
 
 
@@ -177,20 +179,24 @@ async def test_close_asks_chrome_first(private_tempdir):
     as an orderly exit, 0 again. Hence the signals are watched too, and the
     grace is scaled like the other waits for Chrome. A scaled grace alone would
     let a close that is slow every time pass on the slow runners: two Chromes
-    are closed, a stall (about one per shard) slows one at most, a slow close
-    slows both past the library's own grace.
+    are closed, and the faster must end within the library's own grace once
+    the runner's own stall during it is taken off (``tests.runner_stall``: a
+    shadow copy froze a Windows runner past both closes, 16.1 and 17.8 s, R4-D).
     """
-    took = []
+    took, stalls = [], []
     for _ in range(2):
         raw = await RawChrome.launch(headless=True)
-        methods, signals, seconds = await _close_watched(raw)
+        with Canary() as canary:
+            methods, signals, seconds = await _close_watched(raw)
         took.append(seconds)
+        stalls.append(canary.stall)
         grace = raw_chrome.CLOSE_GRACE
         assert methods == ["Browser.close"]
         assert not signals, f"{signals} after {seconds:.1f} s (grace {grace:g} s)"
         code = raw._proc.process.returncode
         assert code == 0, f"exit code {code} after {seconds:.1f} s"
-    assert min(took) < _LIBRARY_GRACE, f"both closes slow: {took}"
+    own = [t - s for t, s in zip(took, stalls, strict=True)]
+    assert min(own) < _LIBRARY_GRACE, f"both closes slow: {took}, runner stalls {stalls}"
 
 
 @needs_proc
@@ -396,11 +402,20 @@ async def test_without_credentials_there_is_nothing_to_answer(private_tempdir):
         assert raw._proc.proxy_auth is None
 
 
-async def test_cancelled_geoip_lookups_do_not_starve_close(private_tempdir):
+async def test_cancelled_geoip_lookups_do_not_starve_close(private_tempdir, monkeypatch):
     """A dead proxy that does not refuse, many launches cancelled during GeoIP:
-    each returns at once, and another Chrome still closes in time."""
+    each returns at once, and another Chrome closes while the lookups given up
+    on still run.
+
+    The lookups are kept alive until the proxy goes (their own timeouts made
+    long): a close that waited for them would never end, so the test needs no
+    bound on how long a close takes. A fixed 10 s did not hold on Windows,
+    where a runner stall stretched one close to 13.1 s (R4-D)."""
+    from tellurium.stealth import geoip
     from tests.unit.test_launch_plan import SilentProxy
 
+    monkeypatch.setattr(geoip, "_LOOKUP_TIMEOUT", 600.0)
+    monkeypatch.setattr(geoip, "_REQUEST_TIMEOUT", 600.0)
     launches = 40
     async with SilentProxy() as proxy:
         # Without credentials: no forwarder whose closing would end the lookups.
@@ -419,10 +434,10 @@ async def test_cancelled_geoip_lookups_do_not_starve_close(private_tempdir):
         await asyncio.wait_for(asyncio.to_thread(lambda: None), 1)
 
         raw = await asyncio.wait_for(RawChrome.launch(headless=True), scaled(30))
-        started = asyncio.get_running_loop().time()
-        await raw.close()
-        assert asyncio.get_running_loop().time() - started < 10
+        await asyncio.wait_for(raw.close(), scaled(30))
         assert not raw.alive
+        lookups = [t for t in threading.enumerate() if t.name == "tellurium-geoip"]
+        assert len(lookups) == launches, "the lookups ended before the close: nothing proven"
     assert not _profiles(private_tempdir)
 
 
