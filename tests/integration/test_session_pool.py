@@ -8,11 +8,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
 
-from tellurium.session import SessionBusyError, SessionPool
+from tellurium.session import Session, SessionBusyError, SessionPool
 from tests.integration.session_child import kill_holder, start_holder
 from tests.platform_marks import needs_proc
 from tests.private_temp import FAILING_EXECUTABLE
@@ -196,28 +197,50 @@ def test_one_pool_in_two_asyncio_runs(tmp_path):
     assert _running(str(tmp_path)) == set()
 
 
-async def test_three_opens_in_a_loop_wait_no_more_than_a_launch(tmp_path):
+#: Longest wait from one browser closed to the next one's launch: a lost turn
+#: of polling would be a poll interval; the handoff itself is a loop turn.
+HANDOFF = 1.0
+
+
+async def test_three_opens_in_a_loop_wait_no_more_than_a_launch(tmp_path, monkeypatch):
     """E5: one slot, three identities opened over and over. Turns go round
     in order, and between one browser leaving and the next entering there
-    is a close and a launch, never a lost turn of polling."""
-    pool = SessionPool(tmp_path, max_browsers=1, headless=True)
+    is a close and a launch, never a lost turn of polling.
+
+    Each close and launch is timed in the same run, around ``Session.start``:
+    on Windows a runner stall (a shadow copy, R4) stretched one of them to
+    20 s against 1.8 s for the warm launch, so a bound on the whole gap
+    measured off another launch did not hold (rosso noto 4, R4-D). What the
+    pool owns is the handoff: from one start's exit to the next one's entry."""
     loop = asyncio.get_running_loop()
-    start = loop.time()
-    async with pool.open("warm") as browser:  # reference: one launch, alone
+    spans: list[tuple[str, float, float]] = []  # name, start entered, start exited
+    real_start = Session.start
+
+    @asynccontextmanager
+    async def timed_start(self, **kwargs):
+        entered = loop.time()
+        try:
+            async with real_start(self, **kwargs) as browser:
+                yield browser
+        finally:
+            spans.append((self.name, entered, loop.time()))
+
+    monkeypatch.setattr(Session, "start", timed_start)
+    pool = SessionPool(tmp_path, max_browsers=1, headless=True)
+    async with pool.open("warm") as browser:  # the first launch of the run, alone
         await browser.main_tab.eval("1")
-    reference = loop.time() - start
-    turns: list[tuple[str, float, float]] = []
+    turns: list[str] = []
 
     async def opener(name: str):
         for _ in range(2):
             async with pool.open(name) as browser:
-                entered = loop.time()
                 await browser.main_tab.eval("1")
                 await asyncio.sleep(0.05)
-                turns.append((name, entered, loop.time()))
+                turns.append(name)
 
     await asyncio.wait_for(asyncio.gather(*(opener(n) for n in ("a", "b", "c"))), scaled(240))
-    order = [t[0] for t in turns]
-    assert sorted(order[:3]) == ["a", "b", "c"] and order[3:] == order[:3]  # round robin
-    gaps = [nxt[1] - prev[2] for prev, nxt in zip(turns, turns[1:], strict=False)]
-    assert max(gaps) < 2 * reference + 1.0, (gaps, reference)
+    assert sorted(turns[:3]) == ["a", "b", "c"] and turns[3:] == turns[:3]  # round robin
+    assert [name for name, *_ in spans[1:]] == turns
+    handoffs = [nxt[1] - prev[2] for prev, nxt in zip(spans, spans[1:], strict=False)]
+    assert all(h >= 0 for h in handoffs), ("two browsers at once", spans)
+    assert max(handoffs) < HANDOFF, (handoffs, spans)
