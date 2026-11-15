@@ -109,6 +109,9 @@ async def test_the_reports_own_commands_leave_a_tree_in_flight_shared(
         return await send(method, params, timeout)
 
     monkeypatch.setattr(tab._session, "send", counting)
+    # The session's evaluate waits in the renderer behind the tree: ~3 s here,
+    # past the probe's 5 s on a slow macOS runner (43709697878).
+    monkeypatch.setattr(hang_probe, "LIVENESS_TIMEOUT", scaled(60))
     first = asyncio.ensure_future(
         take_snapshot(tab._session, RefMap(), selector="h1", snapshot_timeout=scaled(60))
     )
