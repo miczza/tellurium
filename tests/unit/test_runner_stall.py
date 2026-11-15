@@ -22,9 +22,17 @@ def another_canary():
 
 
 def test_a_quiet_runner_shows_no_stall():
-    with runner_stall.Canary() as canary:
-        time.sleep(1.0)
-    assert canary.stall < 0.5
+    """With writes that never wait, the canary reports no more than the
+    runner's own scheduling delay, measured in the same second: a CI runner's
+    disk is never sure to be quiet (an fsync took 0.78 s on Windows)."""
+    late = 0.0
+    with runner_stall.Canary(sync=lambda fd: None) as canary:
+        end = time.monotonic() + 1.0
+        while time.monotonic() < end:
+            asked = time.monotonic()
+            time.sleep(0.05)
+            late = max(late, time.monotonic() - asked - 0.05)
+    assert canary.stall < late + 0.25
 
 
 def test_a_held_write_shows_as_a_stall(another_canary):
