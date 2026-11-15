@@ -90,3 +90,9 @@ def test_a_script_runs_as_main_with_its_own_argv(monkeypatch, tmp_path):
     deadlines = json.dumps([["tellurium.browser.navigation", "", "NAVIGATION_TIMEOUT", 7.5]])
     scaled_cli.main([deadlines, "--script", str(script), "read", "p"])
     assert json.loads(out.read_text()) == [[str(script), "read", "p"], 7.5]
+
+
+def test_what_the_command_gets_is_scaled_in_the_tests_process():
+    """A deadline carried but not in ``timeout_scale.SCALED`` would reach the
+    command as the library's default, never stretched."""
+    assert set(scaled_cli.CARRIED) <= set(timeout_scale.SCALED)
