@@ -415,11 +415,17 @@ async def test_the_command_serves_then_a_signal_closes_everything(
             assert pids <= family
 
             def send() -> None:
+                # Not proc.send_signal: Popen polls first (bpo-38630), and a
+                # poll right after the exit reaps the command under asyncio's
+                # watcher, which then reports 255 (run 43745961538). A zombie
+                # takes the signal harmlessly until the watcher reaps it.
+                if proc.returncode is not None:
+                    return
                 with contextlib.suppress(ProcessLookupError):
                     if group:
                         os.killpg(proc.pid, signum)
                     else:
-                        proc.send_signal(signum)
+                        os.kill(proc.pid, signum)
 
             send()
             # A signal every 0.05 s until it exits: one lands at every stage of the closing.
