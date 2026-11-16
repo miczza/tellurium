@@ -163,7 +163,16 @@ jobs:
         # disk (mds_stores, a dozen mdworker_shared waiting on I/O), and indexes
         # every new Chrome profile too: Chrome went mute for 30 s once there.
         if: runner.os == 'macOS'
-        run: sudo mdutil -a -i off
+        # mdutil exits 1 when one volume is still settling ("Transitioning",
+        # /System/Volumes/Preboot, run 43878948910) after turning the others
+        # off: retried, then the job fails only if a volume Chrome writes to
+        # is still indexed.
+        run: |
+          for attempt in 1 2 3; do sudo mdutil -a -i off && exit 0; sleep 5; done
+          for volume in / /System/Volumes/Data; do
+            mdutil -s "$volume" | grep -q "Indexing disabled" || exit 1
+          done
+          echo "::warning::mdutil left a system volume indexed; / and Data are off"
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -215,7 +224,16 @@ jobs:
         # disk (mds_stores, a dozen mdworker_shared waiting on I/O), and indexes
         # every new Chrome profile too: Chrome went mute for 30 s once there.
         if: runner.os == 'macOS'
-        run: sudo mdutil -a -i off
+        # mdutil exits 1 when one volume is still settling ("Transitioning",
+        # /System/Volumes/Preboot, run 43878948910) after turning the others
+        # off: retried, then the job fails only if a volume Chrome writes to
+        # is still indexed.
+        run: |
+          for attempt in 1 2 3; do sudo mdutil -a -i off && exit 0; sleep 5; done
+          for volume in / /System/Volumes/Data; do
+            mdutil -s "$volume" | grep -q "Indexing disabled" || exit 1
+          done
+          echo "::warning::mdutil left a system volume indexed; / and Data are off"
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
