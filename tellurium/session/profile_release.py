@@ -20,7 +20,8 @@ import time
 
 from tellurium.session import process_args
 
-#: How long a start waits for a dead holder's Chrome to exit.
+#: How long a start waits for a dead holder's Chrome to exit, read at each
+#: call: a machine that stalls for seconds may raise it.
 TIMEOUT = 10.0
 _POLL = 0.05
 #: Whether a refused rename of the session folder is waited for: on Windows
@@ -29,10 +30,11 @@ _POLL = 0.05
 _MOVE_WAITS = sys.platform == "win32"
 
 
-async def wait(chrome_dir: str, timeout: float = TIMEOUT) -> int | None:
+async def wait(chrome_dir: str, timeout: float | None = None) -> int | None:
     """Wait until no live Chrome of this host holds *chrome_dir*; ``None`` once
-    free, else the PID of the Chrome still holding it after *timeout*."""
-    deadline = time.monotonic() + timeout
+    free, else the PID of the Chrome still holding it after *timeout*
+    (:data:`TIMEOUT` when ``None``)."""
+    deadline = time.monotonic() + (TIMEOUT if timeout is None else timeout)
     while True:
         pid = _holder(chrome_dir)
         if pid is None or time.monotonic() >= deadline:
@@ -40,11 +42,12 @@ async def wait(chrome_dir: str, timeout: float = TIMEOUT) -> int | None:
         await asyncio.sleep(_POLL)
 
 
-async def move(src: str, dst: str, timeout: float = TIMEOUT) -> None:
+async def move(src: str, dst: str, timeout: float | None = None) -> None:
     """Rename the session folder *src* to *dst* once its Chrome is gone: on
     Windows a ``PermissionError`` (a helper process of that Chrome still has
-    a file open in it) is retried until *timeout*, then raised."""
-    deadline = time.monotonic() + timeout
+    a file open in it) is retried until *timeout* (:data:`TIMEOUT` when
+    ``None``), then raised."""
+    deadline = time.monotonic() + (TIMEOUT if timeout is None else timeout)
     while True:
         try:
             return await asyncio.to_thread(os.rename, src, dst)

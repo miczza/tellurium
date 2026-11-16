@@ -511,6 +511,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   freezes for seconds (a Windows CI runner held a navigation's request 25 s, probably
   while taking a volume shadow copy: seen with one such stall) may raise them for a run. The tests' `TELLURIUM_TEST_TIMEOUT_SCALE`
   stretches both.
+- A session start, and a pool reusing a session folder, wait for a killed holder's Chrome
+  to let go of the profile up to `tellurium.session.profile_release.TIMEOUT` (10 s,
+  unchanged), now read at each call: on a Windows CI runner that Chrome usually goes in
+  about 1 s and once took over 10 s; a machine that stalls may raise it for a run. The
+  tests' `TELLURIUM_TEST_TIMEOUT_SCALE` stretches it.
 - MCP `navigate` with a `url` takes that same default deadline
   (`navigation.NAVIGATION_TIMEOUT`, 30 s as before) instead of a fixed 30 s; the tool's
   own deadline (60 s) still bounds the whole call.

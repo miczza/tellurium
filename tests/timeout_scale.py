@@ -18,7 +18,10 @@ Scaled: :attr:`SessionRouter.default_timeout` (read at each send),
 (``login_command.CALL_TIMEOUT``), the default deadline of a navigation and of
 its ``Page.enable`` (``navigation.NAVIGATION_TIMEOUT``, ``LIFECYCLE_TIMEOUT``:
 a Windows runner, probably taking a shadow copy, held a request 25 s, shown by
-``test_navigation_stall.py``), all module globals read at call time; and
+``test_navigation_stall.py``), how long a session start waits for a killed
+holder's Chrome to let go of the profile (``profile_release.TIMEOUT``: 0.7-1.25 s
+on Windows, over 10 s once, run 43754025402), all module globals read at call
+time; and
 the tests' own answer bounds that go through :func:`scaled`. A ``tellurium``
 command a test starts (the MCP server) gets the navigation's two and
 robots.txt's two from the test's process through ``tests.scaled_cli``; its
@@ -44,7 +47,7 @@ import pytest
 from tellurium.browser import navigation, raw_chrome, robots
 from tellurium.browser import process as process_module
 from tellurium.cdp.transport._session import SessionRouter
-from tellurium.session import login_command, session, session_cookies
+from tellurium.session import login_command, profile_release, session, session_cookies
 
 ENV = "TELLURIUM_TEST_TIMEOUT_SCALE"
 #: Least scaled wait when the factor is above 1: the longest stall measured on
@@ -67,6 +70,7 @@ SCALED: tuple[tuple[object, str], ...] = (
     (login_command, "CALL_TIMEOUT"),
     (navigation, "NAVIGATION_TIMEOUT"),
     (navigation, "LIFECYCLE_TIMEOUT"),
+    (profile_release, "TIMEOUT"),
 )
 
 

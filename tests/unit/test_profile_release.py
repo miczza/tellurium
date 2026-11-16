@@ -7,6 +7,7 @@ import os
 import socket
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -77,6 +78,23 @@ async def test_a_chrome_that_stays_is_named(tmp_path):
     try:
         _link(chrome_dir, proc.pid)
         assert await profile_release.wait(str(chrome_dir), 0.3) == proc.pid
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+async def test_the_default_wait_is_read_at_each_call(tmp_path, monkeypatch):
+    """A stalling machine (the CI's) raises ``TIMEOUT``; a default fixed at
+    definition would ignore it."""
+    chrome_dir = tmp_path / "chrome"
+    chrome_dir.mkdir()
+    proc = _fake_chrome(chrome_dir, 30)
+    monkeypatch.setattr(profile_release, "TIMEOUT", 0.3)
+    try:
+        _link(chrome_dir, proc.pid)
+        start = time.monotonic()
+        assert await profile_release.wait(str(chrome_dir)) == proc.pid
+        assert time.monotonic() - start < 5
     finally:
         proc.kill()
         proc.wait()
