@@ -7,6 +7,7 @@ import asyncio
 import os
 import signal
 import sys
+import warnings
 
 import pytest
 
@@ -16,32 +17,46 @@ from tests.timeout_scale import scaled
 
 #: SIGTERM alone loses the last cookie about one time in four (docs/gotchas.md).
 ROUNDS = 20
+#: Chrome waits for its network service at most about 10 s while it closes,
+#: then exits with 0 without the cookie store's last commit: with its services
+#: frozen 12 s on Windows the cookie was lost 5/5, close taking 10.1 s (run
+#: 43867327399). A runner stalled that long (8.4 s and 9.7 s seen in this test)
+#: shows Chrome's limit, not close's; such a round is reported, not checked.
+CHROME_GIVES_UP = 9.0
 
 
 async def test_a_cookie_written_right_before_close_survives_a_relaunch(tmp_path, local_server):
     profile = str(tmp_path / "profile")
     lost: list[str] = []
+    slow: dict[str, float] = {}
+    loop = asyncio.get_running_loop()
     for round_ in range(ROUNDS + 1):
         browser = await Browser.launch(headless=True, user_data_dir=profile)
         try:
             if round_:
+                name = f"late{round_ - 1}"
                 jar = {c.name: c.value for c in await browser.get_cookies("127.0.0.1")}
-                if jar.get(f"late{round_ - 1}") != "1":
-                    lost.append(f"late{round_ - 1}")
+                if jar.get(name) != "1" and name not in slow:
+                    lost.append(name)
             if round_ < ROUNDS:
                 tab = await browser.get(f"{local_server}/basic.html")
                 await tab.eval(f"document.cookie = 'late{round_}=1; path=/; max-age=3600'")
                 await _until_in_the_store(browser, f"late{round_}")
         finally:
+            start = loop.time()
             await browser.close()
+            if loop.time() - start >= CHROME_GIVES_UP:
+                slow[f"late{round_}"] = loop.time() - start
+    if slow:
+        warnings.warn(f"closes past Chrome's own limit, not checked: {slow}", stacklevel=1)
+    assert len(slow) <= ROUNDS // 2, f"too few rounds checked: {slow}"
     assert not lost, f"lost at relaunch: {lost}"
 
 
 async def _until_in_the_store(browser: Browser, name: str) -> None:
     """The renderer hands ``document.cookie`` to the cookie store on its own
-    channel, after the eval has answered: a runner stalled for seconds (8.4 s,
-    run 43735970643) closed Chrome before the store had it. What close must
-    keep is a cookie the store has, so the test waits for that, then closes."""
+    channel, after the eval has answered. What close must keep is a cookie the
+    store has, so the test waits for that, then closes."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + scaled(5)
     while not any(c.name == name for c in await browser.get_cookies("127.0.0.1")):
